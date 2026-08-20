@@ -52,8 +52,8 @@ Allow five minutes; it takes about five seconds.
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
 | `frf court run MANIFEST.yaml` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement |
-| `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
-| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed |
+| `frf residual dispose ID --disposition D --reason "..."` | appends an immutable, content-addressed disposition EVENT to `residuals/<id>.events/` (`fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`); a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). Events are hash-chained: each carries its own `event_id` (SHA-256 of its content), its `parent_event_id`, and its `evidence_refs` (the resolution run). The observation file is never rewritten; the current disposition is the projection of the last event |
+| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed, and each residual binds the EXACT disposition event (`disposition_event_id`) that supplied its state — a receipt points at an immutable node in the event graph, it does not merely copy state |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim, and it accepts ONLY a *verified* receipt: the id must equal the SHA-256 of the canonical body, the document must pass OpenReceipt semantic conformance, and it must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
 | `frf replay RUN_ID \| RECEIPT_ID` | rederives the run identity from the capture's own recorded fields (the name is a claim until recomputed) and re-executes the exact snapshotted artifacts + captured argv under a checked environment, requiring the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). A receipt id additionally enforces its `expected_run_identity`. Writes nothing: replay is evidence verification, not re-observation |
 
@@ -145,12 +145,19 @@ says no more than that receipt licenses.
   (a test hook used by the regression suite's kill-path test; not a public knob).
 - **`receipt.claims.positive` stays empty**: receipts are immutable, so the
   positive sentence is compiled into `claims/<receipt-id>.yaml` instead.
-- **Dispositions are append-only events** under `residuals/<id>.events/`; the
-  observation record is byte-immutable and never carries a disposition, and
-  the current disposition is the projection of the last event — so a residual
-  trajectory (`open` → suspected `harness` → … → `fixed`) survives
-  re-disposition. The event chain is flat for now: parent-hash chaining and
-  resolution-receipt edges are future work.
+- **Dispositions are append-only, content-addressed, hash-chained events**
+  under `residuals/<id>.events/`: each event carries its own `event_id`
+  (SHA-256 of `FRF/DISPOSITION-EVENT/v1` over its content), its
+  `parent_event_id` (the previous event — the chain link), and
+  `evidence_refs` (the resolution run for a `fixed` closure). The
+  observation record is byte-immutable and never carries a disposition; the
+  current disposition is the projection of the last event; and a receipt
+  binds the exact `disposition_event_id` that supplied each disposition, so
+  the verifier reloads that event and requires its fields to match exactly.
+  Rewriting any event breaks every subsequent link and is refused on read.
+  Remaining: resolution-RECEIPT edges (the resolution edge currently
+  references a run), `frf status` to materialize the current graph state,
+  and bundle portability.
 - **Claim dependency algebra is implemented**: a residual blocks only
   claims whose observable scope intersects it — `open`/`unknown` block
   their axis, `harness` invalidates the run's evidence entirely, and any

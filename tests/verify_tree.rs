@@ -502,7 +502,10 @@ fn residuals_and_tokens_are_self_consistent() {
                     .expect("resolution run must satisfy the comparability predicate");
             }
         }
-        // Event sequence numbers are dense and start at 0001.
+        // Event sequence numbers are dense and start at 0001; the events are
+        // a content-addressed hash chain (each event rederives its own
+        // identity, each links to its parent). `disposition_events` already
+        // refuses a broken or hand-edited chain; assert the shape explicitly.
         for (i, e) in events.iter().enumerate() {
             assert_eq!(
                 e.residual_id, r.id,
@@ -514,6 +517,34 @@ fn residuals_and_tokens_are_self_consistent() {
                 "event {i} of {} is 'open' — events are closures only",
                 r.id
             );
+            assert_eq!(e.event_id.len(), 64, "event {i} of {} has a bad id", r.id);
+            assert_eq!(
+                e.parent_event_id,
+                if i == 0 {
+                    None
+                } else {
+                    Some(events[i - 1].event_id.clone())
+                },
+                "event {i} of {} breaks the parent chain",
+                r.id
+            );
+            // The only v0.1.15 evidence a disposition references is the
+            // resolution run that closed it.
+            match &e.disposition {
+                Disposition::Fixed {
+                    resolution_run_id, ..
+                } => assert_eq!(
+                    e.evidence_refs,
+                    vec![resolution_run_id.clone()],
+                    "event {i} of {} must reference its resolution run",
+                    r.id
+                ),
+                _ => assert!(
+                    e.evidence_refs.is_empty(),
+                    "event {i} of {} carries unexpected evidence refs",
+                    r.id
+                ),
+            }
         }
         // The token file must be exactly κ(residual, projection).
         let token: TokenRecord = load(&store.token_path(&r.id).unwrap());
@@ -718,6 +749,31 @@ fn receipts_are_self_consistent() {
                     "non-fixed entry {} carries a resolution_run_id or closure_predicate",
                     res.id
                 );
+            }
+            // The receipt binds the EXACT content-addressed event that
+            // supplied this disposition: a non-open entry must name an event
+            // in the residual's hash chain, an open entry must name none
+            // (open is the projection of no events). The verified loader
+            // additionally proves the bound event's fields match exactly.
+            match &res.disposition_event_id {
+                Some(eid) => {
+                    assert!(
+                        res.disposition != "open",
+                        "open entry {} carries a disposition_event_id",
+                        res.id
+                    );
+                    let events = store.disposition_events(&res.id).unwrap();
+                    assert!(
+                        events.iter().any(|e| &e.event_id == eid),
+                        "entry {} binds event {eid} which is not in its chain",
+                        res.id
+                    );
+                }
+                None => assert_eq!(
+                    res.disposition, "open",
+                    "entry {} has disposition {} without a bound event",
+                    res.id, res.disposition
+                ),
             }
         }
 

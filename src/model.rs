@@ -29,16 +29,19 @@ use std::fmt;
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v4";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
-pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-/// The OpenReceipt schema. v6 carried the interpreter CHAIN (the executable
-/// the kernel directly invoked vs. the downstream interpreter). v7 adds the
-/// fixture's DECLARED arguments: the court semantic identity is computed over
-/// the declared arguments (the question), while `arguments` remains the
-/// resolved argv the side actually received (the execution) — a receipt must
-/// carry both to rederive its own semantic identity. The body is serialized
-/// as canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
-/// bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v7";
+/// Disposition event schema. v2 makes events content-addressed: every event
+/// carries its own `event_id` (SHA-256 of its content), its
+/// `parent_event_id` (the hash chain link), and `evidence_refs` (the
+/// resolution run for a `fixed` closure).
+pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
+/// The OpenReceipt schema. v6 carried the interpreter CHAIN; v7 added the
+/// fixture's DECLARED arguments (the semantic identity's input); v8 binds
+/// each residual to the exact disposition EVENT that supplied its
+/// disposition (`disposition_event_id`) — a receipt points at an immutable
+/// event in the hash-chained history, it does not merely copy state. The
+/// body is serialized as canonical JSON (RFC 8785) and its identity is the
+/// full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v8";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
@@ -693,17 +696,40 @@ pub struct ResidualRecord {
 /// One immutable disposition event. Each `frf residual dispose` appends a new
 /// event; nothing is ever rewritten, so the residual trajectory survives
 /// re-disposition. Sequence numbers are the file names under
-/// `residuals/<id>.events/`.
+/// `residuals/<id>.events/` (a reference-engine storage convention); the
+/// PROTOCOL identity of an event is its content address `event_id`.
+///
+/// The event chain is a hash chain: every event carries its
+/// `parent_event_id` (the previous event for the same residual, or `None`
+/// for the first), and `event_id` is the SHA-256 of the event's own content
+/// (residual + parent + disposition + evidence refs) — so an event's
+/// identity binds its history, and the graph cannot be rewritten without
+/// breaking every subsequent link.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispositionEvent {
     pub schema_version: String,
+    /// Content address: SHA-256 of `FRF/DISPOSITION-EVENT/v1` over the
+    /// event's own fields (residual_id, parent_event_id, disposition,
+    /// evidence_refs). Filled by `Store::append_disposition_event`; an
+    /// un-appended event is not an event.
+    pub event_id: String,
     pub residual_id: String,
+    /// The event_id of the previous event for this residual (the chain
+    /// link), or `None` for the first event.
+    pub parent_event_id: Option<String>,
     #[serde(flatten)]
     pub disposition: Disposition,
+    /// Generic evidence references: for a `fixed` event, the resolution run
+    /// that closed the residual; otherwise empty. This is the seed of the
+    /// evidence graph's explicit edges (later: receipts, artifacts, witness
+    /// statements).
+    pub evidence_refs: Vec<String>,
 }
 
 impl DispositionEvent {
-    /// Build a non-fixed closure event.
+    /// Build a non-fixed closure event. `event_id`/`parent_event_id`/
+    /// `evidence_refs` are filled by `Store::append_disposition_event` once
+    /// the chain is known.
     pub fn closed(
         residual_id: &str,
         kind: ClosureKind,
@@ -712,8 +738,11 @@ impl DispositionEvent {
         validate_reason(&reason)?;
         Ok(DispositionEvent {
             schema_version: SCHEMA_DISPOSITION.to_string(),
+            event_id: String::new(),
             residual_id: residual_id.to_string(),
+            parent_event_id: None,
             disposition: Disposition::Closed { kind, reason },
+            evidence_refs: vec![],
         })
     }
 
@@ -739,12 +768,15 @@ impl DispositionEvent {
         }
         Ok(DispositionEvent {
             schema_version: SCHEMA_DISPOSITION.to_string(),
+            event_id: String::new(),
             residual_id: residual_id.to_string(),
+            parent_event_id: None,
             disposition: Disposition::Fixed {
                 reason,
                 resolution_run_id,
                 closure_predicate,
             },
+            evidence_refs: vec![],
         })
     }
 }
@@ -961,6 +993,11 @@ pub struct ReceiptResidual {
     /// Protocol-enforced closed set.
     #[serde(deserialize_with = "expect_disposition_str")]
     pub disposition: String,
+    /// The event_id of the immutable disposition event that supplied this
+    /// disposition at emit time; `null` for `open` (the projection of no
+    /// events). A receipt points at the exact event snapshot it bound — it
+    /// does not merely copy state.
+    pub disposition_event_id: Option<String>,
     /// Mandatory reason for closed dispositions; absent while `open`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,

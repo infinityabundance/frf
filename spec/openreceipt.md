@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v7` (this document).*
+*Version: `frf-receipt-v8` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that
@@ -67,10 +67,38 @@ The semantic identity is computed over the fixture's **declared** arguments
 argv the side actually received (the execution). A receipt carries both, so
 its semantic identity can be rederived from the document alone.
 
+## 3.5 Disposition events — the evidence graph root
+
+A residual's disposition is never copied state: it is supplied by an
+immutable, content-addressed **disposition event**, and a receipt binds the
+exact event that supplied it (`residuals[].disposition_event_id`). Events
+live in the reference engine under `residuals/<id>.events/NNNN.yaml`
+(a storage convention; the protocol object is the event itself):
+
+```
+DispositionEvent {
+    event_id         SHA-256 of FRF/DISPOSITION-EVENT/v1 over the event's
+                     own content (residual, parent, disposition, evidence_refs)
+    residual_id
+    parent_event_id  the previous event for the same residual (the hash link),
+                     None for the first event
+    disposition      kind + reason (+ resolution_run_id, closure_predicate
+                     for fixed)
+    evidence_refs    for a fixed event, the resolution run that closed it
+}
+```
+
+The chain is a hash chain: rewriting any event breaks every subsequent
+link, and `disposition_event_id` lets a receipt say "this disposition was
+supplied by this exact immutable event" — which the verifier proves by
+reloading that event and requiring its fields to match exactly. `open` is
+not an event: it is the projection of no events, so open entries carry
+`disposition_event_id: null`.
+
 ## 4. Schema
 
 `spec/openreceipt.schema.json` (JSON Schema draft-07) is the normative
-machine-readable definition. `schema_version` MUST be `frf-receipt-v7`; a
+machine-readable definition. `schema_version` MUST be `frf-receipt-v8`; a
 conformant parser refuses any other version.
 
 ## 5. Conformance — two levels
@@ -102,10 +130,12 @@ corpus is `conformance/invalid-semantic/`, one document per violated rule
 (structurally valid, semantically refused). The rules:
 
 1. **Disposition cross-field rules.** `open` carries no `reason`,
-   `resolution_run_id`, or `closure_predicate`; `fixed` carries all three,
-   with `closure_predicate` equal to the fix-court predicate; every other
-   disposition (`intentional`, `environmental`, `oracle_version`, `harness`,
-   `unknown`) carries a `reason` and nothing else.
+   `resolution_run_id`, `closure_predicate`, or `disposition_event_id`;
+   `fixed` carries all four (with `closure_predicate` equal to the fix-court
+   predicate and `disposition_event_id` naming the exact event that supplied
+   it); every other disposition (`intentional`, `environmental`,
+   `oracle_version`, `harness`, `unknown`) carries a `reason` and a
+   `disposition_event_id`, and nothing else.
 2. **Declared axes** are parseable and unique; every `observables[]` block
    is declared and unique.
 3. **Comparator semantics** are a bijection with the observable axes, each
@@ -140,8 +170,10 @@ MUST equal the SHA-256 of the canonical bytes; the referenced run MUST
 exist and its recorded fields MUST rederive its run identity; the receipt's
 court, artifacts, environment, provenance, comparator semantics,
 observables, and residual set MUST match the capture; residual fingerprints
-and κ tokens MUST rederive; dispositions MUST be evidenced by the
-append-only event history; and `fixed` closures MUST be backed by a
-resolution run that reran the same question and closed the axis. Claim
-compilation accepts only a `ReceiptVerified` — parsing data cannot turn it
-into evidence.
+and κ tokens MUST rederive; each disposition MUST be bound to the exact
+content-addressed event it names (the event must exist in the residual's
+hash chain and its fields must match the receipt exactly — the chain itself
+is verified, so a hand-edited or broken event is refused); and `fixed`
+closures MUST be backed by a resolution run that reran the same question
+and closed the axis. Claim compilation accepts only a `ReceiptVerified` —
+parsing data cannot turn it into evidence.

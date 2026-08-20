@@ -274,6 +274,7 @@ mod tests {
             raw_reference_hash: "0".repeat(64),
             raw_candidate_hash: "1".repeat(64),
             disposition: disposition.into(),
+            disposition_event_id: None,
             reason: None,
             resolution_run_id: None,
             closure_predicate: None,
