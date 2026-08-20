@@ -30,7 +30,10 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v1";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v1";
+/// The OpenReceipt schema. v2 is the canonical-JSON (RFC 8785) protocol
+/// version: the receipt body is serialized canonically and its identity is
+/// the full SHA-256 digest of those canonical bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v2";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 
 /// The token grammar schema (Section 6 of the paper).

@@ -85,5 +85,5 @@ step "6. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort
 
 echo
-echo "Done. Receipt: $ROOT/receipts/$RECEIPT_FINAL.yaml"
+printf 'Done. Receipt (canonical JSON): %s/receipts/%s.json\n' "$ROOT" "$RECEIPT_FINAL"
 echo "Claim:    $ROOT/claims/$RECEIPT_FINAL.yaml"

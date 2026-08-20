@@ -6,6 +6,7 @@
 //! assembly, hashing, path safety) directly instead of only through process
 //! boundaries.
 
+pub mod canon;
 pub mod cli;
 pub mod commands;
 pub mod error;

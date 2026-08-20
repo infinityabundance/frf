@@ -128,6 +128,9 @@ fn yaml_parsers_never_panic_and_preserve_invariants() {
         let _ = serde_yaml::from_str::<TokenRecord>(&s);
         let _ = serde_yaml::from_str::<Receipt>(&s);
         let _ = serde_yaml::from_str::<ClaimRecord>(&s);
+        // Receipts are canonical JSON on disk (RFC 8785): the JSON
+        // deserializer is the OpenReceipt protocol surface.
+        let _ = serde_json::from_str::<Receipt>(&s);
         if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
             assert_disposition_invariant(&d, &format!("random bytes iteration {i}"));
         }
@@ -188,6 +191,7 @@ raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111
         let _ = serde_yaml::from_str::<CourtManifest>(&s);
         let _ = serde_yaml::from_str::<ResidualRecord>(&s);
         let _ = serde_yaml::from_str::<Disposition>(&s);
+        let _ = serde_json::from_str::<Receipt>(&s);
         if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
             assert_disposition_invariant(&d, &format!("mutation iteration {i}"));
         }

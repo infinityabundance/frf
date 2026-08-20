@@ -19,6 +19,8 @@ fuzz_target!(|data: &[u8]| {
     let _ = serde_yaml::from_str::<TokenRecord>(&s);
     let _ = serde_yaml::from_str::<Receipt>(&s);
     let _ = serde_yaml::from_str::<ClaimRecord>(&s);
+    // Receipts are canonical JSON on disk (RFC 8785).
+    let _ = serde_json::from_str::<Receipt>(&s);
     if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
         match &d {
             Disposition::Open => assert!(d.reason().is_none()),

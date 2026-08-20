@@ -16,6 +16,7 @@
 //!
 //! Run: `cargo test --test verify_tree` (or `make verify`).
 
+use frf::canon;
 use frf::host;
 use frf::kappa;
 use frf::model::*;
@@ -30,6 +31,12 @@ fn store() -> Store {
 
 fn load<T: serde::de::DeserializeOwned>(path: &Path) -> T {
     serde_yaml::from_str(&fs::read_to_string(path).unwrap())
+        .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
+}
+
+/// Receipts are canonical JSON (RFC 8785); the other artifacts are YAML.
+fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> T {
+    serde_json::from_str(&fs::read_to_string(path).unwrap())
         .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
 }
 
@@ -353,24 +360,30 @@ fn receipts_are_self_consistent() {
     for entry in fs::read_dir(store.root.join("receipts")).unwrap() {
         let path = entry.unwrap().path();
         let id = path.file_stem().unwrap().to_string_lossy().to_string();
-        let rec: Receipt = load(&path);
+        let rec: Receipt = load_json(&path);
         assert_eq!(rec.schema_version, SCHEMA_RECEIPT, "receipt {id}");
 
-        // The id is content-addressed: receipt-{run}-{sha8 of the body}.
+        // The id is content-addressed: receipt-{run}-{full SHA-256 of the
+        // canonical (RFC 8785) body bytes}.
         let rest = id
             .strip_prefix("receipt-")
             .unwrap_or_else(|| panic!("bad receipt id {id}"));
-        let (run, hash8) = rest
+        let (run, digest) = rest
             .rsplit_once('-')
-            .expect("receipt id must end in -hash8");
+            .expect("receipt id must end in the digest");
+        assert_eq!(
+            digest.len(),
+            64,
+            "the digest is the full SHA-256, not a prefix"
+        );
         assert!(
             store.run_dir(run).unwrap().is_dir(),
             "receipt {id} references missing run {run}"
         );
-        let yaml = store.to_yaml(&rec).unwrap();
+        let json = canon::canonical(&rec).unwrap();
         assert_eq!(
-            &host::sha256_bytes(yaml.as_bytes())[..8],
-            hash8,
+            host::sha256_bytes(json.as_bytes()),
+            digest,
             "receipt {id} is not content-addressed (hand-edited?)"
         );
 
@@ -586,7 +599,7 @@ fn claims_are_re_derivable_from_receipts() {
             .unwrap_or_else(|| panic!("bad receipt id {receipt_id}"));
         let (run, _) = rest
             .rsplit_once('-')
-            .expect("receipt id must end in -hash8");
+            .expect("receipt id must end in the digest");
         let cap = store.load_capture(run).unwrap();
         assert_eq!(
             claim.candidate.identity_hash, cap.candidate_sha256,
@@ -625,11 +638,17 @@ fn tree_mirrors_section_19_3() {
         .root
         .join("courts/cli-malformed-input/fixtures/malformed-path.conf")
         .is_file());
-    // No stray non-YAML droppings in the generated directories.
+    // No stray non-YAML droppings in the generated directories; receipts are
+    // canonical JSON, everything else is YAML.
     for sub in ["authorities", "receipts", "claims"] {
         for entry in fs::read_dir(store.root.join(sub)).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().to_string();
-            assert!(name.ends_with(".yaml"), "unexpected file {sub}/{name}");
+            let ok = if sub == "receipts" {
+                name.ends_with(".json")
+            } else {
+                name.ends_with(".yaml")
+            };
+            assert!(ok, "unexpected file {sub}/{name}");
         }
     }
 }

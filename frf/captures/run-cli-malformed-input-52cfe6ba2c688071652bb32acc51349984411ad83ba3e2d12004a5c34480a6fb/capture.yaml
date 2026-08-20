@@ -1,5 +1,5 @@
 schema_version: frf-capture-v1
-run: run-cli-malformed-input-52cfe6ba
+run: run-cli-malformed-input-52cfe6ba2c688071652bb32acc51349984411ad83ba3e2d12004a5c34480a6fb
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
