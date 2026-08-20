@@ -30,14 +30,12 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v3";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-/// The OpenReceipt schema. v4 binds the full observation provenance (runner,
-/// comparator implementations, environment identity) and the comparator
-/// SEMANTIC identities separately from their implementations, so two
-/// independent FRF implementations can ask the same court question without
-/// pretending to be the same implementation. The body is serialized as
-/// canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
-/// bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v4";
+/// The OpenReceipt schema. v5 adds the run identity and the structured
+/// replay block (program, evidence root, argv, expected run identity) so
+/// replay is a first-class evidence operation rather than a shell hint. The
+/// body is serialized as canonical JSON (RFC 8785) and its identity is the
+/// full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v5";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
@@ -603,7 +601,7 @@ pub struct ArtifactIdentity {
     pub interpreter: Option<InterpreterIdentity>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideCapture {
     /// Exit code as a string, or `signal(<n>)` if terminated by a signal.
     pub exit: String,
@@ -760,6 +758,8 @@ pub struct TokenRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
     pub schema_version: String,
+    /// The run this receipt binds (the reproduction target).
+    pub run: String,
     pub court: ReceiptCourt,
     /// Who observed: copied from the capture, never reconstructed.
     pub provenance: ObservationProvenance,
@@ -908,9 +908,20 @@ pub struct ReceiptClaims {
     pub blocked_by_open_residuals: Vec<String>,
 }
 
+/// Structured replay data (OpenReceipt v5): executing this reproduces the
+/// observation. Original repository paths become provenance, not replay
+/// dependencies — the snapshots under `objects/` are the artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptReplay {
-    pub command: String,
+    /// The program to execute (`frf`).
+    pub program: String,
+    /// The evidence root the run was captured under (as passed to --root).
+    pub evidence_root: String,
+    /// The argv that re-executes the court declaration.
+    pub argv: Vec<String>,
+    /// The run identity a faithful replay must reproduce.
+    pub expected_run_identity: String,
 }
 
 // ---------------------------------------------------------------------------

@@ -28,11 +28,6 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
     }
 
     let family = &spec.admissibility_envelope.fixture_family;
-    let replay_command = format!(
-        "frf --root {} court run {}",
-        store.root.display(),
-        capture.manifest
-    );
 
     let observables: Vec<ReceiptObservable> = spec
         .admissibility_envelope
@@ -98,7 +93,8 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                     } => Some(closure_predicate.clone()),
                     _ => None,
                 },
-                reproducer: replay_command.clone(),
+                // A residual reproduces by replaying the run that observed it.
+                reproducer: run.to_string(),
                 invariant: String::new(),
                 residual_fingerprint: fingerprint,
             })
@@ -109,6 +105,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
     let blocked = crate::sentences::refusal_lines_from_residuals(&receipt_residuals, family);
     let body = Receipt {
         schema_version: SCHEMA_RECEIPT.to_string(),
+        run: run.to_string(),
         court: ReceiptCourt {
             id: spec.id.clone(),
             question: spec.question.clone(),
@@ -179,7 +176,10 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             blocked_by_open_residuals: blocked,
         },
         replay: ReceiptReplay {
-            command: replay_command,
+            program: "frf".to_string(),
+            evidence_root: store.root.to_string_lossy().into_owned(),
+            argv: crate::commands::replay::replay_argv(&store.root, &capture.manifest),
+            expected_run_identity: run.to_string(),
         },
     };
 

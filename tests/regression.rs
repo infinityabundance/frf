@@ -1169,6 +1169,64 @@ fn timeout_terminates_descendants_that_hold_the_pipes() {
 }
 
 #[test]
+fn replay_reproduces_the_captured_observation() {
+    // Replay is a first-class evidence operation: it re-executes the exact
+    // snapshotted artifacts + argv under a checked environment and requires
+    // the observation to reproduce byte-for-byte.
+    let work = Workdir::new("replay");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let run = run_court(&work);
+
+    let out = frf(&work, &["--root", ROOT, "replay", &run]);
+    assert_success(&out, "replay run");
+    assert!(
+        stdout(&out).contains("reproduced") && stdout(&out).contains("2 residual"),
+        "stdout: {}",
+        stdout(&out)
+    );
+
+    // A receipt id replays the same run.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "replay", &receipt]);
+    assert_success(&out, "replay receipt");
+    assert!(stdout(&out).contains("reproduced"));
+}
+
+#[test]
+fn replay_refuses_corrupt_objects_and_unknown_ids() {
+    let work = Workdir::new("replay-refuse");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let run = run_court(&work);
+
+    // Corrupt the candidate snapshot: replay must refuse, never execute the
+    // tampered bytes.
+    let capture: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.yaml"))).unwrap(),
+    )
+    .unwrap();
+    let cand_sha = capture["candidate_artifact"]["sha256"].as_str().unwrap();
+    let obj = work.path(&format!("{ROOT}/objects/sha256/{cand_sha}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&obj, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    fs::write(&obj, b"#!/bin/sh\necho corrupted\n").unwrap();
+    let out = frf(&work, &["--root", ROOT, "replay", &run]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("corrupt"), "stderr: {}", stderr(&out));
+
+    // Unknown id.
+    let out = frf(&work, &["--root", ROOT, "replay", "run-nope"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no such run or receipt 'run-nope'"));
+}
+
+#[test]
 fn receipt_emit_is_idempotent_per_state() {
     let work = Workdir::new("receipt-idem");
     work.copy_canonical_tree();

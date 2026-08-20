@@ -340,7 +340,7 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 }
 
 impl SideCapture {
-    fn from_outcome(outcome: &host::ProcessOutcome) -> SideCapture {
+    pub(crate) fn from_outcome(outcome: &host::ProcessOutcome) -> SideCapture {
         let first_line = |bytes: &[u8]| -> String {
             String::from_utf8_lossy(bytes)
                 .split('\n')

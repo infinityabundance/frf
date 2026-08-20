@@ -128,6 +128,31 @@ impl Store {
         Ok(self.root.join("objects").join("sha256").join(sha256))
     }
 
+    /// Read + verify a content-addressed object by its hash. A missing or
+    /// corrupt object is refused — replay never executes unverified bytes.
+    pub fn verified_object_bytes(&self, sha256: &str) -> Result<Vec<u8>> {
+        let path = self.object_path(sha256)?;
+        if !path.is_file() {
+            return Err(FrfError::new(format!(
+                "object {} is missing ({}); the evidence tree is incomplete — cannot replay",
+                &sha256[..16],
+                path.display()
+            )));
+        }
+        let bytes = fs::read(&path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        let actual = crate::host::sha256_bytes(&bytes);
+        if actual != sha256 {
+            return Err(FrfError::new(format!(
+                "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
+                path.display(),
+                &actual[..16],
+                &sha256[..16]
+            )));
+        }
+        Ok(bytes)
+    }
+
     /// Materialize bytes as an immutable content-addressed object and return
     /// its path. Invariants:
     ///

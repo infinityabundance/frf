@@ -1,5 +1,5 @@
 schema_version: frf-capture-v3
-run: run-cli-malformed-input-23a802b33fa3c0e6d2181d0ce188bc62a3c29daf8a3525e7c124777bacad9fc2
+run: run-cli-malformed-input-4f08d4e645bf0d6cb377553070e62775ce96016a1b6b8e6088ee42b510e0b915
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
@@ -52,15 +52,15 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.10
-    frf_executable_hash: 6d6dff282efeb4f8da48e673150af0fa7e8b6662726cb0696394baf856760160
+    frf_version: 0.1.11
+    frf_executable_hash: dde6dd5ca3014603a67bff3f05084aa3f70844668af00c607aafb267e969830f
   comparator_implementations:
   - id: exit
-    implementation_hash: 6d6dff282efeb4f8da48e673150af0fa7e8b6662726cb0696394baf856760160
-    runner_hash: 6d6dff282efeb4f8da48e673150af0fa7e8b6662726cb0696394baf856760160
+    implementation_hash: dde6dd5ca3014603a67bff3f05084aa3f70844668af00c607aafb267e969830f
+    runner_hash: dde6dd5ca3014603a67bff3f05084aa3f70844668af00c607aafb267e969830f
   - id: stderr
-    implementation_hash: 6d6dff282efeb4f8da48e673150af0fa7e8b6662726cb0696394baf856760160
-    runner_hash: 6d6dff282efeb4f8da48e673150af0fa7e8b6662726cb0696394baf856760160
+    implementation_hash: dde6dd5ca3014603a67bff3f05084aa3f70844668af00c607aafb267e969830f
+    runner_hash: dde6dd5ca3014603a67bff3f05084aa3f70844668af00c607aafb267e969830f
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
