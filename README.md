@@ -133,10 +133,13 @@ says no more than that receipt licenses.
 - **The environment digest covers os + architecture + kernel release only**;
   environment admission (libc, locale, timezone data, dynamic dependencies,
   container/Nix digests) is future work.
-- **The subprocess runner drains pipes concurrently and records signals by
-  number**, but the `ETXTBSY` spawn retry has no deadline of its own, and
-  descendant processes that inherit stdout/stderr are not reaped (process-
-  group / descendant policy is future work).
+- **The subprocess runner is hostile to its own process tree (unix)**: each
+  side runs in its own process group, pipes are drained concurrently with the
+  wait loop, signals are recorded by number, and the whole group is
+  terminated when the side exits or times out — a descendant that inherits
+  stdout/stderr can never hold the capture open. `ETXTBSY` spawn retries are
+  bounded to 1 s. Remaining: a side that escapes via `setsid` is outside the
+  policy, and the capture is the process group's output, not byte-timed.
 - **`environmental` and `oracle_version` weaken the envelope**: they close the
   residual but never license parity on its axis (the claim compiler excludes
   the axis). Envelope refinement records are future work.
