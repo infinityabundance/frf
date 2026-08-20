@@ -1,5 +1,5 @@
 schema_version: frf-claim-v1
-receipt: receipt-run-cli-malformed-input-f951ec56-2ecce0ba
+receipt: receipt-run-cli-malformed-input-f951ec56-b3b6a5ed
 authority: ref-cli-1.8.2
 court: cli-malformed-input
 fixture_family: malformed-input

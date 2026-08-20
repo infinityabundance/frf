@@ -2,8 +2,8 @@
 //! All logic lives in the library so tests can exercise it in-process.
 
 use clap::Parser;
-use frf_rs::cli::Cli;
-use frf_rs::store::Store;
+use frf::cli::Cli;
+use frf::store::Store;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -13,7 +13,7 @@ fn main() -> ExitCode {
         eprintln!("frf: {e}");
         return ExitCode::FAILURE;
     }
-    match frf_rs::commands::dispatch(&store, cli.command) {
+    match frf::commands::dispatch(&store, cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("frf: {e}");

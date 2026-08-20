@@ -130,7 +130,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         environment: ReceiptEnvironment {
             os: std::env::consts::OS.to_string(),
             architecture: std::env::consts::ARCH.to_string(),
-            toolchain: format!("frf-rs/{}", env!("CARGO_PKG_VERSION")),
+            toolchain: format!("frf/{}", env!("CARGO_PKG_VERSION")),
             environment_digest: capture.environment_digest.clone(),
         },
         fixtures: vec![ReceiptFixture {

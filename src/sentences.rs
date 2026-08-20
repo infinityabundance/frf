@@ -137,7 +137,7 @@ mod tests {
         ReceiptEnvironment {
             os: "linux".into(),
             architecture: "x86_64".into(),
-            toolchain: "frf-rs/0.1.0".into(),
+            toolchain: "frf/0.1.0".into(),
             environment_digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
                 .into(),
         }

@@ -27,7 +27,7 @@ candidate:
 environment:
   os: linux
   architecture: x86_64
-  toolchain: frf-rs/0.1.0
+  toolchain: frf/0.1.0
   environment_digest: 02a5c0979cc141f7bfe659612cab23869d6ecb18ee59a03ec0a3105895da0f8d
 fixtures:
 - id: malformed-path.conf
@@ -56,10 +56,11 @@ residuals:
     norm: single-run
     drift: not-observed
     slew: not-observed
-  grammar_state: violation
+  grammar_state: recovery
   raw_reference_hash: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
   raw_candidate_hash: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
-  disposition: open
+  disposition: fixed
+  reason: candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)
   reproducer: frf --root frf court run frf/courts/cli-malformed-input/manifest.yaml
   invariant: ''
   residual_fingerprint: 13619153b4587b90a5cdc180a7ccdf2cce7111a7febe9a2ecbf137c238d48a2e
@@ -70,10 +71,11 @@ residuals:
     norm: single-run
     drift: not-observed
     slew: not-observed
-  grammar_state: violation
+  grammar_state: intentional_divergence
   raw_reference_hash: 8ee3d9f0cbdee73d35f79fca0eff3702a462f6865540d1aaed9c6749cc8aa05a
   raw_candidate_hash: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
-  disposition: open
+  disposition: intentional
+  reason: clearer diagnostic wording; documented divergence
   reproducer: frf --root frf court run frf/courts/cli-malformed-input/manifest.yaml
   invariant: ''
   residual_fingerprint: 534e1e006a098c137f995436f2fde7ddfb803b8a6d3846ae5af3fab78d968422
@@ -81,12 +83,12 @@ endoduction:
   schema_version: frf-token-v1
   tokens:
   - residual_id: cli-exit-0001
-    token: exit/exit-class/class-change/open
+    token: exit/exit-class/class-change/fixed
     next_court: cli-exit-minimize
     blocks_claims:
     - malformed-input exit parity
   - residual_id: cli-text-0001
-    token: text/diagnostic-routing/first-line-token-change/open
+    token: text/diagnostic-routing/first-line-token-change/intentional
     next_court: cli-diagnostic-minimize
     blocks_claims:
     - byte-identical diagnostics
@@ -95,8 +97,6 @@ claims:
   non_claims:
   - This receipt does not establish byte-identical stderr, full CLI compatibility, or a drop-in replacement claim.
   - In particular, it does not establish a drop-in replacement for all malformed-input behavior.
-  blocked_by_open_residuals:
-  - cannot claim compatibility for fixture family malformed-input because residual cli-exit-0001 (exit) is open
-  - cannot claim compatibility for fixture family malformed-input because residual cli-text-0001 (text) is open
+  blocked_by_open_residuals: []
 replay:
   command: frf --root frf court run frf/courts/cli-malformed-input/manifest.yaml

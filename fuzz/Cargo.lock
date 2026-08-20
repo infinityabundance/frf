@@ -173,23 +173,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
-name = "frf-fuzz"
-version = "0.0.0"
-dependencies = [
- "clap",
- "frf-rs",
- "libfuzzer-sys",
- "serde_yaml",
-]
-
-[[package]]
-name = "frf-rs"
+name = "frf"
 version = "0.1.0"
 dependencies = [
  "clap",
  "serde",
  "serde_yaml",
  "sha2",
+]
+
+[[package]]
+name = "frf-fuzz"
+version = "0.0.0"
+dependencies = [
+ "clap",
+ "frf",
+ "libfuzzer-sys",
+ "serde_yaml",
 ]
 
 [[package]]

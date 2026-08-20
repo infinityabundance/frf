@@ -16,11 +16,11 @@
 //!
 //! Run: `cargo test --test verify_tree` (or `make verify`).
 
-use frf_rs::host;
-use frf_rs::kappa;
-use frf_rs::model::*;
-use frf_rs::sentences;
-use frf_rs::store::{is_valid_id, Store};
+use frf::host;
+use frf::kappa;
+use frf::model::*;
+use frf::sentences;
+use frf::store::{is_valid_id, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
 

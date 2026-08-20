@@ -6,7 +6,7 @@
 
 #![no_main]
 
-use frf_rs::model::*;
+use frf::model::*;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

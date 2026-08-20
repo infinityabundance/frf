@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-frf-rs = { path = ".." }
+frf = { path = ".." }
 serde_yaml = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
 

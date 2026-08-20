@@ -14,5 +14,5 @@ fuzz_target!(|data: &[u8]| {
     for chunk in data.split(|b| *b == 0) {
         args.push(String::from_utf8_lossy(chunk).into_owned().into());
     }
-    let _ = frf_rs::cli::Cli::command().try_get_matches_from(args);
+    let _ = frf::cli::Cli::command().try_get_matches_from(args);
 });

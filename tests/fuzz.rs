@@ -12,9 +12,9 @@
 //! mutation. Run: `cargo test --test fuzz`.
 
 use clap::Parser;
-use frf_rs::cli::Cli;
-use frf_rs::model::*;
-use frf_rs::store::{is_valid_id, validate_id};
+use frf::cli::Cli;
+use frf::model::*;
+use frf::store::{is_valid_id, validate_id};
 use std::path::PathBuf;
 
 /// xorshift64* — deterministic on every platform.
