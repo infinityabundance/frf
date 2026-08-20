@@ -25,7 +25,14 @@ sha2 = "0.10"
 libc = "0.2"
 
 [dev-dependencies]
-jsonschema = "0.28"
+# No jsonschema dev-dependency: every released version resolves url to 2.5.x,
+# which unconditionally enables idna's `compiled_data` feature -> ICU
+# (idna_adapter 1.2.2 and icu_* 2.3.0 require rustc 1.86/1.88), breaking the
+# 1.85 MSRV. tests/conformance.rs therefore validates the OpenReceipt corpus
+# with a fail-closed subset validator that audits the schema itself: any
+# keyword outside {type, required, properties, additionalProperties, items,
+# enum, const, pattern, $ref} is a test failure, never a silent skip. The
+# corpus in conformance/ remains the normative cross-implementation artifact.
 
 [profile.release]
 lto = true

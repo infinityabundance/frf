@@ -10,6 +10,14 @@
 //! Python implementation that passes the same corpus speaks the same
 //! protocol (see `spec/openreceipt.md`).
 //!
+//! The schema (`spec/openreceipt.schema.json`) is validated here with a
+//! fail-closed subset validator instead of the `jsonschema` crate: every
+//! released jsonschema resolves `url` to 2.5.x, which unconditionally
+//! enables idna's `compiled_data` feature and pulls ICU (idna_adapter 1.2.2
+//! and icu_* 2.3.0 need rustc 1.86/1.88), breaking the 1.85 MSRV. The
+//! schema deliberately uses only the core keywords the validator audits;
+//! any keyword outside that set is a test failure, never a silent skip.
+//!
 //! Generator mode (used to refresh the pins after a schema change):
 //!   FRF_CONFORM_PRINT=1 cargo test --test conformance -- --nocapture
 //! prints `name<TAB>canonical<TAB>sha256` per valid fixture.
@@ -17,6 +25,7 @@
 use frf::canon;
 use frf::host;
 use frf::model::Receipt;
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
@@ -24,7 +33,7 @@ fn dir(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
-fn schema() -> serde_json::Value {
+fn schema() -> Value {
     serde_json::from_str(
         &fs::read_to_string(
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("spec/openreceipt.schema.json"),
@@ -34,9 +43,169 @@ fn schema() -> serde_json::Value {
     .expect("the schema must be valid JSON")
 }
 
+/// The keyword subset `spec/openreceipt.schema.json` is allowed to use.
+/// Everything else is a harness failure — validation must never be skipped.
+const SUPPORTED_KEYWORDS: &[&str] = &[
+    "type",
+    "required",
+    "properties",
+    "additionalProperties",
+    "items",
+    "enum",
+    "const",
+    "pattern",
+    "$ref",
+    // Metadata the corpus ignores.
+    "$schema",
+    "$id",
+    "title",
+    "description",
+    "definitions",
+];
+
+fn audit(schema: &Value, where_: &str) {
+    if let Some(obj) = schema.as_object() {
+        for key in obj.keys() {
+            assert!(
+                SUPPORTED_KEYWORDS.contains(&key.as_str()),
+                "{where_}: unsupported keyword {key:?} — the conformance harness must not skip it"
+            );
+        }
+    }
+    if let Some(p) = schema.get("properties") {
+        for (k, sub) in p.as_object().expect("properties must be an object") {
+            audit(sub, &format!("{where_}.properties.{k}"));
+        }
+    }
+    if let Some(items) = schema.get("items") {
+        audit(items, &format!("{where_}.items"));
+    }
+    if let Some(defs) = schema.get("definitions") {
+        for (k, sub) in defs.as_object().expect("definitions must be an object") {
+            audit(sub, &format!("{where_}.definitions.{k}"));
+        }
+    }
+    if let Some(p) = schema.get("pattern") {
+        // The corpus only uses this one pattern. Any future pattern must be
+        // implemented here before it may appear in the schema.
+        assert_eq!(
+            p.as_str().expect("pattern must be a string"),
+            "^[0-9a-f]{64}$",
+            "{where_}: unsupported pattern — implement it before using it"
+        );
+    }
+}
+
+fn type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn hex64(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn validate(schema: &Value, defs: &Value, instance: &Value) -> Result<(), String> {
+    if let Some(r#ref) = schema.get("$ref") {
+        let r = r#ref.as_str().expect("$ref must be a string");
+        let name = r
+            .strip_prefix("#/definitions/")
+            .unwrap_or_else(|| panic!("unsupported $ref {r:?}: only #/definitions/NAME is used"));
+        let target = defs
+            .get(name)
+            .unwrap_or_else(|| panic!("$ref {r:?} has no matching definition"));
+        return validate(target, defs, instance);
+    }
+    if let Some(t) = schema.get("type") {
+        let t = t.as_str().expect("type must be a string");
+        let ok = match t {
+            "object" => instance.is_object(),
+            "array" => instance.is_array(),
+            "string" => instance.is_string(),
+            other => panic!("unsupported type keyword {other:?}"),
+        };
+        if !ok {
+            return Err(format!("expected {t}, got {}", type_name(instance)));
+        }
+    }
+    if instance.is_object() {
+        let obj = instance.as_object().unwrap();
+        if let Some(req) = schema.get("required") {
+            for k in req.as_array().expect("required must be an array") {
+                let k = k.as_str().expect("required entries must be strings");
+                if !obj.contains_key(k) {
+                    return Err(format!("missing required property {k:?}"));
+                }
+            }
+        }
+        if let Some(props) = schema.get("properties") {
+            for (k, sub) in props.as_object().expect("properties must be an object") {
+                if let Some(v) = obj.get(k) {
+                    validate(sub, defs, v).map_err(|e| format!("{k}: {e}"))?;
+                }
+            }
+        }
+        if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+            let props = schema.get("properties").expect(
+                "additionalProperties: false without properties — the harness cannot check it",
+            );
+            let props = props.as_object().expect("properties must be an object");
+            for k in obj.keys() {
+                if !props.contains_key(k) {
+                    return Err(format!("additional property {k:?}"));
+                }
+            }
+        }
+    }
+    if instance.is_array() {
+        if let Some(items) = schema.get("items") {
+            for (i, v) in instance.as_array().unwrap().iter().enumerate() {
+                validate(items, defs, v).map_err(|e| format!("[{i}]: {e}"))?;
+            }
+        }
+    }
+    if let Some(e) = schema.get("enum") {
+        let e = e.as_array().expect("enum must be an array");
+        if !e.iter().any(|candidate| candidate == instance) {
+            return Err(format!("value is not one of {e:?}"));
+        }
+    }
+    if let Some(c) = schema.get("const") {
+        if c != instance {
+            return Err(format!("value does not equal const {c}"));
+        }
+    }
+    if let Some(_p) = schema.get("pattern") {
+        // `audit` has already proven the only reachable pattern is
+        // ^[0-9a-f]{64}$, implemented by `hex64` below.
+        let s = instance.as_str().expect("pattern applies to a string");
+        if !hex64(s) {
+            return Err(format!("{s:?} does not match ^[0-9a-f]{{64}}$"));
+        }
+    }
+    Ok(())
+}
+
+/// Compile-and-validate: audits the schema once, then validates the instance.
+fn schema_valid(instance: &Value) -> Result<(), String> {
+    let doc = schema();
+    let defs = doc
+        .get("definitions")
+        .expect("the schema must carry definitions");
+    audit(&doc, "openreceipt.schema.json");
+    validate(&doc, defs, instance)
+}
+
 #[test]
 fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
-    let compiled = jsonschema::validator_for(&schema()).expect("schema must compile");
     let mut count = 0;
     let print = std::env::var("FRF_CONFORM_PRINT").is_ok();
     for entry in fs::read_dir(dir("conformance/valid")).unwrap() {
@@ -45,7 +214,7 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
         let source = fs::read_to_string(&path).unwrap();
 
         // Must parse as JSON and deserialize into the schema.
-        let value: serde_json::Value =
+        let value: Value =
             serde_json::from_str(&source).unwrap_or_else(|e| panic!("{name}: not valid JSON: {e}"));
         let _receipt: Receipt = serde_json::from_value(value.clone())
             .unwrap_or_else(|e| panic!("{name}: does not deserialize as an OpenReceipt: {e}"));
@@ -74,11 +243,10 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
                 });
         assert_eq!(hash, expected_hash.trim(), "{name}: digest drifted");
         // The schema validates the canonical form too.
-        if let Err(e) =
-            compiled.validate(&serde_json::from_str::<serde_json::Value>(&canonical).unwrap())
-        {
-            panic!("{name}: fails the OpenReceipt schema: {e}");
-        }
+        let canonical_value: Value =
+            serde_json::from_str(&canonical).expect("canonical bytes must be JSON");
+        schema_valid(&canonical_value)
+            .unwrap_or_else(|e| panic!("{name}: fails the OpenReceipt schema: {e}"));
         count += 1;
     }
     assert!(!print, "generator mode: wrote pins above");
@@ -98,7 +266,7 @@ fn invalid_fixtures_must_be_refused() {
         // Either the JSON is malformed, or it does not deserialize as an
         // OpenReceipt (schema version enforced, fields required, enums
         // closed). Both are refusals.
-        let refused = serde_json::from_str::<serde_json::Value>(&source)
+        let refused = serde_json::from_str::<Value>(&source)
             .ok()
             .and_then(|v| serde_json::from_value::<Receipt>(v).ok())
             .is_none();
@@ -116,18 +284,22 @@ fn the_schema_rejects_forbidden_states() {
     // Negative controls for the schema itself: a receipt that structurally
     // deserializes (the corpus validator tolerates nothing) is one thing;
     // the schema must also refuse out-of-domain values.
-    let compiled = jsonschema::validator_for(&schema()).unwrap();
-    let base: serde_json::Value = serde_json::from_str(
+    let base: Value = serde_json::from_str(
         &fs::read_to_string(dir("conformance/valid/04-minimal.json")).unwrap(),
     )
     .unwrap();
     let mut bad = base.clone();
     bad["run"] = serde_json::json!(42);
-    assert!(!compiled.is_valid(&bad), "number in string slot");
+    assert!(schema_valid(&bad).is_err(), "number in string slot");
     let mut bad = base.clone();
     bad["residuals"] = serde_json::json!([{"id": "x", "disposition": "closed"}]);
-    assert!(!compiled.is_valid(&bad), "unknown disposition");
+    assert!(schema_valid(&bad).is_err(), "unknown disposition");
     let mut bad = base.clone();
     bad["schema_version"] = serde_json::json!("frf-receipt-v5");
-    assert!(!compiled.is_valid(&bad), "wrong schema version");
+    assert!(schema_valid(&bad).is_err(), "wrong schema version");
+    // And the unmutated base must still validate.
+    assert!(
+        schema_valid(&base).is_ok(),
+        "the base fixture must validate"
+    );
 }
