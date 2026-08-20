@@ -230,12 +230,31 @@ fn captures_are_self_consistent() {
             let has_shebang = bytes.starts_with(b"#!");
             match (&artifact.interpreter, has_shebang) {
                 (Some(i), true) => {
-                    assert_eq!(i.sha256.len(), 64);
+                    assert_eq!(i.kernel_interpreter.sha256.len(), 64);
+                    assert_eq!(i.downstream_interpreter.sha256.len(), 64);
                     assert!(
-                        Path::new(&i.path).is_file(),
-                        "interpreter {} missing",
-                        i.path
+                        Path::new(&i.kernel_interpreter.path).is_file(),
+                        "kernel interpreter {} missing",
+                        i.kernel_interpreter.path
                     );
+                    assert!(
+                        Path::new(&i.downstream_interpreter.path).is_file(),
+                        "downstream interpreter {} missing",
+                        i.downstream_interpreter.path
+                    );
+                    // An env shebang records the resolver; a plain shebang
+                    // records no resolver and kernel == downstream.
+                    match &i.resolver {
+                        Some(r) => {
+                            assert_eq!(r.kind, "env");
+                            assert_eq!(r.path, i.kernel_interpreter.path);
+                            assert_eq!(r.path_digest.len(), 64);
+                        }
+                        None => assert_eq!(
+                            i.kernel_interpreter, i.downstream_interpreter,
+                            "non-env shebang: kernel must BE the interpreter"
+                        ),
+                    }
                 }
                 (None, false) => {}
                 (Some(_), false) => panic!("interpreter recorded for a non-script artifact"),

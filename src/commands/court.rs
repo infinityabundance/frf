@@ -234,12 +234,12 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     let run_doc = serde_json::json!({
         "court": spec.id,
         "authority": authority.id,
-        "authority_interpreter": authority_interpreter.as_ref().map(|i| i.sha256.as_str()),
+        "authority_interpreter": authority_interpreter.as_ref().map(|i| i.downstream_interpreter.sha256.as_str()),
         // The candidate NAME is a label and deliberately absent: the
         // candidate_sha256 is the identity. (It is still recorded in the
         // capture's court_spec as metadata.)
         "candidate_sha256": candidate_sha256,
-        "candidate_interpreter": candidate_interpreter.as_ref().map(|i| i.sha256.as_str()),
+        "candidate_interpreter": candidate_interpreter.as_ref().map(|i| i.downstream_interpreter.sha256.as_str()),
         "fixture_sha256": fixture_sha256,
         "arguments": arguments,
         "environment_digest": environment.digest,

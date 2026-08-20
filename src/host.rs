@@ -25,7 +25,9 @@
 //!   persistently busy executable never hangs the court.
 
 use crate::error::{FrfError, Result};
-use crate::model::{EnvironmentIdentity, InterpreterIdentity};
+use crate::model::{
+    EnvironmentIdentity, InterpreterExecutable, InterpreterIdentity, InterpreterResolver,
+};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -277,13 +279,14 @@ pub fn environment_identity() -> EnvironmentIdentity {
     }
 }
 
-/// Bind the interpreter a script artifact executes under: parse the `#!`
-/// line, resolve the interpreter (absolute path, or PATH lookup — an `env`
-/// shebang resolves its next token), canonicalize, and hash it. For a
-/// script, "the exact artifact" is bytes + interpreter; binaries (no
-/// shebang) yield `None`.
+/// Bind the interpreter CHAIN a script artifact executes under: what the
+/// kernel directly invoked (the first shebang token), the raw shebang
+/// argument bytes (verbatim evidence), the env resolver when the kernel
+/// interpreter is env(1), and the downstream language interpreter. For a
+/// script, "the exact artifact" is bytes + this chain; binaries (no shebang)
+/// yield `None`.
 ///
-/// A script whose interpreter cannot be resolved or hashed is an error: the
+/// An interpreter that cannot be resolved or hashed is an error: the
 /// exact-artifact claim is the point, and an unbound interpreter would leave
 /// it unverifiable.
 pub fn interpreter_identity(artifact: &[u8]) -> Result<Option<InterpreterIdentity>> {
@@ -295,25 +298,59 @@ pub fn interpreter_identity(artifact: &[u8]) -> Result<Option<InterpreterIdentit
     }
     let line = String::from_utf8_lossy(first_line);
     let mut tokens = line[2..].split_whitespace();
-    let Some(mut interp) = tokens.next() else {
+    let Some(kernel_token) = tokens.next() else {
         return Ok(None);
     };
-    // `#!/usr/bin/env python3` -> the real interpreter is the next token.
-    if interp == "env" || interp.ends_with("/env") {
-        interp = tokens
-            .next()
-            .ok_or_else(|| FrfError::new("shebang uses 'env' without naming an interpreter"))?;
+    let kernel = resolve_interpreter(kernel_token)?;
+    // Raw argument bytes after the interpreter token, verbatim.
+    let arg_start = 2 + kernel_token.len();
+    let shebang_argument_bytes = line[arg_start..].trim().to_string();
+
+    // Is the kernel interpreter env(1)? Then the downstream interpreter is
+    // the first token that is neither an option nor a VAR=value assignment.
+    let is_env = kernel_token == "env" || kernel_token.ends_with("/env");
+    if is_env {
+        let downstream_token = tokens
+            .find(|t| !t.starts_with('-') && (!t.contains('=') || t.starts_with('=')))
+            .ok_or_else(|| FrfError::new("env shebang without a downstream interpreter"))?;
+        let path_digest = {
+            let path = std::env::var_os("PATH").unwrap_or_default();
+            sha256_bytes(path.to_string_lossy().as_bytes())
+        };
+        Ok(Some(InterpreterIdentity {
+            kernel_interpreter: kernel.clone(),
+            shebang_argument_bytes,
+            resolver: Some(InterpreterResolver {
+                kind: "env".to_string(),
+                path: kernel.path.clone(),
+                sha256: kernel.sha256.clone(),
+                path_digest,
+            }),
+            downstream_interpreter: resolve_interpreter(downstream_token)?,
+        }))
+    } else {
+        Ok(Some(InterpreterIdentity {
+            kernel_interpreter: kernel.clone(),
+            shebang_argument_bytes,
+            resolver: None,
+            downstream_interpreter: kernel,
+        }))
     }
-    let resolved = if interp.contains('/') {
-        PathBuf::from(interp)
+}
+
+/// Resolve one shebang token to an executable: absolute path as-is, bare
+/// name via PATH lookup; then canonicalize and hash.
+fn resolve_interpreter(token: &str) -> Result<InterpreterExecutable> {
+    let resolved = if token.contains('/') {
+        PathBuf::from(token)
     } else {
         let path_var = std::env::var_os("PATH").unwrap_or_default();
         std::env::split_paths(&path_var)
-            .map(|dir| dir.join(interp))
+            .map(|dir| dir.join(token))
             .find(|candidate| candidate.is_file())
             .ok_or_else(|| {
                 FrfError::new(format!(
-                    "interpreter '{interp}' from the shebang was not found on PATH"
+                    "interpreter '{token}' from the shebang was not found on PATH"
                 ))
             })?
     };
@@ -324,10 +361,10 @@ pub fn interpreter_identity(artifact: &[u8]) -> Result<Option<InterpreterIdentit
         ))
     })?;
     let sha256 = sha256_file(&canonical)?;
-    Ok(Some(InterpreterIdentity {
+    Ok(InterpreterExecutable {
         path: canonical.to_string_lossy().into_owned(),
         sha256,
-    }))
+    })
 }
 
 /// Kernel release via `uname -r`; `unknown` if unavailable.
@@ -479,6 +516,82 @@ mod tests {
             "harness must not wait for a descendant to release the pipes (took {:?})",
             start.elapsed()
         );
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plain_shebang_binds_kernel_as_the_interpreter() {
+        // `#!/bin/sh` — the kernel directly invokes /bin/sh; no resolver,
+        // kernel == downstream.
+        let script = temp_script("chain-plain");
+        std::fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+        let chain = interpreter_identity(&std::fs::read(&script).unwrap())
+            .unwrap()
+            .expect("script interpreter");
+        assert_eq!(chain.kernel_interpreter, chain.downstream_interpreter);
+        assert!(chain.resolver.is_none());
+        assert_eq!(chain.shebang_argument_bytes, "");
+        assert_eq!(chain.kernel_interpreter.sha256.len(), 64);
+        assert!(Path::new(&chain.kernel_interpreter.path).is_file());
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_shebang_binds_the_full_chain() {
+        // `#!/usr/bin/env -S sh -e` — the kernel invokes env(1); the
+        // downstream is the first non-option token; the raw argument bytes
+        // are preserved verbatim as evidence.
+        let script = temp_script("chain-env");
+        std::fs::write(&script, "#!/usr/bin/env -S sh -e\necho hi\n").unwrap();
+        let chain = interpreter_identity(&std::fs::read(&script).unwrap())
+            .unwrap()
+            .expect("script interpreter");
+        assert!(
+            chain.kernel_interpreter.path.contains("/env"),
+            "kernel: {}",
+            chain.kernel_interpreter.path
+        );
+        let resolver = chain.resolver.as_ref().expect("env resolver");
+        assert_eq!(resolver.kind, "env");
+        assert_eq!(resolver.path, chain.kernel_interpreter.path);
+        assert_eq!(resolver.path_digest.len(), 64);
+        assert_eq!(chain.shebang_argument_bytes, "-S sh -e");
+        assert_eq!(chain.downstream_interpreter.sha256.len(), 64);
+        assert!(Path::new(&chain.downstream_interpreter.path).is_file());
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_shebang_skips_assignments_when_resolving() {
+        // `#!/usr/bin/env FOO=bar sh` — FOO=bar is an env assignment, not
+        // the command; the downstream is sh.
+        let script = temp_script("chain-assign");
+        std::fs::write(&script, "#!/usr/bin/env FOO=bar sh\necho hi\n").unwrap();
+        let chain = interpreter_identity(&std::fs::read(&script).unwrap())
+            .unwrap()
+            .expect("script interpreter");
+        assert_eq!(chain.shebang_argument_bytes, "FOO=bar sh");
+        // FOO=bar is skipped: the downstream is sh, not env and not the
+        // assignment.
+        assert_ne!(
+            chain.downstream_interpreter.sha256, chain.kernel_interpreter.sha256,
+            "downstream must differ from env"
+        );
+        assert!(Path::new(&chain.downstream_interpreter.path).is_file());
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binaries_have_no_interpreter_chain() {
+        let script = temp_script("chain-bin");
+        std::fs::write(&script, "\x7fELF-not-really\n").unwrap();
+        assert!(interpreter_identity(&std::fs::read(&script).unwrap())
+            .unwrap()
+            .is_none());
         let _ = std::fs::remove_file(&script);
     }
 }

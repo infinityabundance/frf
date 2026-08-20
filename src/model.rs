@@ -27,15 +27,14 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v3";
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v4";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-/// The OpenReceipt schema. v5 adds the run identity and the structured
-/// replay block (program, evidence root, argv, expected run identity) so
-/// replay is a first-class evidence operation rather than a shell hint. The
-/// body is serialized as canonical JSON (RFC 8785) and its identity is the
-/// full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v5";
+/// The OpenReceipt schema. v6 carries the interpreter CHAIN (the executable
+/// the kernel directly invoked vs. the downstream interpreter) instead of a
+/// single flattened interpreter. The body is serialized as canonical JSON
+/// (RFC 8785) and its identity is the full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v6";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
@@ -576,14 +575,46 @@ pub struct EnvironmentIdentity {
     pub digest: String,
 }
 
-/// The interpreter a script artifact was executed under (`#!` line resolved
-/// and hashed): for a script, "the exact artifact" is bytes + interpreter.
+/// One step of an interpreter chain: an executable, resolved + hashed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct InterpreterIdentity {
+pub struct InterpreterExecutable {
     /// Resolved, canonicalized absolute path.
     pub path: String,
     pub sha256: String,
+}
+
+/// The env(1) resolver, present when the kernel interpreter is env.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterpreterResolver {
+    pub kind: String,
+    pub path: String,
+    pub sha256: String,
+    /// Digest of $PATH at observation time — the search space the resolver
+    /// would use to find the downstream interpreter.
+    pub path_digest: String,
+}
+
+/// The interpreter chain of a script artifact: WHAT the kernel directly
+/// invoked (`kernel_interpreter`), the raw shebang argument bytes (verbatim
+/// evidence, even where v0 does not execute them), the env resolver when
+/// present, and the actual language interpreter (`downstream_interpreter`).
+/// For a script, "the exact artifact" is bytes + this chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterpreterIdentity {
+    /// What execve(2) actually ran first (e.g. `/usr/bin/env`, `/bin/sh`).
+    pub kernel_interpreter: InterpreterExecutable,
+    /// The raw shebang argument bytes after the interpreter token, verbatim
+    /// (`-S python3 -O`, `FOO=bar python3`, …) — recorded as evidence even
+    /// though v0 does not execute them itself.
+    pub shebang_argument_bytes: String,
+    /// Present iff the kernel interpreter is env(1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolver: Option<InterpreterResolver>,
+    /// The actual language interpreter the script runs under.
+    pub downstream_interpreter: InterpreterExecutable,
 }
 
 /// A content-addressed execution object: the exact bytes a run executed,

@@ -167,14 +167,17 @@ says no more than that receipt licenses.
   path. This is content-addressed and corruption-checked; it is not
   cryptographically impossible for the same OS user to mutate between
   verification and execution (sealed memfd + execveat is future work).
-- **Script interpreter identity is bound for scripts with resolvable
-  shebangs** (path + hash of the resolved interpreter); binaries carry no
-  interpreter binding yet (ELF loader + dynamic dependencies are future
-  work). An `env` shebang (`#!/usr/bin/env python3`) records the
-  downstream interpreter, not `/usr/bin/env` itself — the kernel interpreter
-  chain (`InterpreterChain`) is a future refinement. Interpreter hashes are
-  machine-specific: the checked-in tree's recorded values are evidence, not
-  re-derivable cross-machine.
+- **Script interpreter identity is the full interpreter CHAIN**: the
+  executable the kernel directly invoked (`kernel_interpreter`), the raw
+  shebang argument bytes (verbatim — `-S` flags, env assignments — recorded
+  as evidence even where v0 does not execute them), the env resolver when
+  the kernel interpreter is env(1) (with the `$PATH` digest), and the
+  downstream language interpreter. `#!/bin/sh` binds kernel == downstream
+  with no resolver; `#!/usr/bin/env -S python3 -O` binds env as the kernel
+  + the resolver + python3 as downstream. Binaries carry no interpreter
+  binding yet (ELF loader + dynamic dependencies are future work).
+  Interpreter hashes are machine-specific: the checked-in tree's recorded
+  values are evidence, not re-derivable cross-machine.
 - **Runner + comparator implementations are bound at court time** (frf
   version, frf executable hash, per-axis implementation hashes) in the
   capture's `provenance` block and copied into receipts; a receipt never
