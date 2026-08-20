@@ -76,16 +76,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             // The disposition is the projection of the residual's append-only
             // event history at emit time; the observation itself is immutable.
             let disposition = store.current_disposition(&r.id)?;
-            let fingerprint = host::sha256_bytes(
-                format!(
-                    "{}|{}|{}|{}",
-                    r.kind.as_str(),
-                    r.surface.as_deref().unwrap_or(""),
-                    r.raw_reference,
-                    r.raw_candidate
-                )
-                .as_bytes(),
-            );
+            let fingerprint = crate::semantics::residual_fingerprint(r)?;
             Ok(ReceiptResidual {
                 id: r.id.clone(),
                 axis: r.axis.as_str().to_string(),
@@ -134,11 +125,13 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             // receipt copies it, never recomputes it.
             semantic_identity: capture.court_semantic_identity.clone(),
         },
-        // Runner + comparators are copied from the capture: they describe
-        // the executable and comparators that OBSERVED the run, not the one
-        // that happens to emit the receipt later.
-        runner: capture.runner.clone(),
-        comparators: capture.comparators.clone(),
+        // Runner, comparator semantics, and environment are copied from the
+        // capture: they describe the executable, relations, and host that
+        // OBSERVED the run, not the one that happens to emit the receipt
+        // later. Semantic identity and implementation provenance are kept
+        // separate: the question asked vs. who asked it.
+        provenance: capture.provenance.clone(),
+        comparator_semantics: capture.comparator_semantics.clone(),
         authority: ReceiptAuthority {
             name: authority.name.clone(),
             kind: authority.kind.clone(),
@@ -154,11 +147,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             identity_hash: capture.candidate_artifact.sha256.clone(),
             interpreter: capture.candidate_artifact.interpreter.clone(),
         },
-        environment: ReceiptEnvironment {
-            os: std::env::consts::OS.to_string(),
-            architecture: std::env::consts::ARCH.to_string(),
-            environment_digest: capture.environment_digest.clone(),
-        },
+        environment: capture.environment.clone(),
         fixtures: vec![ReceiptFixture {
             id: capture.fixture.clone(),
             hash: capture.fixture_sha256.clone(),

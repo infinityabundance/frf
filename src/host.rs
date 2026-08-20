@@ -25,7 +25,7 @@
 //!   persistently busy executable never hangs the court.
 
 use crate::error::{FrfError, Result};
-use crate::model::InterpreterIdentity;
+use crate::model::{EnvironmentIdentity, InterpreterIdentity};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -238,34 +238,43 @@ fn exit_string(status: &std::process::ExitStatus) -> String {
     }
 }
 
-/// Mark a file executable (unix). Content-addressed snapshots are written
-/// with default permissions; the authority and candidate snapshots are
-/// executed, so they need the exec bit. Deterministic: `rwxr-xr-x`.
-pub fn make_executable(path: &Path) -> Result<()> {
+/// Set a file's permission bits (unix). Content-addressed objects are sealed
+/// read-only after materialization — executed artifacts `0555`, data `0444`
+/// — so nothing under `objects/` is owner-writable.
+pub fn set_permissions(path: &Path, mode: u32) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut perms = std::fs::metadata(path)
             .map_err(|e| FrfError::new(format!("cannot stat {}: {e}", path.display())))?
             .permissions();
-        perms.set_mode(0o755);
+        perms.set_mode(mode);
         std::fs::set_permissions(path, perms)
             .map_err(|e| FrfError::new(format!("cannot chmod {}: {e}", path.display())))?;
     }
     Ok(())
 }
 
-/// Environment digest: a content hash of the host strata a court run depends
-/// on (os, architecture, kernel release). Two runs with the same digest are
-/// replay-comparable; a changed digest means a changed environment.
-pub fn environment_digest() -> String {
-    let src = format!(
-        "os={}\narch={}\nkernel={}",
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-        kernel_release()
-    );
-    sha256_bytes(src.as_bytes())
+/// The environment an observation happens in, captured at court time: os,
+/// architecture, kernel release, and the digest over them. The receipt
+/// copies this identity verbatim — it never asks its own host what
+/// environment an old court ran under. (Expanding the strata — libc,
+/// locale, timezone, dynamic dependencies, container/Nix digests — is
+/// environment admission, a later milestone; the struct is already the
+/// shape for it.)
+pub fn environment_identity() -> EnvironmentIdentity {
+    let os = std::env::consts::OS.to_string();
+    let architecture = std::env::consts::ARCH.to_string();
+    let kernel_release = kernel_release();
+    let digest =
+        sha256_bytes(format!("os={os}\narch={architecture}\nkernel={kernel_release}").as_bytes());
+    EnvironmentIdentity {
+        schema_version: crate::model::SCHEMA_ENVIRONMENT.to_string(),
+        os,
+        architecture,
+        kernel_release,
+        digest,
+    }
 }
 
 /// Bind the interpreter a script artifact executes under: parse the `#!`

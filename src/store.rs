@@ -129,25 +129,72 @@ impl Store {
     }
 
     /// Materialize bytes as an immutable content-addressed object and return
-    /// its path. Re-materializing identical bytes is a no-op (same hash,
-    /// same content); nothing is ever overwritten with different content.
-    pub fn materialize_object(&self, bytes: &[u8]) -> Result<PathBuf> {
+    /// its path. Invariants:
+    ///
+    /// - An existing object is RE-HASHED on every use; a mismatch is
+    ///   [`FrfError`] (`CORRUPT_OBJECT`) — corruption is never executed.
+    /// - A missing object is written to a unique temp file, fsynced,
+    ///   verified byte-for-byte, atomically renamed into place, then sealed
+    ///   read-only (`0555` when executed, `0444` otherwise). It is never
+    ///   observed partially written and never accepted unverified.
+    /// - Re-materializing identical bytes is a no-op (same hash, same
+    ///   content); nothing is ever overwritten with different content.
+    pub fn materialize_object(&self, bytes: &[u8], executable: bool) -> Result<PathBuf> {
         let sha256 = crate::host::sha256_bytes(bytes);
         let path = self.object_path(&sha256)?;
-        if !path.is_file() {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    FrfError::new(format!("cannot create {}: {e}", parent.display()))
-                })?;
+        if path.is_file() {
+            // Content-addressed: the name must BE the content. A corrupt or
+            // hand-planted object is refused, never executed.
+            let actual = crate::host::sha256_file(&path)?;
+            if actual != sha256 {
+                return Err(FrfError::new(format!(
+                    "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
+                    path.display(),
+                    &actual[..16],
+                    &sha256[..16]
+                )));
             }
-            // Content-addressed: if a concurrent writer created it first,
-            // the hash guarantees the bytes are identical.
-            match self.write_once_bytes(&path, bytes) {
-                Ok(()) => {}
-                Err(_e) if path.is_file() => {}
-                Err(e) => return Err(e),
-            }
+            // Re-seal on every use: a checkout (git does not preserve write
+            // bits) or a concurrent chmod must not leave an object writable.
+            crate::host::set_permissions(&path, if executable { 0o555 } else { 0o444 })?;
+            return Ok(path);
         }
+        let parent = path.parent().ok_or_else(|| {
+            FrfError::new(format!("object path {} has no parent", path.display()))
+        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", parent.display())))?;
+
+        // Write to a unique temp file in the same directory (same filesystem
+        // → atomic rename), fsync, verify, rename, seal.
+        let tmp = parent.join(format!(".tmp-{}-{}", std::process::id(), &sha256[..16]));
+        {
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .map_err(|e| FrfError::new(format!("cannot create {}: {e}", tmp.display())))?;
+            f.write_all(bytes)
+                .and_then(|_| f.sync_all())
+                .map_err(|e| FrfError::new(format!("cannot write {}: {e}", tmp.display())))?;
+        }
+        let written = crate::host::sha256_file(&tmp)?;
+        if written != sha256 {
+            let _ = fs::remove_file(&tmp);
+            return Err(FrfError::new(format!(
+                "internal error: temp object {} hashed to {} but {} was expected; refusing to install",
+                tmp.display(),
+                &written[..16],
+                &sha256[..16]
+            )));
+        }
+        // Atomic rename: readers never observe a partial object. If a
+        // concurrent writer installed identical bytes first, rename simply
+        // replaces them with the identical content.
+        fs::rename(&tmp, &path)
+            .map_err(|e| FrfError::new(format!("cannot install object {}: {e}", path.display())))?;
+        // Seal read-only: executed artifacts r-xr-xr-x, data r--r--r--.
+        crate::host::set_permissions(&path, if executable { 0o555 } else { 0o444 })?;
         Ok(path)
     }
 
@@ -335,11 +382,17 @@ impl Store {
     /// A resolution of residual R must rerun the SAME evidentiary question
     /// under a compatible envelope. The predicate is the court's semantic
     /// identity — the canonical hash of everything defining the question
-    /// (court, question, falsifier, authority, fixture bytes + arguments,
-    /// full envelope, comparator identities), computed at court time — plus
-    /// the environment digest. The candidate is deliberately NOT compared:
-    /// it is the one entity a fix court may change, and both runs record
-    /// their artifact hashes so the evolution is explicit.
+    /// (question, falsifier, authority artifact, fixture bytes + arguments,
+    /// full envelope, comparator SEMANTIC identities), computed at court
+    /// time — plus the environment digest. The candidate is deliberately NOT
+    /// compared: it is the one entity a fix court may change, and both runs
+    /// record their artifact hashes so the evolution is explicit.
+    ///
+    /// Implementation provenance (which frf executable, which comparator
+    /// implementations) is deliberately NOT required to match here: two
+    /// independent implementations that ask the same question are
+    /// comparable. A stricter reproducibility policy may additionally
+    /// require equal provenance; the captures already record it.
     ///
     /// Every failure names the specific dimension that drifted (via
     /// [`crate::semantics::semantic_diff`]) so the refusal is actionable.
@@ -369,11 +422,11 @@ impl Store {
         }
         // Same environment envelope: a resolution that silently crossed an
         // environment boundary is not a resolution of the same question.
-        if original.environment_digest != resolution.environment_digest {
+        if original.environment.digest != resolution.environment.digest {
             return Err(FrfError::new(format!(
                 "resolution run '{resolution_run}' is not comparable to '{original_run}': environment digest differs ({} != {})",
-                &original.environment_digest[..8],
-                &resolution.environment_digest[..8]
+                &original.environment.digest[..8],
+                &resolution.environment.digest[..8]
             )));
         }
 
@@ -435,6 +488,57 @@ mod tests {
         let err = store.write_once(&p, "b").unwrap_err();
         assert!(err.0.contains("refusing to overwrite"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
+    }
+
+    #[test]
+    fn materialize_is_content_addressed_and_idempotent() {
+        let store = temp_store();
+        let bytes = b"#!/bin/sh\necho hi\n";
+        let a = store.materialize_object(bytes, true).unwrap();
+        let b = store.materialize_object(bytes, true).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(std::fs::read(&a).unwrap(), bytes);
+        let name = a.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(crate::host::sha256_bytes(bytes), name);
+        // Sealed read-only: no write bits.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode();
+            assert_eq!(mode & 0o222, 0, "object must be sealed ({mode:o})");
+        }
+    }
+
+    #[test]
+    fn materialize_refuses_corrupt_objects() {
+        // The name must BE the content: a tampered object is refused on
+        // every use, never executed.
+        let store = temp_store();
+        let bytes = b"#!/bin/sh\necho hi\n";
+        let path = store.materialize_object(bytes, true).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        std::fs::write(&path, b"#!/bin/sh\necho corrupted\n").unwrap();
+        let err = store.materialize_object(bytes, true).unwrap_err();
+        assert!(err.0.contains("corrupt"), "error: {}", err.0);
+    }
+
+    #[test]
+    fn materialize_seals_data_read_only_and_executables_executable() {
+        let store = temp_store();
+        let data = store.materialize_object(b"fixture bytes", false).unwrap();
+        let exe = store.materialize_object(b"#!/bin/sh\n", true).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dm = std::fs::metadata(&data).unwrap().permissions().mode();
+            let em = std::fs::metadata(&exe).unwrap().permissions().mode();
+            assert_eq!(dm & 0o222, 0, "data object must not be writable");
+            assert_eq!(em & 0o111, 0o111, "executed object must be executable");
+        }
     }
 
     #[test]

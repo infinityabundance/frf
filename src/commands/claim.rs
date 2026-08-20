@@ -74,7 +74,7 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         "{}-{} ({})",
         receipt.environment.architecture,
         receipt.environment.os,
-        &receipt.environment.environment_digest[..8]
+        &receipt.environment.digest[..8]
     );
     let claim = ClaimRecord {
         schema_version: SCHEMA_CLAIM.to_string(),

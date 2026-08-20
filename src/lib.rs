@@ -9,6 +9,7 @@
 pub mod canon;
 pub mod cli;
 pub mod commands;
+pub mod comparators;
 pub mod error;
 pub mod host;
 pub mod kappa;
