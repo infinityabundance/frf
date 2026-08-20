@@ -125,15 +125,35 @@ fn validate(schema: &Value, defs: &Value, instance: &Value) -> Result<(), String
         return validate(target, defs, instance);
     }
     if let Some(t) = schema.get("type") {
-        let t = t.as_str().expect("type must be a string");
-        let ok = match t {
-            "object" => instance.is_object(),
-            "array" => instance.is_array(),
-            "string" => instance.is_string(),
-            other => panic!("unsupported type keyword {other:?}"),
-        };
-        if !ok {
-            return Err(format!("expected {t}, got {}", type_name(instance)));
+        match t {
+            Value::String(single) => {
+                let ok = match single.as_str() {
+                    "object" => instance.is_object(),
+                    "array" => instance.is_array(),
+                    "string" => instance.is_string(),
+                    other => panic!("unsupported type keyword {other:?}"),
+                };
+                if !ok {
+                    return Err(format!("expected {single}, got {}", type_name(instance)));
+                }
+            }
+            Value::Array(types) => {
+                let ok = types.iter().any(|t| match t.as_str() {
+                    Some("object") => instance.is_object(),
+                    Some("array") => instance.is_array(),
+                    Some("string") => instance.is_string(),
+                    Some("null") => instance.is_null(),
+                    Some(other) => panic!("unsupported type keyword {other:?}"),
+                    None => panic!("type array entries must be strings"),
+                });
+                if !ok {
+                    return Err(format!(
+                        "expected one of {types:?}, got {}",
+                        type_name(instance)
+                    ));
+                }
+            }
+            _ => panic!("type must be a string or an array of strings"),
         }
     }
     if instance.is_object() {
@@ -185,10 +205,12 @@ fn validate(schema: &Value, defs: &Value, instance: &Value) -> Result<(), String
     }
     if let Some(_p) = schema.get("pattern") {
         // `audit` has already proven the only reachable pattern is
-        // ^[0-9a-f]{64}$, implemented by `hex64` below.
-        let s = instance.as_str().expect("pattern applies to a string");
-        if !hex64(s) {
-            return Err(format!("{s:?} does not match ^[0-9a-f]{{64}}$"));
+        // ^[0-9a-f]{64}$, implemented by `hex64` below. Per JSON Schema,
+        // pattern applies to strings only; other types (null) pass.
+        if let Some(s) = instance.as_str() {
+            if !hex64(s) {
+                return Err(format!("{s:?} does not match ^[0-9a-f]{{64}}$"));
+            }
         }
     }
     Ok(())

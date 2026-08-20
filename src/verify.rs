@@ -414,32 +414,59 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                 res.id
             )));
         }
-        // Dispositions must be evidenced by the append-only event history. A
-        // receipt is a snapshot: an `open` entry may predate later events, so
-        // it needs no event; any other disposition must BE an event.
-        if res.disposition != "open" {
-            let matched = store.disposition_events(&res.id)?.iter().any(|e| {
-                e.disposition.as_str() == res.disposition
-                    && e.disposition.reason().map(str::to_string) == res.reason
-                    && e.disposition.resolution_run_id().map(str::to_string)
-                        == res.resolution_run_id
-                    && match (&e.disposition, &res.closure_predicate) {
-                        (
-                            Disposition::Fixed {
-                                closure_predicate, ..
-                            },
-                            Some(cp),
-                        ) => closure_predicate == cp,
-                        (Disposition::Fixed { .. }, None) => false,
-                        _ => true,
-                    }
-            });
-            if !matched {
-                return Err(FrfError::new(format!(
-                    "receipt {id}: residual {} disposition {:?} is not evidenced by any disposition event in its append-only history — a disposition must never be stronger than an observation",
-                    res.id,
-                    res.disposition
-                )));
+        // Dispositions must be bound to the EXACT immutable event that
+        // supplied them. `open` is the projection of no events — a receipt
+        // snapshot may predate later events, so it needs no event, and it
+        // must not claim one. Any other disposition must name an event in the
+        // chain whose fields EXACTLY match the receipt's: the receipt points
+        // at a node in the hash chain, it does not merely copy state.
+        match res.disposition.as_str() {
+            "open" => {
+                if res.disposition_event_id.is_some() {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: open residual {} claims a disposition_event_id — open is the projection of no events",
+                        res.id
+                    )));
+                }
+            }
+            _ => {
+                let Some(eid) = &res.disposition_event_id else {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: residual {} disposition {:?} has no bound disposition_event_id — a disposition must be an event, not a copy",
+                        res.id,
+                        res.disposition
+                    )));
+                };
+                let events = store.disposition_events(&res.id)?;
+                let Some(event) = events.iter().find(|e| &e.event_id == eid) else {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: residual {} binds disposition_event_id {eid} but no such event exists in its hash chain",
+                        res.id
+                    )));
+                };
+                let closure_ok = match (&event.disposition, &res.closure_predicate) {
+                    (
+                        Disposition::Fixed {
+                            closure_predicate, ..
+                        },
+                        Some(cp),
+                    ) => closure_predicate == cp,
+                    (Disposition::Fixed { .. }, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
+                };
+                if event.disposition.as_str() != res.disposition
+                    || event.disposition.reason().map(str::to_string) != res.reason
+                    || event.disposition.resolution_run_id().map(str::to_string)
+                        != res.resolution_run_id
+                    || !closure_ok
+                {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: residual {} disposition {:?} does not match the bound event {eid} — the receipt must not drift from the event it points at",
+                        res.id,
+                        res.disposition
+                    )));
+                }
             }
         }
         // The endoduction token rederives from the record under the receipt's
@@ -735,6 +762,15 @@ impl Receipt {
                             format!("open residual {} carries a closure_predicate", r.id),
                         );
                     }
+                    if r.disposition_event_id.is_some() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "open residual {} carries a disposition_event_id (open is the projection of no events)",
+                                r.id
+                            ),
+                        );
+                    }
                 }
                 "fixed" => {
                     if r.reason.is_none() {
@@ -754,6 +790,15 @@ impl Receipt {
                             &mut violations,
                             format!(
                                 "fixed residual {} must carry the fix-court closure predicate",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.disposition_event_id.is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "fixed residual {} without a disposition_event_id — a receipt must point at the exact event that supplied the disposition",
                                 r.id
                             ),
                         );
@@ -782,6 +827,15 @@ impl Receipt {
                         fail(
                             &mut violations,
                             format!("{other} residual {} carries a closure_predicate", r.id),
+                        );
+                    }
+                    if r.disposition_event_id.is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "{other} residual {} without a disposition_event_id — a receipt must point at the exact event that supplied the disposition",
+                                r.id
+                            ),
                         );
                     }
                 }
@@ -1153,6 +1207,7 @@ mod tests {
                 raw_reference_hash: "e".repeat(64),
                 raw_candidate_hash: "f".repeat(64),
                 disposition: "open".into(),
+                disposition_event_id: None,
                 reason: None,
                 resolution_run_id: None,
                 closure_predicate: None,
@@ -1305,5 +1360,26 @@ mod tests {
             b.residuals[0].grammar_state = "recovery".into();
         });
         assert!(msg.contains("grammar_state"), "{msg}");
+    }
+
+    #[test]
+    fn open_cannot_carry_a_disposition_event_id() {
+        let msg = violates(valid_receipt(), |b| {
+            b.residuals[0].disposition_event_id = Some("0".repeat(64));
+        });
+        assert!(msg.contains("disposition_event_id"), "{msg}");
+    }
+
+    #[test]
+    fn a_closed_disposition_must_bind_the_exact_event() {
+        let msg = violates(valid_receipt(), |b| {
+            b.residuals[0].disposition = "intentional".into();
+            b.residuals[0].reason = Some("clearer wording".into());
+            b.residuals[0].grammar_state = "intentional_divergence".into();
+            b.endoduction.tokens[0].token = "exit/exit-class/class-change/intentional".into();
+            // disposition_event_id left None: the receipt must point at the
+            // exact event that supplied the disposition.
+        });
+        assert!(msg.contains("disposition_event_id"), "{msg}");
     }
 }

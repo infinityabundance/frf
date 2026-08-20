@@ -70,7 +70,14 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         .map(|r| {
             // The disposition is the projection of the residual's append-only
             // event history at emit time; the observation itself is immutable.
-            let disposition = store.current_disposition(&r.id)?;
+            // The receipt binds the EXACT event that supplied the state
+            // (`disposition_event_id`), so it points at an immutable node in
+            // the hash chain, not merely a copied disposition.
+            let events = store.disposition_events(&r.id)?;
+            let head = events.last();
+            let disposition = head
+                .map(|e| e.disposition.clone())
+                .unwrap_or(Disposition::Open);
             let fingerprint = crate::semantics::residual_fingerprint(r)?;
             Ok(ReceiptResidual {
                 id: r.id.clone(),
@@ -85,6 +92,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                 raw_reference_hash: r.raw_reference_sha256.clone(),
                 raw_candidate_hash: r.raw_candidate_sha256.clone(),
                 disposition: disposition.as_str().to_string(),
+                disposition_event_id: head.map(|e| e.event_id.clone()),
                 reason: disposition.reason().map(|s| s.to_string()),
                 resolution_run_id: disposition.resolution_run_id().map(|s| s.to_string()),
                 closure_predicate: match &disposition {

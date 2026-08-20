@@ -227,6 +227,48 @@ pub fn fingerprint_from_projections(
     hash_preimage("FRF/RESIDUAL-FINGERPRINT/v1", &doc)
 }
 
+/// The content-addressable inputs of one disposition event: everything the
+/// event's identity is computed over (the event_id itself is excluded — an
+/// object cannot contain its own address). The parent link makes the event
+/// chain a hash chain.
+pub struct DispositionEventContent<'a> {
+    pub residual_id: &'a str,
+    pub parent_event_id: Option<&'a str>,
+    pub disposition: &'a Disposition,
+    pub evidence_refs: &'a [String],
+}
+
+/// The identity of a disposition event: SHA-256 of `FRF/DISPOSITION-EVENT/v1`
+/// over the event's content. The disposition is a nested document (kind +
+/// its fields), so the identity cannot be confused with a flattened YAML
+/// shape. Rederivable from the event's own recorded fields — a name is a
+/// claim until recomputed.
+pub fn disposition_event_identity(c: &DispositionEventContent) -> Result<String> {
+    let disposition = match c.disposition {
+        Disposition::Open => json!({ "kind": "open" }),
+        Disposition::Closed { kind, reason } => {
+            json!({ "kind": kind.as_str(), "reason": reason })
+        }
+        Disposition::Fixed {
+            reason,
+            resolution_run_id,
+            closure_predicate,
+        } => json!({
+            "kind": "fixed",
+            "reason": reason,
+            "resolution_run_id": resolution_run_id,
+            "closure_predicate": closure_predicate,
+        }),
+    };
+    let doc = json!({
+        "residual_id": c.residual_id,
+        "parent_event_id": c.parent_event_id,
+        "disposition": disposition,
+        "evidence_refs": c.evidence_refs,
+    });
+    hash_preimage("FRF/DISPOSITION-EVENT/v1", &doc)
+}
+
 /// The first semantic dimension on which two captures differ, phrased for an
 /// error message ("fixture id differs (a != b)"). Only used for diagnostics:
 /// the PREDICATE is the semantic identity hash, this walk just names the

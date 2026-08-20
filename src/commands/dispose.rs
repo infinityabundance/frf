@@ -66,7 +66,7 @@ pub fn run(
         )?,
     };
 
-    store.append_disposition_event(&event)?;
+    let event = store.append_disposition_event(&event)?;
     // The derived token follows the projected disposition.
     store.write_token(&record, &event.disposition)?;
 
@@ -75,17 +75,19 @@ pub fn run(
             resolution_run_id, ..
         } => {
             eprintln!(
-                "residual {id}: {} -> fixed ({}) [closure observed in run {resolution_run_id}]",
+                "residual {id}: {} -> fixed ({}) [closure observed in run {resolution_run_id}] [event {}]",
                 before.as_str(),
-                reason.trim()
+                reason.trim(),
+                &event.event_id[..16]
             );
         }
         _ => {
             eprintln!(
-                "residual {id}: {} -> {} ({})",
+                "residual {id}: {} -> {} ({}) [event {}]",
                 before.as_str(),
                 event.disposition.as_str(),
-                reason.trim()
+                reason.trim(),
+                &event.event_id[..16]
             );
         }
     }

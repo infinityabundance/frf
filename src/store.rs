@@ -292,7 +292,10 @@ impl Store {
     }
 
     /// All disposition events for a residual, in sequence order. Immutable;
-    /// the current disposition is the projection of the last one.
+    /// the current disposition is the projection of the last one. Events are
+    /// hash-chained: every event's identity rederives from its own content
+    /// and its `parent_event_id` links to the previous event — a broken link
+    /// or a hand-edited event is refused here, never silently consumed.
     pub fn disposition_events(&self, id: &str) -> Result<Vec<DispositionEvent>> {
         let dir = self.events_dir(id)?;
         let mut events: Vec<(u32, DispositionEvent)> = Vec::new();
@@ -307,11 +310,41 @@ impl Store {
             }
         }
         events.sort_by_key(|(seq, _)| *seq);
-        Ok(events.into_iter().map(|(_, e)| e).collect())
+        let events: Vec<DispositionEvent> = events.into_iter().map(|(_, e)| e).collect();
+        // Verify the hash chain: each event must rederive its own identity
+        // from its recorded content, and link to the previous event. The
+        // first event has no parent.
+        let mut prev: Option<&str> = None;
+        for e in &events {
+            let rederived = crate::semantics::disposition_event_identity(
+                &crate::semantics::DispositionEventContent {
+                    residual_id: &e.residual_id,
+                    parent_event_id: e.parent_event_id.as_deref(),
+                    disposition: &e.disposition,
+                    evidence_refs: &e.evidence_refs,
+                },
+            )?;
+            if rederived != e.event_id {
+                return Err(FrfError::new(format!(
+                    "disposition event {} of {id} is not content-addressed: its recorded fields hash to {} but its event_id claims {}; refusing to consume a hand-edited event",
+                    &e.event_id[..16.min(e.event_id.len())],
+                    &rederived[..16],
+                    &e.event_id[..16.min(e.event_id.len())]
+                )));
+            }
+            if e.parent_event_id.as_deref() != prev {
+                return Err(FrfError::new(format!(
+                    "disposition event chain of {id} is broken: event {} does not link to its parent",
+                    &e.event_id[..16]
+                )));
+            }
+            prev = Some(&e.event_id);
+        }
+        Ok(events)
     }
 
     /// The projected current disposition: the last event, or `Open` when the
-    /// residual has no events yet.
+    /// residual has no events yet. Only a verified chain may project state.
     pub fn current_disposition(&self, id: &str) -> Result<Disposition> {
         Ok(self
             .disposition_events(id)?
@@ -320,15 +353,46 @@ impl Store {
             .unwrap_or(Disposition::Open))
     }
 
-    /// Append one immutable disposition event (sequence = count + 1).
-    pub fn append_disposition_event(&self, event: &DispositionEvent) -> Result<()> {
+    /// Append one immutable disposition event, content-addressing it into the
+    /// residual's hash chain: the parent link is the previous event's
+    /// `event_id` (or `None` for the first), and the new `event_id` is the
+    /// SHA-256 of the event's own content. Returns the complete event (with
+    /// its identity), which the caller may print or bind into receipts.
+    pub fn append_disposition_event(&self, partial: &DispositionEvent) -> Result<DispositionEvent> {
+        let events = self.disposition_events(&partial.residual_id)?;
+        let parent_event_id = events.last().map(|e| e.event_id.clone());
+        // The only evidence a v0.1.15 disposition can reference is the
+        // resolution run that closed it.
+        let evidence_refs = match &partial.disposition {
+            Disposition::Fixed {
+                resolution_run_id, ..
+            } => vec![resolution_run_id.clone()],
+            _ => vec![],
+        };
+        let event_id = crate::semantics::disposition_event_identity(
+            &crate::semantics::DispositionEventContent {
+                residual_id: &partial.residual_id,
+                parent_event_id: parent_event_id.as_deref(),
+                disposition: &partial.disposition,
+                evidence_refs: &evidence_refs,
+            },
+        )?;
+        let event = DispositionEvent {
+            schema_version: partial.schema_version.clone(),
+            event_id,
+            residual_id: partial.residual_id.clone(),
+            parent_event_id,
+            disposition: partial.disposition.clone(),
+            evidence_refs,
+        };
+        let seq = events.len() + 1;
         let dir = self.events_dir(&event.residual_id)?;
         fs::create_dir_all(&dir)
             .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
-        let seq = self.disposition_events(&event.residual_id)?.len() + 1;
         let path = dir.join(format!("{seq:04}.yaml"));
-        let yaml = self.to_yaml(event)?;
-        self.write_once(&path, &yaml)
+        let yaml = self.to_yaml(&event)?;
+        self.write_once(&path, &yaml)?;
+        Ok(event)
     }
 
     // -- reads ---------------------------------------------------------------
@@ -635,6 +699,35 @@ mod tests {
         assert_eq!(
             store.current_disposition("cli-exit-0001").unwrap().as_str(),
             "unknown"
+        );
+        // Events are content-addressed and hash-chained: each event rederives
+        // its own identity and links to its parent, and a hand-edited event
+        // is refused on read.
+        let events = store.disposition_events("cli-exit-0001").unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].parent_event_id, None);
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(e.event_id.len(), 64);
+            assert!(e.evidence_refs.is_empty());
+            if i > 0 {
+                assert_eq!(
+                    e.parent_event_id.as_deref(),
+                    Some(events[i - 1].event_id.as_str())
+                );
+            }
+        }
+        // Tamper with the second event: the chain must refuse to load.
+        let dir = store.events_dir("cli-exit-0001").unwrap();
+        let p2 = dir.join("0002.yaml");
+        let mut yaml: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&p2).unwrap()).unwrap();
+        yaml["reason"] = serde_yaml::Value::String("rewritten history".into());
+        std::fs::write(&p2, serde_yaml::to_string(&yaml).unwrap()).unwrap();
+        let err = store.disposition_events("cli-exit-0001").unwrap_err();
+        assert!(
+            err.0.contains("not content-addressed"),
+            "tampered event must be refused: {}",
+            err.0
         );
     }
 }
