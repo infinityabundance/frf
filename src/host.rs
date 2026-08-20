@@ -11,8 +11,18 @@
 //!   inject shell syntax.
 //! - A court run is bounded by [`EXEC_TIMEOUT`]; a hung side is killed rather
 //!   than allowed to stall the pipeline.
-//! - Exit status is recorded as the raw code, or the literal `signal` when the
-//!   process was terminated by a signal (no fabricated code).
+//! - Exit status is recorded as the raw code, or the literal `signal(<n>)`
+//!   when the process was terminated by a signal (no fabricated code).
+//! - Process topology (unix): each side runs in its own process group, and
+//!   when the direct process exits or times out the whole group is
+//!   terminated. A descendant that inherited the capture pipes can therefore
+//!   never hold them open past the direct process's lifetime, and the pipe
+//!   drains always reach EOF. The capture of a side is the complete output of
+//!   its process group, collected before termination. Escaped descendants
+//!   (a side that calls `setsid` into a new session) are outside this policy.
+//! - Spawn retries are bounded: `ETXTBSY` (exec'ing a file another process is
+//!   still writing) is retried within [`SPAWN_RETRY_BUDGET`], then fails — a
+//!   persistently busy executable never hangs the court.
 
 use crate::error::{FrfError, Result};
 use sha2::{Digest, Sha256};
@@ -23,6 +33,14 @@ use std::time::{Duration, Instant};
 
 /// Upper bound for one side of a court execution.
 pub const EXEC_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Total budget for `ETXTBSY` spawn retries. Exec'ing a file another process
+/// just finished writing (or is still writing) transiently fails with
+/// `ExecutableFileBusy` — parallel CI and generated-script workflows hit
+/// this. The retry has a deadline of its own, so a persistently busy
+/// executable fails instead of looping forever (the execution timeout only
+/// starts after the spawn succeeds).
+pub const SPAWN_RETRY_BUDGET: Duration = Duration::from_secs(1);
 
 /// Effective execution timeout: the default, unless the `FRF_EXEC_TIMEOUT_MS`
 /// test hook overrides it. Kept out of the public CLI surface on purpose;
@@ -67,23 +85,37 @@ pub struct ProcessOutcome {
 
 /// Execute `program` with `args`, capturing stdout/stderr without a shell.
 ///
-/// `ETXTBSY` (`ExecutableFileBusy`) is retried briefly: it is the transient
-/// writeback race of exec'ing a file another process just finished writing
-/// (or is still writing), which happens in parallel CI and generated-script
-/// workflows. Everything else fails immediately.
+/// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
+/// before failing; everything else fails immediately.
 pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
+    // Every side runs in its own process group (unix) so the harness can
+    // terminate the entire tree — direct process plus any descendants that
+    // inherited the capture pipes — when the side exits or times out.
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let spawn_deadline = Instant::now() + SPAWN_RETRY_BUDGET;
     let mut child = loop {
-        match Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
+        match command.spawn() {
             Ok(child) => break child,
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                if Instant::now() >= spawn_deadline {
+                    return Err(FrfError::new(format!(
+                        "{} stayed busy (ETXTBSY) through the full {} ms retry budget: another process is still writing it; refusing to hang the court",
+                        program.display(),
+                        SPAWN_RETRY_BUDGET.as_millis()
+                    )));
+                }
                 std::thread::sleep(Duration::from_millis(10));
-                continue;
             }
             Err(e) => {
                 return Err(FrfError::new(format!(
@@ -112,7 +144,7 @@ pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
         let _drain_err = s.spawn(|| {
             let _ = stderr_pipe.read_to_end(&mut stderr);
         });
-        loop {
+        let result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
@@ -136,7 +168,14 @@ pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
                     )))
                 }
             }
-        }
+        };
+        // The direct process is gone (exited, or killed and reaped by the
+        // timeout path). Terminate whatever else remains in its group so the
+        // capture streams reach EOF and the drains can join: a descendant
+        // holding the pipes must never block the harness.
+        #[cfg(unix)]
+        terminate_process_group(child.id());
+        result
         // `scope` joins both drain threads here, so the buffers are complete
         // before the caller sees them.
     })?;
@@ -147,6 +186,22 @@ pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
         stderr,
         exit,
     })
+}
+
+/// Terminate every process in `pid`'s process group. The side was spawned
+/// with `process_group(0)`, so its process-group id is its own pid; a
+/// negative `kill(2)` targets the group. Errors (e.g. `ESRCH`, the group
+/// already gone) are expected and ignored — the policy is best-effort on
+/// top of the deterministic direct-process kill.
+#[cfg(unix)]
+fn terminate_process_group(pid: u32) {
+    // SAFETY: `kill(2)` with a negative pid signals the process group whose
+    // id equals `pid`; the child was placed in its own group at spawn, so
+    // this reaches exactly the side's descendants. The call itself is
+    // infallible from Rust's perspective; errno is deliberately ignored.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
 }
 
 /// Exit code as a string, or `signal(<n>)` when the process was terminated
@@ -280,6 +335,57 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let out = run_process(&script, &[]).unwrap();
         assert_eq!(out.exit, "signal(15)");
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistently_busy_executable_fails_within_the_retry_budget() {
+        // A file held open for writing cannot be exec'd: the kernel answers
+        // ETXTBSY. The spawn retry must give up within its own budget
+        // instead of looping forever (the old behavior hung the court when
+        // the writer never finished).
+        let script = temp_script("busy");
+        std::fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&script)
+            .unwrap();
+        let start = Instant::now();
+        let err = run_process(&script, &[]).unwrap_err();
+        drop(held);
+        assert!(err.0.contains("ETXTBSY"), "error: {}", err.0);
+        assert!(
+            start.elapsed() < SPAWN_RETRY_BUDGET * 3,
+            "retry must be bounded (took {:?})",
+            start.elapsed()
+        );
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descendants_cannot_hold_the_capture_pipes_open() {
+        // The direct child exits immediately, leaving a grandchild holding
+        // stdout/stderr open for 3 s. Without the process-group termination
+        // policy the harness would block on EOF until the grandchild exits;
+        // with it, the group is killed the moment the direct process is
+        // reaped and the drains close at once.
+        let script = temp_script("descendant");
+        std::fs::write(&script, "#!/bin/sh\nsleep 3 &\necho child-done\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let start = Instant::now();
+        let out = run_process(&script, &[]).unwrap();
+        assert_eq!(out.exit, "0");
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
+        assert!(
+            start.elapsed() < Duration::from_millis(1500),
+            "harness must not wait for a descendant to release the pipes (took {:?})",
+            start.elapsed()
+        );
         let _ = std::fs::remove_file(&script);
     }
 }

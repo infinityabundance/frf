@@ -873,6 +873,39 @@ fn execution_timeout_kills_and_writes_nothing() {
 }
 
 #[test]
+fn timeout_terminates_descendants_that_hold_the_pipes() {
+    // The candidate spawns a grandchild that keeps stdout/stderr open for
+    // 5 s, then sleeps past the timeout. The harness must kill the whole
+    // process group (not just the direct child) so the pipes reach EOF and
+    // the run fails cleanly instead of waiting on the grandchild.
+    let work = Workdir::new("timeout-desc");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nsleep 5 &\nsleep 30\n");
+    admit_reference(&work);
+
+    let start = std::time::Instant::now();
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST],
+        &[("FRF_EXEC_TIMEOUT_MS", "200")],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("execution timeout"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(3),
+        "must not wait for the grandchild to release the pipes (took {:?})",
+        start.elapsed()
+    );
+
+    let captures = fs::read_dir(work.path("frf/captures")).unwrap().count();
+    assert_eq!(captures, 0, "no run dir may exist after a timeout");
+}
+
+#[test]
 fn receipt_emit_is_idempotent_per_state() {
     let work = Workdir::new("receipt-idem");
     work.copy_canonical_tree();
