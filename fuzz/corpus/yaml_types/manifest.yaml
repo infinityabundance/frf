@@ -1,0 +1,8 @@
+court:
+  id: cli-malformed-input
+  question: does the candidate preserve the exit class?
+  falsifier: it diverges
+  authority: ref-cli-1.8.2
+  candidate: {name: cand-cli, version_or_commit: 0.1.0, build_profile: debug, path: golden/candidate.sh}
+  fixture: {id: f, path: f.conf, arguments: ["--strict", "{fixture}"]}
+  admissibility_envelope: {fixture_family: malformed-input, platforms: [x86_64-linux], observables: [exit, stderr], normalizers: [], replay_scope: single-run}

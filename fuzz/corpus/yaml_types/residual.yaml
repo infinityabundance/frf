@@ -1,0 +1,14 @@
+schema_version: frf-residual-v1
+id: cli-exit-0001
+court: cli-malformed-input
+run: run-cli-malformed-input-ab12cd34
+axis: exit
+kind: exit
+authority: ref-cli-1.8.2
+scope: malformed-input
+raw_reference: "2"
+raw_candidate: "1"
+raw_reference_sha256: 0000000000000000000000000000000000000000000000000000000000000000
+raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111111111
+disposition: fixed
+reason: patched

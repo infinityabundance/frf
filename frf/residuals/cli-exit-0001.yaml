@@ -1,0 +1,14 @@
+schema_version: frf-residual-v1
+id: cli-exit-0001
+court: cli-malformed-input
+run: run-cli-malformed-input-f951ec56
+axis: exit
+kind: exit
+authority: ref-cli-1.8.2
+scope: malformed-input
+raw_reference: '2'
+raw_candidate: '1'
+raw_reference_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+raw_candidate_sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+disposition: fixed
+reason: candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)

@@ -1,0 +1,35 @@
+[package]
+name = "frf-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+frf-rs = { path = ".." }
+serde_yaml = "0.9"
+clap = { version = "4", features = ["derive", "env"] }
+
+[[bin]]
+name = "yaml_types"
+path = "fuzz_targets/yaml_types.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cli_args"
+path = "fuzz_targets/cli_args.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "store_ids"
+path = "fuzz_targets/store_ids.rs"
+test = false
+doc = false
+bench = false

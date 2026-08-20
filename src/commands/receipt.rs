@@ -1,0 +1,192 @@
+//! `frf receipt emit`: bind court + authority + candidate + fixture +
+//! captures + residuals + dispositions into a receipt (Appendix A, trimmed:
+//! `verdict_case_file`, `taste_gates`, and `invariants` are deliberately
+//! dropped in v0 — see README Known Limitations).
+//!
+//! Receipt ids are content-addressed: `receipt-{run}-{hash of the receipt
+//! body}`. Re-emitting the same state yields the same id and is a no-op;
+//! emitting after a disposition change yields a new receipt. Receipts are
+//! never rewritten.
+
+use crate::error::Result;
+use crate::host;
+use crate::kappa;
+use crate::model::*;
+use crate::store::Store;
+
+pub fn run(store: &Store, run: &str) -> Result<String> {
+    let capture = store.load_capture(run)?;
+    let authority = store.load_authority(&capture.authority)?;
+    let spec = &capture.court_spec;
+
+    // Load the residuals this run observed, with their current dispositions.
+    let mut residuals: Vec<ResidualRecord> = Vec::new();
+    for id in &capture.residuals {
+        residuals.push(store.load_residual(id)?);
+    }
+
+    let family = &spec.admissibility_envelope.fixture_family;
+    let replay_command = format!(
+        "frf --root {} court run {}",
+        store.root.display(),
+        capture.manifest
+    );
+
+    let observables: Vec<ReceiptObservable> = spec
+        .admissibility_envelope
+        .observables
+        .iter()
+        .map(|o| {
+            let axis = Axis::parse(o).expect("validated at court run");
+            let (raw_reference_hash, raw_candidate_hash) = match axis {
+                Axis::Exit => (
+                    capture.reference.exit_sha256.clone(),
+                    capture.candidate.exit_sha256.clone(),
+                ),
+                Axis::Stderr => (
+                    capture.reference.stderr_first_line_sha256.clone(),
+                    capture.candidate.stderr_first_line_sha256.clone(),
+                ),
+            };
+            let has_residual = residuals.iter().any(|r| r.axis == axis);
+            ReceiptObservable {
+                axis: axis.as_str().to_string(),
+                raw_reference_hash,
+                raw_candidate_hash,
+                comparator: axis.comparator().to_string(),
+                normalization_rules: vec![],
+                verdict: if has_residual {
+                    ObservableVerdict::Residual
+                } else {
+                    ObservableVerdict::Pass
+                },
+            }
+        })
+        .collect();
+
+    let receipt_residuals: Vec<ReceiptResidual> = residuals
+        .iter()
+        .map(|r| {
+            let fingerprint = host::sha256_bytes(
+                format!(
+                    "{}|{}|{}|{}",
+                    r.kind.as_str(),
+                    r.surface.as_deref().unwrap_or(""),
+                    r.raw_reference,
+                    r.raw_candidate
+                )
+                .as_bytes(),
+            );
+            ReceiptResidual {
+                id: r.id.clone(),
+                axis: r.axis.as_str().to_string(),
+                kind: r.kind,
+                sign: ResidualSign {
+                    norm: "single-run".to_string(),
+                    drift: "not-observed".to_string(),
+                    slew: "not-observed".to_string(),
+                },
+                grammar_state: kappa::grammar_state(&r.disposition).to_string(),
+                raw_reference_hash: r.raw_reference_sha256.clone(),
+                raw_candidate_hash: r.raw_candidate_sha256.clone(),
+                disposition: r.disposition.as_str().to_string(),
+                reason: r.disposition.reason().map(|s| s.to_string()),
+                reproducer: replay_command.clone(),
+                invariant: String::new(),
+                residual_fingerprint: fingerprint,
+            }
+        })
+        .collect();
+
+    // Draft the receipt body; the id is a hash of this body.
+    let blocked = crate::sentences::refusal_lines_from_residuals(&receipt_residuals, family);
+    let body = Receipt {
+        schema_version: SCHEMA_RECEIPT.to_string(),
+        court: ReceiptCourt {
+            id: spec.id.clone(),
+            question: spec.question.clone(),
+            falsifier: spec.falsifier.clone(),
+            admissibility_envelope: ReceiptEnvelope {
+                authority_versions: vec![authority.version.clone()],
+                fixture_family: family.clone(),
+                platforms: spec.admissibility_envelope.platforms.clone(),
+                observables: spec.admissibility_envelope.observables.clone(),
+                normalizers: spec.admissibility_envelope.normalizers.clone(),
+                replay_scope: spec.admissibility_envelope.replay_scope.clone(),
+            },
+        },
+        authority: ReceiptAuthority {
+            name: authority.name.clone(),
+            kind: authority.kind.clone(),
+            version: authority.version.clone(),
+            identity_hash: authority.executable_sha256.clone(),
+            provenance: format!("file:{}", authority.path),
+        },
+        candidate: ReceiptCandidate {
+            name: spec.candidate.name.clone(),
+            version_or_commit: spec.candidate.version_or_commit.clone(),
+            build_profile: spec.candidate.build_profile.clone(),
+        },
+        environment: ReceiptEnvironment {
+            os: std::env::consts::OS.to_string(),
+            architecture: std::env::consts::ARCH.to_string(),
+            toolchain: format!("frf-rs/{}", env!("CARGO_PKG_VERSION")),
+            environment_digest: capture.environment_digest.clone(),
+        },
+        fixtures: vec![ReceiptFixture {
+            id: capture.fixture.clone(),
+            hash: capture.fixture_sha256.clone(),
+            arguments: capture.arguments.clone(),
+        }],
+        observables,
+        residuals: receipt_residuals,
+        endoduction: ReceiptEndoduction {
+            schema_version: TOKEN_SCHEMA_VERSION.to_string(),
+            tokens: residuals
+                .iter()
+                .map(|r| {
+                    let token = kappa::kappa(r);
+                    ReceiptToken {
+                        residual_id: r.id.clone(),
+                        token: token.token,
+                        next_court: token.next_court,
+                        blocks_claims: token.blocks_claims,
+                    }
+                })
+                .collect(),
+        },
+        claims: ReceiptClaims {
+            positive: vec![],
+            non_claims: crate::sentences::non_claims(family),
+            blocked_by_open_residuals: blocked,
+        },
+        replay: ReceiptReplay {
+            command: replay_command,
+        },
+    };
+
+    let yaml = store.to_yaml(&body)?;
+    let id = format!(
+        "receipt-{run}-{}",
+        &host::sha256_bytes(yaml.as_bytes())[..8]
+    );
+    let path = store.receipt_path(&id)?;
+    if path.exists() {
+        // Content-addressed: identical body means identical id, so this is
+        // the same receipt; nothing to rewrite.
+        eprintln!("receipt {id} already exists (identical evidence state); nothing rewritten");
+        return Ok(id);
+    }
+    store.write_once(&path, &yaml)?;
+    let open_count = residuals
+        .iter()
+        .filter(|r| r.disposition.is_blocking())
+        .count();
+    eprintln!(
+        "receipt {id}: {} observable(s), {} residual(s) ({} blocking), tokens bound",
+        body.observables.len(),
+        residuals.len(),
+        open_count
+    );
+    Ok(id)
+}

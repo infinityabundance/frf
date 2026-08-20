@@ -1,0 +1,8 @@
+schema_version: frf-authority-v1
+id: ref-cli-1.8.2
+name: ref-cli
+kind: executable_reference
+version: 1.8.2
+executable_sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+path: golden/reference.sh
+platform: x86_64-linux

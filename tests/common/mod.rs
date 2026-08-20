@@ -1,0 +1,133 @@
+//! Shared scaffolding for integration tests: workdir setup, binary
+//! invocation, and the canonical golden-path tree.
+#![allow(dead_code)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+pub const BIN: &str = env!("CARGO_BIN_EXE_frf");
+pub const ROOT: &str = "frf";
+pub const MANIFEST: &str = "frf/courts/cli-malformed-input/manifest.yaml";
+
+/// Canonical fixture files mirrored from the repo into a scratch workdir, so
+/// the manifest's working-directory-relative paths resolve exactly.
+pub const CANONICAL_FILES: &[&str] = &[
+    "golden/reference.sh",
+    "golden/candidate.sh",
+    "frf/courts/cli-malformed-input/manifest.yaml",
+    "frf/courts/cli-malformed-input/fixtures/malformed-path.conf",
+];
+
+pub struct Workdir {
+    pub dir: PathBuf,
+}
+
+impl Workdir {
+    pub fn new(tag: &str) -> Workdir {
+        let dir = std::env::temp_dir().join(format!(
+            "frf-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        Workdir { dir }
+    }
+
+    pub fn path(&self, rel: &str) -> PathBuf {
+        self.dir.join(rel)
+    }
+
+    /// Mirror the canonical golden-path files into this workdir.
+    pub fn copy_canonical_tree(&self) {
+        let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for rel in CANONICAL_FILES {
+            let dst = self.path(rel);
+            fs::create_dir_all(dst.parent().unwrap()).unwrap();
+            fs::copy(src_root.join(rel), &dst).unwrap();
+        }
+        set_exec(&self.path("golden/reference.sh"));
+        set_exec(&self.path("golden/candidate.sh"));
+    }
+
+    /// Overwrite the candidate with an arbitrary script (still executable).
+    pub fn write_candidate(&self, contents: &str) {
+        let path = self.path("golden/candidate.sh");
+        fs::write(&path, contents).unwrap();
+        set_exec(&path);
+    }
+}
+
+impl Drop for Workdir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(unix)]
+pub fn set_exec(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+pub fn frf(work: &Workdir, args: &[&str]) -> Output {
+    frf_env(work, args, &[])
+}
+
+pub fn frf_env(work: &Workdir, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(BIN);
+    cmd.args(args).current_dir(&work.dir);
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
+}
+
+pub fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+pub fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
+pub fn assert_success(out: &Output, what: &str) {
+    assert!(
+        out.status.success(),
+        "{what} failed:\nstatus: {}\nstdout: {}\nstderr: {}",
+        out.status,
+        stdout(out),
+        stderr(out)
+    );
+}
+
+/// The canonical golden-path setup: fresh workdir, admitted authority.
+pub fn admit_reference(work: &Workdir) {
+    let out = frf(
+        work,
+        &[
+            "--root",
+            ROOT,
+            "authority",
+            "admit",
+            "golden/reference.sh",
+            "--name",
+            "ref-cli",
+            "--version",
+            "1.8.2",
+        ],
+    );
+    assert_success(&out, "authority admit");
+}
+
+/// Run the canonical court and return the run id.
+pub fn run_court(work: &Workdir) -> String {
+    let out = frf(work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "court run");
+    let run = stdout(&out);
+    assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
+    run
+}
