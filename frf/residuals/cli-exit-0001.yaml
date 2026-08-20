@@ -1,7 +1,7 @@
 schema_version: frf-residual-v1
 id: cli-exit-0001
 court: cli-malformed-input
-run: run-cli-malformed-input-4480f50a3cfd455af9c592b0914c393e74c3814a420dc54fe7a2a21c5029582c
+run: run-cli-malformed-input-26dcb183cbe5aac23fb0fd387b6402f347e87b67fc8d18e02711454f4bc42a59
 axis: exit
 kind: exit
 authority: ref-cli-1.8.2

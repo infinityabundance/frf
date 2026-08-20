@@ -15,9 +15,15 @@ use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
 use crate::store::Store;
+use base64::Engine as _;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
+
+/// Base64 for the comparator extension protocol's raw side streams.
+fn b64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
 
 /// `frf court run [--repeat N] MANIFEST.yaml`.
 ///
@@ -141,6 +147,24 @@ pub fn run_once(
         .map(|o| Axis::parse(o).map_err(FrfError::new))
         .collect::<Result<_>>()?;
 
+    // External comparator declarations (the extension protocol): each must
+    // serve a declared observable axis — a comparator the court did not
+    // declare must not run.
+    for c in &manifest.comparators {
+        if !spec
+            .admissibility_envelope
+            .observables
+            .iter()
+            .any(|o| o == &c.axis)
+        {
+            return Err(FrfError::new(format!(
+                "comparator declaration serves axis '{}' which is not in the envelope's observables; refusing to run a comparator the court did not declare",
+                c.axis
+            )));
+        }
+        Axis::parse(&c.axis).map_err(FrfError::new)?;
+    }
+
     let authority = store.load_authority(&spec.authority)?;
 
     // -- fail closed on the admissibility envelope --------------------------
@@ -218,25 +242,70 @@ pub fn run_once(
     // later copies both; it never reconstructs them from whatever binary or
     // host happens to be installed.
     let environment = host::environment_identity();
+    // The comparator SEMANTIC identities: the declared (external) spec for a
+    // declared axis, the in-binary registry otherwise. The semantic identity
+    // of the QUESTION is built from these — an external program implementing
+    // the same spec asks the same question.
     let comparator_semantics: Vec<ComparatorSemantic> = observables
         .iter()
-        .map(|axis| crate::comparators::semantic(axis.as_str()))
+        .map(|axis| {
+            match manifest
+                .comparators
+                .iter()
+                .find(|c| c.axis == axis.as_str())
+            {
+                Some(c) => crate::comparators::declared_semantic(c),
+                None => crate::comparators::semantic(axis.as_str()),
+            }
+        })
         .collect::<Result<_>>()?;
     let runner = RunnerIdentity {
         schema_version: SCHEMA_RUNNER.to_string(),
         frf_version: env!("CARGO_PKG_VERSION").to_string(),
         frf_executable_hash: host::current_exe_hash()?,
     };
+    // Comparator IMPLEMENTATION identities + execution hosts. External
+    // comparator programs are read + hashed BEFORE any execution and executed
+    // through content-addressed snapshots (the same discipline as the
+    // artifacts): the bytes that ran are the bytes that were hashed, and the
+    // program's digest — not the frf binary's — is its implementation
+    // identity. In-binary comparators are implemented by the frf executable.
+    let mut external_hosts: Vec<Option<(std::path::PathBuf, ComparatorSemantic)>> = Vec::new();
+    let comparator_implementations: Vec<ComparatorImplementation> = observables
+        .iter()
+        .map(|axis| {
+            match manifest
+                .comparators
+                .iter()
+                .find(|c| c.axis == axis.as_str())
+            {
+                Some(c) => {
+                    let bytes = host::read_file(Path::new(&c.program))?;
+                    let impl_hash = host::sha256_bytes(&bytes);
+                    let snapshot = store.materialize_object(&bytes, true)?;
+                    external_hosts
+                        .push(Some((snapshot, crate::comparators::declared_semantic(c)?)));
+                    Ok(ComparatorImplementation {
+                        id: axis.as_str().to_string(),
+                        implementation_hash: impl_hash,
+                        runner_hash: runner.frf_executable_hash.clone(),
+                    })
+                }
+                None => {
+                    external_hosts.push(None);
+                    Ok(ComparatorImplementation {
+                        id: axis.as_str().to_string(),
+                        implementation_hash: runner.frf_executable_hash.clone(),
+                        runner_hash: runner.frf_executable_hash.clone(),
+                    })
+                }
+            }
+        })
+        .collect::<Result<_>>()?;
     let provenance = ObservationProvenance {
         schema_version: SCHEMA_PROVENANCE.to_string(),
         runner: runner.clone(),
-        comparator_implementations: crate::comparators::implementations(
-            &observables
-                .iter()
-                .map(|a| a.as_str().to_string())
-                .collect::<Vec<_>>(),
-            &runner.frf_executable_hash,
-        ),
+        comparator_implementations,
     };
     let court_semantic_identity = crate::semantics::court_semantic_identity(
         spec,
@@ -285,21 +354,79 @@ pub fn run_once(
     // in this run and keep bumping past them.
     let mut pending_seq: std::collections::HashMap<ResidualKind, u32> =
         std::collections::HashMap::new();
-    for axis in &observables {
-        let (raw_ref, raw_cand, surface) = match axis {
-            Axis::Exit => (reference.exit.clone(), candidate.exit.clone(), None),
-            Axis::Stderr => (
-                reference.stderr_first_line.clone(),
-                candidate.stderr_first_line.clone(),
-                Some("first-diagnostic-line".to_string()),
-            ),
-            Axis::Stdout => (
-                reference.stdout_first_line.clone(),
-                candidate.stdout_first_line.clone(),
-                Some("first-stdout-line".to_string()),
-            ),
+    for (idx, axis) in observables.iter().enumerate() {
+        // An externally served axis speaks the comparator extension protocol:
+        // the raw sides go to the comparator program on stdin (canonical JSON,
+        // base64 streams), and its canonical response is interpreted
+        // fail-closed. A built-in axis is compared in-process (the reference
+        // implementation of the same protocol).
+        let projections: Vec<(Option<String>, String, String)> = match &external_hosts[idx] {
+            Some((snapshot, semantic)) => {
+                let request = ComparatorRequest {
+                    schema_version: SCHEMA_COMPARATOR_REQUEST,
+                    comparator: semantic,
+                    axis: axis.as_str(),
+                    reference: ComparatorObservation {
+                        exit: &reference.exit,
+                        stdout_base64: b64(&reference_out.stdout),
+                        stderr_base64: b64(&reference_out.stderr),
+                    },
+                    candidate: ComparatorObservation {
+                        exit: &candidate.exit,
+                        stdout_base64: b64(&candidate_out.stdout),
+                        stderr_base64: b64(&candidate_out.stderr),
+                    },
+                    context: ComparatorContext {
+                        fixture_sha256: &fixture_sha256,
+                        arguments: &arguments,
+                        environment_digest: &environment.digest,
+                    },
+                };
+                let request_json = crate::canon::canonical(&request)?;
+                let out = host::run_process_with_stdin(snapshot, &[], request_json.as_bytes())?;
+                if out.exit != "0" {
+                    return Err(FrfError::new(format!(
+                            "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",
+                            axis.as_str(),
+                            out.exit
+                        )));
+                }
+                let response: ComparatorResponse =
+                    serde_json::from_slice(&out.stdout).map_err(|e| {
+                        FrfError::new(format!(
+                            "comparator for axis {} produced an unparseable response: {e}",
+                            axis.as_str()
+                        ))
+                    })?;
+                match crate::comparators::interpret(&response).map_err(|e| {
+                    FrfError::new(format!("comparator for axis {}: {e}", axis.as_str()))
+                })? {
+                    crate::comparators::ComparatorOutcome::Equivalent => vec![],
+                    crate::comparators::ComparatorOutcome::Divergent(v) => v,
+                }
+            }
+            None => {
+                let (raw_ref, raw_cand, surface) = match axis {
+                    Axis::Exit => (reference.exit.clone(), candidate.exit.clone(), None),
+                    Axis::Stderr => (
+                        reference.stderr_first_line.clone(),
+                        candidate.stderr_first_line.clone(),
+                        Some("first-diagnostic-line".to_string()),
+                    ),
+                    Axis::Stdout => (
+                        reference.stdout_first_line.clone(),
+                        candidate.stdout_first_line.clone(),
+                        Some("first-stdout-line".to_string()),
+                    ),
+                };
+                if raw_ref != raw_cand {
+                    vec![(surface, raw_ref, raw_cand)]
+                } else {
+                    vec![]
+                }
+            }
         };
-        if raw_ref != raw_cand {
+        for (surface, raw_ref, raw_cand) in projections {
             let kind = ResidualKind::from_axis(*axis);
             let seq = match pending_seq.get(&kind) {
                 Some(s) => s + 1,

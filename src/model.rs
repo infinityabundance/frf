@@ -67,6 +67,12 @@ pub const SCHEMA_BUNDLE: &str = "frf-bundle-v1";
 /// `repeat_index` only), with a deterministic derivation.
 pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v1";
 
+/// The comparator extension protocol (spec/comparator.md): a canonical
+/// JSON request a court writes to an external comparator program's stdin,
+/// and the canonical JSON response it must produce on stdout.
+pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v1";
+pub const SCHEMA_COMPARATOR_RESPONSE: &str = "frf-comparator-response-v1";
+
 // ---------------------------------------------------------------------------
 // Observable axes
 // ---------------------------------------------------------------------------
@@ -438,6 +444,34 @@ pub struct AuthorityRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CourtManifest {
     pub court: CourtSpec,
+    /// Optional comparator declarations (the extension protocol): an
+    /// observable axis served by an EXTERNAL program instead of the in-binary
+    /// registry. The declaration's relation/extractor/version define the
+    /// comparator's SEMANTIC identity (specification hash); the program's
+    /// bytes define its IMPLEMENTATION identity. Absent = the in-binary
+    /// registry serves every declared observable.
+    #[serde(default)]
+    pub comparators: Vec<ComparatorDeclaration>,
+}
+
+/// One external comparator declaration in a court manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorDeclaration {
+    /// The observable axis this comparator serves (must be declared in the
+    /// envelope's observables).
+    pub axis: String,
+    /// Relation family (Section 10, Δ_a) — part of the semantic identity.
+    pub relation: String,
+    /// What the comparator extracts and compares — part of the semantic
+    /// identity. A compliant implementation MUST honor it: the residual raw
+    /// values (and therefore the fingerprints) follow the extractor.
+    pub extractor: String,
+    pub relation_version: String,
+    /// Working-directory-relative path to the comparator program. The court
+    /// hashes its bytes BEFORE executing (snapshotted, sealed, re-hashed on
+    /// use) and records the hash as the comparator's implementation identity.
+    pub program: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -963,6 +997,76 @@ pub struct TrajectoryRecord {
     pub repeat_count: u32,
     pub observations: Vec<TrajectoryObservation>,
     pub derivation: TrajectoryDerivation,
+}
+
+// ---------------------------------------------------------------------------
+// Comparator extension protocol (spec/comparator.md)
+// ---------------------------------------------------------------------------
+
+/// The canonical request a court writes to an external comparator's stdin
+/// (serialized as canonical JSON). The comparator receives the raw side
+/// observations (base64) plus the context it needs to interpret them.
+#[derive(Debug, Clone, Serialize)]
+pub struct ComparatorRequest<'a> {
+    pub schema_version: &'a str,
+    /// The SEMANTIC identity of the comparator being invoked — what the
+    /// comparator program must verify it implements.
+    pub comparator: &'a ComparatorSemantic,
+    pub axis: &'a str,
+    pub reference: ComparatorObservation<'a>,
+    pub candidate: ComparatorObservation<'a>,
+    pub context: ComparatorContext<'a>,
+}
+
+/// One side's raw observation, as delivered to a comparator.
+#[derive(Debug, Clone, Serialize)]
+pub struct ComparatorObservation<'a> {
+    pub exit: &'a str,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+}
+
+/// The execution context a comparator may need (the question's inputs).
+#[derive(Debug, Clone, Serialize)]
+pub struct ComparatorContext<'a> {
+    pub fixture_sha256: &'a str,
+    pub arguments: &'a [String],
+    pub environment_digest: &'a str,
+}
+
+/// The canonical response a comparator must produce on stdout.
+/// Interpretation is fail-closed: `equivalent` and `residuals` are mutually
+/// exclusive, `indeterminate` and `failure` refuse the court, and a
+/// `divergent` response must name its residuals (see
+/// [`crate::comparators::interpret`]).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorResponse {
+    pub schema_version: String,
+    /// The axes' projections agree.
+    pub equivalent: bool,
+    /// The divergences, as raw projections the court preserves verbatim.
+    #[serde(default)]
+    pub residuals: Vec<ComparatorResidual>,
+    /// The comparator cannot decide; the court refuses the run (inconclusive
+    /// evidence must not be recorded as conclusive).
+    #[serde(default)]
+    pub indeterminate: bool,
+    /// The comparator malfunctioned; the court refuses the run.
+    #[serde(default)]
+    pub failure: Option<String>,
+}
+
+/// One divergence a comparator reports. `kind` is derived by the court from
+/// the axis (exit ↔ exit, stderr/stdout ↔ text); the SURFACE and the raw
+/// values follow the declared extractor.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorResidual {
+    #[serde(default)]
+    pub surface: Option<String>,
+    pub raw_reference: String,
+    pub raw_candidate: String,
 }
 
 // ---------------------------------------------------------------------------
