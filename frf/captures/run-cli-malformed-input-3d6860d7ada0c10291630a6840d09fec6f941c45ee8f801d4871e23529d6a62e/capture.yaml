@@ -1,5 +1,5 @@
 schema_version: frf-capture-v1
-run: run-cli-malformed-input-c250def7d57f70576843b364d5aa99638740a662a8b8aa1f7357fa0fe9d21c47
+run: run-cli-malformed-input-3d6860d7ada0c10291630a6840d09fec6f941c45ee8f801d4871e23529d6a62e
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest.yaml
@@ -40,6 +40,8 @@ reference:
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
   stderr_first_line: 'tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive ''servre'''
   stderr_first_line_sha256: 8ee3d9f0cbdee73d35f79fca0eff3702a462f6865540d1aaed9c6749cc8aa05a
+  stdout_first_line: 'ok: server 192.168.1.1'
+  stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
   stderr_sha256: 442031b8691d77f4a3ef553fd051898ff9d7c426daf9543732070080a208ccd6
 candidate:
@@ -47,6 +49,8 @@ candidate:
   exit_sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
   stderr_first_line: 'error: unknown directive servre at line 4'
   stderr_first_line_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
+  stdout_first_line: 'ok: server 192.168.1.1'
+  stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
   stderr_sha256: ee8bcc603017deafa72e8702594478bb9747916e3ca1adecfd251525a2b317f2
 residuals:

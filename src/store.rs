@@ -378,6 +378,9 @@ impl Store {
             Axis::Stderr => {
                 resolution.reference.stderr_first_line == resolution.candidate.stderr_first_line
             }
+            Axis::Stdout => {
+                resolution.reference.stdout_first_line == resolution.candidate.stdout_first_line
+            }
         };
         if !closes {
             return Err(FrfError::new(format!(

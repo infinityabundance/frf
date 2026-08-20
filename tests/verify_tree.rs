@@ -195,6 +195,24 @@ fn captures_are_self_consistent() {
             let stderr_text = String::from_utf8_lossy(&stderr);
             let first = stderr_text.split('\n').next().unwrap();
             assert_eq!(first, s.stderr_first_line, "{side} first line of stderr");
+            let stdout_text = String::from_utf8_lossy(&stdout);
+            let first_out = stdout_text.split('\n').next().unwrap();
+            assert_eq!(
+                first_out, s.stdout_first_line,
+                "{side} first line of stdout"
+            );
+            let out_first_txt =
+                fs::read_to_string(run_dir.join(format!("{side}.stdout_first_line.txt"))).unwrap();
+            assert_eq!(
+                out_first_txt.trim(),
+                s.stdout_first_line,
+                "{side} stdout_first_line.txt"
+            );
+            assert_eq!(
+                hash_str(&s.stdout_first_line),
+                s.stdout_first_line_sha256,
+                "{side} stdout first-line hash"
+            );
         }
 
         for id in &cap.residuals {
@@ -241,8 +259,20 @@ fn residuals_and_tokens_are_self_consistent() {
                 assert_eq!(r.surface, None, "exit residual must not carry a surface");
             }
             ResidualKind::Text => {
-                assert_eq!(r.axis, Axis::Stderr);
-                assert_eq!(r.surface.as_deref(), Some("first-diagnostic-line"));
+                assert!(
+                    matches!(r.axis, Axis::Stderr | Axis::Stdout),
+                    "text residual on unexpected axis {:?}",
+                    r.axis
+                );
+                assert_eq!(
+                    r.surface.as_deref(),
+                    match r.axis {
+                        Axis::Stderr => Some("first-diagnostic-line"),
+                        Axis::Stdout => Some("first-stdout-line"),
+                        Axis::Exit => unreachable!(),
+                    },
+                    "surface must match the axis"
+                );
             }
         }
         assert_eq!(
@@ -434,6 +464,10 @@ fn receipts_are_self_consistent() {
                     Axis::Stderr => (
                         &cap.reference.stderr_first_line_sha256,
                         &cap.candidate.stderr_first_line_sha256,
+                    ),
+                    Axis::Stdout => (
+                        &cap.reference.stdout_first_line_sha256,
+                        &cap.candidate.stdout_first_line_sha256,
                     ),
                 };
                 obs.raw_reference_hash == *ref_h && obs.raw_candidate_hash == *cand_h

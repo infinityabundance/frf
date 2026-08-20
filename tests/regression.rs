@@ -182,15 +182,11 @@ fn court_rejects_bad_declarations() {
     work.copy_canonical_tree();
     admit_reference(&work);
 
-    // Unsupported observable axis (v0: exit and stderr only).
-    let m = manifest_variant(
-        &work,
-        "observables: [exit, stderr]",
-        "observables: [stdout]",
-    );
+    // Unsupported observable axis (v0.1.6: exit, stderr, stdout only).
+    let m = manifest_variant(&work, "observables: [exit, stderr]", "observables: [wire]");
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("unsupported observable axis 'stdout'"));
+    assert!(stderr(&out).contains("unsupported observable axis 'wire'"));
 
     // Unknown authority id.
     let m = manifest_variant(&work, "authority: ref-cli-1.8.2", "authority: nope-1.0");
@@ -842,6 +838,116 @@ fn clean_pair_yields_no_residuals_and_two_axis_claim() {
     let text = stdout(&out);
     assert!(
         text.contains("malformed-input exit class and malformed-input first diagnostic line"),
+        "claim: {text}"
+    );
+}
+
+#[test]
+fn stdout_axis_is_a_declared_comparator() {
+    // A third observable, exercised only when declared: the stdout axis
+    // compares first stdout lines and produces a text-family residual that
+    // routes to its own minimizer. Comparator identity lands in the receipt.
+    let work = Workdir::new("stdout-axis");
+    work.copy_canonical_tree();
+    // Different first stdout line, different exit class, empty stderr.
+    work.write_candidate("#!/bin/sh\necho \"cand banner\"\nexit 1\n");
+    admit_reference(&work);
+
+    let m = manifest_variant(
+        &work,
+        "observables: [exit, stderr]",
+        "observables: [exit, stderr, stdout]",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
+    assert_success(&out, "court run with stdout axis");
+    let run = stdout(&out);
+
+    // exit, stderr, stdout -> cli-exit-0001, cli-text-0001, cli-text-0002.
+    let exit_res = raw_residual(&work, "cli-exit-0001");
+    assert_eq!(exit_res["raw_reference"], "2");
+    assert_eq!(exit_res["raw_candidate"], "1");
+    let err_res = raw_residual(&work, "cli-text-0001");
+    assert_eq!(err_res["surface"], "first-diagnostic-line");
+    assert_eq!(err_res["axis"], "stderr");
+    let out_res = raw_residual(&work, "cli-text-0002");
+    assert_eq!(out_res["surface"], "first-stdout-line");
+    assert_eq!(out_res["axis"], "stdout");
+    assert_eq!(
+        out_res["raw_reference"].as_str().unwrap(),
+        "ok: server 192.168.1.1",
+        "reference stdout first line"
+    );
+    assert_eq!(out_res["raw_candidate"].as_str().unwrap(), "cand banner");
+
+    // The token routes to the stdout minimizer.
+    let tok: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-text-0002.token.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        tok["token"],
+        "text/stdout-routing/first-line-token-change/open"
+    );
+    assert_eq!(tok["next_court"], "cli-stdout-minimize");
+    assert_eq!(tok["blocks_claims"][0], "byte-identical stdout");
+
+    // Comparator identity is evidence: the receipt's observable block names
+    // the exact relation applied.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/receipts/{receipt}.json"))).unwrap(),
+    )
+    .unwrap();
+    let obs = rec["observables"].as_array().unwrap();
+    let stdout_obs = obs
+        .iter()
+        .find(|o| o["axis"] == "stdout")
+        .expect("stdout observable in receipt");
+    assert_eq!(stdout_obs["comparator"], "eq(stdout-first-line)");
+    assert_eq!(stdout_obs["verdict"], "residual");
+    let tokens = rec["endoduction"]["tokens"].as_array().unwrap();
+    let out_token = tokens
+        .iter()
+        .find(|t| t["residual_id"] == "cli-text-0002")
+        .expect("stdout token in receipt");
+    assert_eq!(out_token["next_court"], "cli-stdout-minimize");
+}
+
+#[test]
+fn clean_stdout_axis_is_claimable() {
+    // Positive control for the new axis: a candidate identical to the
+    // reference leaves stdout clean too, and the claim covers it.
+    let work = Workdir::new("stdout-clean");
+    work.copy_canonical_tree();
+    let ref_content = fs::read_to_string(work.path("golden/reference.sh")).unwrap();
+    work.write_candidate(&ref_content);
+    admit_reference(&work);
+
+    let m = manifest_variant(
+        &work,
+        "observables: [exit, stderr]",
+        "observables: [exit, stdout]",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
+    assert_success(&out, "court run with stdout axis");
+    let run = stdout(&out);
+
+    let residuals = fs::read_dir(work.path("frf/residuals")).unwrap().count();
+    assert_eq!(
+        residuals, 0,
+        "identical behavior leaves no residuals on any axis"
+    );
+
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert_success(&out, "claim compile");
+    let text = stdout(&out);
+    assert!(
+        text.contains("malformed-input exit class and malformed-input first stdout line"),
         "claim: {text}"
     );
 }

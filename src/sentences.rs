@@ -57,6 +57,7 @@ pub fn positive_claim(r: &Receipt) -> Option<String> {
         let clause = match obs.axis.as_str() {
             "exit" => format!("{family} exit class"),
             "stderr" => format!("{family} first diagnostic line"),
+            "stdout" => format!("{family} first stdout line"),
             other => format!("{other} behavior"),
         };
         clauses.push(clause);

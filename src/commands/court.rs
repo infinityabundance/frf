@@ -106,6 +106,12 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     // -- diff the declared axes (Section 12 comparators) -----------------------
 
     let mut residuals: Vec<ResidualRecord> = Vec::new();
+    // Ids are assigned before anything is written, so a run with two
+    // text-family residuals (stderr + stdout) must not re-read the disk and
+    // hand out the same sequence number twice: track ids already handed out
+    // in this run and keep bumping past them.
+    let mut pending_seq: std::collections::HashMap<ResidualKind, u32> =
+        std::collections::HashMap::new();
     for axis in &observables {
         let (raw_ref, raw_cand, surface) = match axis {
             Axis::Exit => (reference.exit.clone(), candidate.exit.clone(), None),
@@ -114,10 +120,19 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
                 candidate.stderr_first_line.clone(),
                 Some("first-diagnostic-line".to_string()),
             ),
+            Axis::Stdout => (
+                reference.stdout_first_line.clone(),
+                candidate.stdout_first_line.clone(),
+                Some("first-stdout-line".to_string()),
+            ),
         };
         if raw_ref != raw_cand {
             let kind = ResidualKind::from_axis(*axis);
-            let seq = store.next_residual_seq(kind)?;
+            let seq = match pending_seq.get(&kind) {
+                Some(s) => s + 1,
+                None => store.next_residual_seq(kind)?,
+            };
+            pending_seq.insert(kind, seq);
             residuals.push(ResidualRecord {
                 schema_version: SCHEMA_RESIDUAL.to_string(),
                 id: format!("{}-{}-{:04}", kind.domain_prefix(), kind.as_str(), seq),
@@ -230,16 +245,22 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 
 impl SideCapture {
     fn from_outcome(outcome: &host::ProcessOutcome) -> SideCapture {
-        let stderr_first_line = String::from_utf8_lossy(&outcome.stderr)
-            .split('\n')
-            .next()
-            .unwrap_or("")
-            .to_string();
+        let first_line = |bytes: &[u8]| -> String {
+            String::from_utf8_lossy(bytes)
+                .split('\n')
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        let stderr_first_line = first_line(&outcome.stderr);
+        let stdout_first_line = first_line(&outcome.stdout);
         SideCapture {
             exit: outcome.exit.clone(),
             exit_sha256: host::sha256_bytes(outcome.exit.as_bytes()),
             stderr_first_line: stderr_first_line.clone(),
             stderr_first_line_sha256: host::sha256_bytes(stderr_first_line.as_bytes()),
+            stdout_first_line: stdout_first_line.clone(),
+            stdout_first_line_sha256: host::sha256_bytes(stdout_first_line.as_bytes()),
             stdout_sha256: host::sha256_bytes(&outcome.stdout),
             stderr_sha256: host::sha256_bytes(&outcome.stderr),
         }
@@ -247,8 +268,12 @@ impl SideCapture {
 
     fn serialize(&self) -> String {
         format!(
-            "exit={}|stdout={}|stderr={}|first={}",
-            self.exit, self.stdout_sha256, self.stderr_sha256, self.stderr_first_line
+            "exit={}|stdout={}|stderr={}|first_out={}|first_err={}",
+            self.exit,
+            self.stdout_sha256,
+            self.stderr_sha256,
+            self.stdout_first_line,
+            self.stderr_first_line
         )
     }
 }
@@ -267,6 +292,7 @@ fn write_side_files(
     for (name, text) in [
         ("exit", &capture.exit),
         ("stderr_first_line", &capture.stderr_first_line),
+        ("stdout_first_line", &capture.stdout_first_line),
     ] {
         write_once(
             run_dir.join(format!("{side}.{name}.txt")),

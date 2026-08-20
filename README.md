@@ -104,10 +104,14 @@ says no more than that receipt licenses.
   requires a reason) is implemented; the rest is a later milestone.
 - **Corpus admission, version ladders, environment matrices, independent
   witness maps** — v0 proves the kernel on one authority, one candidate, one fixture.
-- **Wire/timing/filesystem/state courts** — `exit` and `stderr` only; a new
-  axis is a new comparator, not a core change.
+- **Wire/timing/filesystem/state courts** — `exit`, `stderr`, and `stdout`
+  (first line only) are the v0.1.6 axes; a new axis is a new comparator,
+  never a core change. Comparator identity is recorded in every receipt.
 - **No GUI, dashboard, or metrics**; **no networked admission** — local executables, YAML on disk.
-- **stdout is captured but not compared** in v0; claims never mention it.
+- **stdout is compared on its first line only, and only when the court
+  declares the `stdout` axis**; the full stdout stream is captured and
+  hashed but byte-identity is never claimed. The golden path deliberately
+  stays on `exit` + `stderr` (Section 12's axes).
 - **Minimization courts are not implemented**: `next_court` routes are
   recorded nominally, and claims scope to the executed court, not the routed one.
 - **`drift`/`slew` are `not-observed`** (sign block): v0 runs each court once;
