@@ -55,6 +55,7 @@ Allow five minutes; it takes about five seconds.
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
+| `frf replay RUN_ID \| RECEIPT_ID` | re-executes the exact snapshotted artifacts + captured argv under a checked environment and requires the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). Writes nothing: replay is evidence verification, not re-observation |
 
 Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
@@ -207,5 +208,10 @@ says no more than that receipt licenses.
   and scope the claim sentences.
 - **Residual ids are hardcoded to the `cli` domain** (`cli-exit-0001`), and
   `grammar_state` is derived from disposition via a fixed table.
-- **Receipt replay commands and paths are working-directory-relative**; run
-  from the same place you ran the court.
+- **Replay is a first-class evidence operation** (`frf replay <run|receipt>`):
+  it re-executes the snapshotted artifacts + argv under a checked
+  environment (declared platforms, matching environment digest) and
+  requires byte-identical reproduction with matching residual fingerprints.
+  The receipt's replay block is structured (`program`, `evidence_root`,
+  `argv`, `expected_run_identity`); a residual's `reproducer` is the run
+  that observes it. Replay writes nothing.

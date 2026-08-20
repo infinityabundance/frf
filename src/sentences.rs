@@ -180,6 +180,7 @@ mod tests {
     fn receipt_base() -> Receipt {
         Receipt {
             schema_version: SCHEMA_RECEIPT.into(),
+            run: "run-cli-malformed-input-ab12cd34".into(),
             court: ReceiptCourt {
                 id: "cli-malformed-input".into(),
                 question: "q".into(),
@@ -246,8 +247,10 @@ mod tests {
                 blocked_by_open_residuals: vec![],
             },
             replay: ReceiptReplay {
-                command: "frf --root frf court run frf/courts/cli-malformed-input/manifest.yaml"
-                    .into(),
+                program: "frf".into(),
+                evidence_root: "frf".into(),
+                argv: vec!["--root".into(), "frf".into(), "court".into(), "run".into()],
+                expected_run_identity: "run-cli-malformed-input-ab12cd34".into(),
             },
         }
     }

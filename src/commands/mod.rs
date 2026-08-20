@@ -6,6 +6,7 @@ pub mod claim;
 pub mod court;
 pub mod dispose;
 pub mod receipt;
+pub mod replay;
 
 use crate::cli::*;
 use crate::error::Result;
@@ -50,5 +51,9 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
         Command::Claim { sub } => match sub {
             ClaimCmd::Compile { receipt } => claim::run(store, &receipt),
         },
+        Command::Replay { id } => {
+            replay::run(store, &id)?;
+            Ok(())
+        }
     }
 }

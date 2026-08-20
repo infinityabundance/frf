@@ -49,6 +49,11 @@ pub enum Command {
         #[command(subcommand)]
         sub: ClaimCmd,
     },
+    /// Replay a captured run (or receipt): re-execute the exact snapshotted artifacts under a checked environment and require the observation to reproduce
+    Replay {
+        /// Run id or receipt id (printed by `frf court run` / `frf receipt emit`)
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]

@@ -83,12 +83,30 @@ pub fn court_semantic_identity(
 /// same raw projections) across stores, because it is built from the
 /// residual's hashed projections, not the raw values.
 pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
+    fingerprint_from_projections(
+        r.kind,
+        r.axis,
+        r.surface.as_deref(),
+        &r.raw_reference,
+        &r.raw_candidate,
+    )
+}
+
+/// The fingerprint of a divergence, computed directly from raw projections
+/// (used by replay to re-derive what a fresh execution must reproduce).
+pub fn fingerprint_from_projections(
+    kind: ResidualKind,
+    axis: Axis,
+    surface: Option<&str>,
+    raw_reference: &str,
+    raw_candidate: &str,
+) -> Result<String> {
     let doc = json!({
-        "kind": r.kind.as_str(),
-        "axis": r.axis.as_str(),
-        "surface": r.surface,
-        "reference_sha256": r.raw_reference_sha256,
-        "candidate_sha256": r.raw_candidate_sha256,
+        "kind": kind.as_str(),
+        "axis": axis.as_str(),
+        "surface": surface,
+        "reference_sha256": host::sha256_bytes(raw_reference.as_bytes()),
+        "candidate_sha256": host::sha256_bytes(raw_candidate.as_bytes()),
     });
     hash_preimage("FRF/RESIDUAL-FINGERPRINT/v1", &doc)
 }

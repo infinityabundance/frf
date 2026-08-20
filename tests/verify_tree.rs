@@ -529,6 +529,7 @@ fn receipts_are_self_consistent() {
             64,
             "the digest is the full SHA-256, not a prefix"
         );
+        assert_eq!(rec.run, run, "receipt {id} run field must match its id");
         assert!(
             store.run_dir(run).unwrap().is_dir(),
             "receipt {id} references missing run {run}"
@@ -539,6 +540,18 @@ fn receipts_are_self_consistent() {
             digest,
             "receipt {id} is not content-addressed (hand-edited?)"
         );
+
+        // Structured replay block: executing it reproduces the run.
+        assert_eq!(rec.replay.program, "frf");
+        assert_eq!(rec.replay.expected_run_identity, rec.run);
+        assert!(rec.replay.argv.len() >= 5);
+        assert_eq!(rec.replay.argv[0], "--root");
+        assert_eq!(
+            rec.replay.argv[1], "frf",
+            "evidence root recorded at capture"
+        );
+        assert_eq!(rec.replay.argv[2], "court");
+        assert_eq!(rec.replay.argv[3], "run");
 
         // Authority block matches the admitted record.
         let authority: AuthorityRecord = store
@@ -636,7 +649,8 @@ fn receipts_are_self_consistent() {
             assert_eq!(res.sign.norm, "single-run");
             assert_eq!(res.sign.drift, "not-observed");
             assert_eq!(res.sign.slew, "not-observed");
-            assert_eq!(res.reproducer, rec.replay.command);
+            // A residual reproduces by replaying the run that observed it.
+            assert_eq!(res.reproducer, rec.run);
             assert!(res.invariant.is_empty(), "v0 has no invariants");
             if res.disposition == "fixed" {
                 // Receipts are snapshots: the resolution edge is bound only
