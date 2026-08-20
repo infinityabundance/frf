@@ -4,8 +4,8 @@
 
 > de Beer, R. (2026). The Forensic Residual Framework - Evidence-First Software
 > Construction, Behavioral Reconstruction, and Deterministic Residual
-> Endoduction from the DSFB Prior-Art Stack (Version v1.0). Zenodo.
-> <https://doi.org/10.5281/zenodo.22020499>
+> Endoduction from the DSFB Prior-Art Stack (Version v1.2). Zenodo.
+> <https://doi.org/10.5281/zenodo.22027039> · <https://zenodo.org/records/22027039>
 
 A minimal reference implementation of the FRF kernel (de Beer, 2026):
 
