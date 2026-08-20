@@ -28,8 +28,8 @@ fi
 ROOT=frf
 
 # Regenerate the evidence tree (courts/ is source and is kept).
-rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/receipts "$ROOT"/claims
-mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/receipts "$ROOT"/claims
+rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
+mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
 rm -rf golden/work
 mkdir -p golden/work
 
