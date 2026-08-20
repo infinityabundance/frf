@@ -68,7 +68,7 @@ Three suites, mirroring the framework's own discipline:
 | suite | command | what it does |
 |---|---|---|
 | regression | `cargo test` | the invariant bank: every verb, every rejection path, reason-gate, re-disposition, id/path-safety boundary, timeout kill, and a zero-residual positive control |
-| verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids, and claim sentences byte-for-byte. Fails if any generated file was hand-edited |
+| verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
 | fuzzing | `cargo test --test fuzz` (deterministic, seeded, runs in CI) · `cargo +nightly fuzz run yaml_types\|cli_args\|store_ids` (libFuzzer, corpus-guided) | the negative controls: YAML deserializers never panic and never produce a forbidden disposition state, the CLI parser never panics, and ids that pass validation can never escape the store root |
 
 `make test`, `make verify`, and `make fuzz-iters` wrap the same commands
