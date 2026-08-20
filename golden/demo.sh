@@ -22,7 +22,8 @@ if command -v frf >/dev/null 2>&1; then
   FRF_BIN=${FRF_BIN:-frf}
 else
   cargo build --release --quiet
-  FRF_BIN=${FRF_BIN:-target/release/frf}
+  # Absolute: the bundle-verify step runs from a subshell in golden/work.
+  FRF_BIN=${FRF_BIN:-$PWD/target/release/frf}
 fi
 ROOT=frf
 
