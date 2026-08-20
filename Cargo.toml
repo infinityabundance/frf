@@ -1,6 +1,6 @@
 [package]
 name = "frf-rs"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Minimal reference implementation of the Forensic Residual Framework kernel: authority -> court -> capture -> residual -> endoduction -> disposition -> receipt -> claim."
 license = "MIT OR Apache-2.0"
@@ -8,7 +8,7 @@ repository = "https://github.com/infinityabundance/frf"
 readme = "README.md"
 keywords = ["forensic", "evidence", "compatibility", "differential-testing", "verification"]
 categories = ["development-tools::testing", "command-line-utilities"]
-rust-version = "1.74"
+rust-version = "1.85"
 
 [[bin]]
 name = "frf"

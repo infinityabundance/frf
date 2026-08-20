@@ -1,0 +1,90 @@
+# CI for the three frf-rs suites:
+#
+#   regression  - cargo test (invariant bank + golden path) and the
+#                 deterministic in-repo fuzz harness at scale
+#   verification- verify_tree re-derives the checked-in evidence tree with
+#                 the tool's own pure functions (freshness gate: if generated
+#                 artifacts drift from the code, this fails); the demo job
+#                 additionally regenerates the tree and verifies it
+#   fuzzing     - libFuzzer smoke runs of all three targets (yaml_types,
+#                 cli_args, store_ids) under nightly
+#
+# Plus: rustfmt, clippy -D warnings, the MSRV floor, and `cargo package` so
+# the publishable artifact can never rot.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Regression + verification + package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Regression + golden path + verification + deterministic fuzz
+        run: cargo test
+      - name: Deterministic fuzz harness at scale
+        run: FRF_FUZZ_ITERS=100000 cargo test --test fuzz
+      - name: Publishable package must always build
+        run: cargo package
+
+  msrv:
+    name: MSRV (rust-version: 1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check on the declared MSRV
+        run: cargo check --all-targets
+
+  demo:
+    name: Golden path + regenerated-tree verification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run the full canonical loop (regenerates the frf/ tree)
+        run: ./golden/demo.sh
+      - name: Verify the regenerated tree is self-consistent
+        run: cargo test --test verify_tree
+
+  fuzz:
+    name: libFuzzer smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Build fuzz targets
+        run: cargo +nightly fuzz build
+      - name: Fuzz YAML deserializers
+        run: cargo +nightly fuzz run yaml_types -- -max_total_time=60
+      - name: Fuzz CLI parser
+        run: cargo +nightly fuzz run cli_args -- -max_total_time=60
+      - name: Fuzz id/path safety
+        run: cargo +nightly fuzz run store_ids -- -max_total_time=60

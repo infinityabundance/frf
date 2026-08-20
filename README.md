@@ -1,5 +1,7 @@
 # frf-rs — the Forensic Residual Framework kernel, executed
 
+[![ci](https://github.com/infinityabundance/frf/actions/workflows/ci.yml/badge.svg)](https://github.com/infinityabundance/frf/actions/workflows/ci.yml)
+
 A minimal reference implementation of the FRF kernel (de Beer, 2026):
 
 ```
