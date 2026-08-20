@@ -61,6 +61,7 @@ residuals:
   raw_candidate_hash: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
   disposition: fixed
   reason: candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)
+  resolution_run_id: run-cli-malformed-input-14589ea6
   reproducer: frf --root frf court run frf/courts/cli-malformed-input/manifest.yaml
   invariant: ''
   residual_fingerprint: 13619153b4587b90a5cdc180a7ccdf2cce7111a7febe9a2ecbf137c238d48a2e

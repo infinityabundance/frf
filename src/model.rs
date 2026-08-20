@@ -2,10 +2,12 @@
 //!
 //! Invariants stated before code:
 //! - Authority ids are `{name}-{version}`, safe path components, unique in a store.
-//! - A residual disposition is either `open` (no reason) or a closure kind with a
-//!   required one-line reason. There is no third state: `open` cannot carry a
-//!   reason, and a closure cannot lack one. This is enforced at the type level
-//!   by [`Disposition`] and by the only mutator, [`ResidualRecord::dispose`].
+//! - A residual disposition is either `open` (no reason) or a closure with a
+//!   required one-line reason. A `fixed` closure additionally requires a
+//!   `resolution_run_id` — a court run whose captures show the residual no
+//!   longer reproduces — so "fixed" is evidence-bearing by construction: a
+//!   disposition can never substitute for new evidence, and no representable
+//!   state lets a human promote a claim by changing a label.
 //! - Raw captures and receipts are written once and never rewritten; the residual
 //!   record is the only evidence object that mutates, and only through
 //!   [`ResidualRecord::dispose`].
@@ -105,11 +107,12 @@ impl ResidualKind {
 
 /// Closure kinds a developer may record. `open` is the initial state and is
 /// not settable; `unknown` and `harness` closures still block positive claims
-/// (the claim compiler's refusal rule).
+/// (the claim compiler's refusal rule). `fixed` is deliberately absent here:
+/// it is not a label, it is a [`Disposition::Fixed`] carrying its resolution
+/// run, so it cannot be spelled as a bare kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ClosureKind {
-    Fixed,
     Intentional,
     Environmental,
     OracleVersion,
@@ -118,8 +121,7 @@ pub enum ClosureKind {
 }
 
 impl ClosureKind {
-    pub const ALL: [ClosureKind; 6] = [
-        ClosureKind::Fixed,
+    pub const ALL: [ClosureKind; 5] = [
         ClosureKind::Intentional,
         ClosureKind::Environmental,
         ClosureKind::OracleVersion,
@@ -129,7 +131,6 @@ impl ClosureKind {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            ClosureKind::Fixed => "fixed",
             ClosureKind::Intentional => "intentional",
             ClosureKind::Environmental => "environmental",
             ClosureKind::OracleVersion => "oracle_version",
@@ -149,12 +150,24 @@ impl ClosureKind {
     }
 }
 
-/// Residual disposition with the reason invariant enforced by construction:
-/// `Open` carries no reason, every `Closed` carries a non-empty one.
+/// Residual disposition with the invariants enforced by construction:
+/// - `Open` carries no reason.
+/// - every `Closed` carries a non-empty one-line reason;
+/// - `Fixed` carries both a reason and the `resolution_run_id` of the court
+///   run whose captures show the residual no longer reproduces.
+///
+/// There is no representable "fixed without evidence" state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disposition {
     Open,
-    Closed { kind: ClosureKind, reason: String },
+    Closed {
+        kind: ClosureKind,
+        reason: String,
+    },
+    Fixed {
+        reason: String,
+        resolution_run_id: String,
+    },
 }
 
 impl Disposition {
@@ -162,6 +175,7 @@ impl Disposition {
         match self {
             Disposition::Open => "open",
             Disposition::Closed { kind, .. } => kind.as_str(),
+            Disposition::Fixed { .. } => "fixed",
         }
     }
 
@@ -169,6 +183,17 @@ impl Disposition {
         match self {
             Disposition::Open => None,
             Disposition::Closed { reason, .. } => Some(reason),
+            Disposition::Fixed { reason, .. } => Some(reason),
+        }
+    }
+
+    /// The resolution run backing a `fixed` closure, if any.
+    pub fn resolution_run_id(&self) -> Option<&str> {
+        match self {
+            Disposition::Fixed {
+                resolution_run_id, ..
+            } => Some(resolution_run_id),
+            _ => None,
         }
     }
 
@@ -176,6 +201,7 @@ impl Disposition {
         match self {
             Disposition::Open => true,
             Disposition::Closed { kind, .. } => kind.blocks_claim(),
+            Disposition::Fixed { .. } => false,
         }
     }
 }
@@ -187,13 +213,19 @@ impl fmt::Display for Disposition {
 }
 
 // `Disposition` serializes as `disposition: <status>` with a sibling
-// `reason:` key exactly when closed — the Appendix A / Section 12 shape:
+// `reason:` key exactly when closed, and a `resolution_run_id:` key exactly
+// when fixed — the Appendix A / Section 12 shape:
 //
+//   disposition: open
+//   disposition: intentional
+//   reason: "clearer diagnostic wording"
 //   disposition: fixed
 //   reason: "candidate patched to match reference exit class"
+//   resolution_run_id: run-cli-malformed-input-…
 //
-// The custom impl exists so the `open` state cannot carry a reason and a
-// closed state cannot omit one, even in YAML.
+// The custom impl exists so the forbidden states are unrepresentable even in
+// YAML: `open` cannot carry a reason, a non-fixed closure cannot carry a
+// resolution_run_id, and `fixed` cannot omit one.
 impl Serialize for Disposition {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -208,6 +240,14 @@ impl Serialize for Disposition {
             Disposition::Closed { kind, reason } => {
                 map.serialize_entry("disposition", kind.as_str())?;
                 map.serialize_entry("reason", reason)?;
+            }
+            Disposition::Fixed {
+                reason,
+                resolution_run_id,
+            } => {
+                map.serialize_entry("disposition", "fixed")?;
+                map.serialize_entry("reason", reason)?;
+                map.serialize_entry("resolution_run_id", resolution_run_id)?;
             }
         }
         map.end()
@@ -232,10 +272,12 @@ impl<'de> Deserialize<'de> for Disposition {
             {
                 let mut status: Option<String> = None;
                 let mut reason: Option<String> = None;
+                let mut resolution_run_id: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "disposition" => status = Some(map.next_value()?),
                         "reason" => reason = Some(map.next_value()?),
+                        "resolution_run_id" => resolution_run_id = Some(map.next_value()?),
                         // Unknown keys are ignored so the flattened map can be
                         // consumed in any field order.
                         _ => {
@@ -246,17 +288,42 @@ impl<'de> Deserialize<'de> for Disposition {
                 let status = status.ok_or_else(|| A::Error::missing_field("disposition"))?;
                 match status.as_str() {
                     "open" => {
-                        if reason.is_some() {
+                        if reason.is_some() || resolution_run_id.is_some() {
                             return Err(A::Error::custom(
-                                "disposition 'open' cannot carry a reason",
+                                "disposition 'open' cannot carry a reason or resolution_run_id",
                             ));
                         }
                         Ok(Disposition::Open)
+                    }
+                    "fixed" => {
+                        let reason = reason.ok_or_else(|| {
+                            A::Error::custom("disposition 'fixed' requires a one-line reason")
+                        })?;
+                        let resolution_run_id = resolution_run_id.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'fixed' requires a resolution_run_id (a disposition is not evidence)",
+                            )
+                        })?;
+                        if reason.trim().is_empty() {
+                            return Err(A::Error::custom("reason must not be empty"));
+                        }
+                        if resolution_run_id.trim().is_empty() {
+                            return Err(A::Error::custom("resolution_run_id must not be empty"));
+                        }
+                        Ok(Disposition::Fixed {
+                            reason,
+                            resolution_run_id,
+                        })
                     }
                     other => {
                         let kind = ClosureKind::parse(other).ok_or_else(|| {
                             A::Error::custom(format!("unknown disposition '{other}'"))
                         })?;
+                        if resolution_run_id.is_some() {
+                            return Err(A::Error::custom(format!(
+                                "only 'fixed' may carry a resolution_run_id, not '{other}'"
+                            )));
+                        }
                         let reason = reason.ok_or_else(|| {
                             A::Error::custom(format!(
                                 "disposition '{other}' requires a one-line reason"
@@ -413,22 +480,48 @@ pub struct ResidualRecord {
 }
 
 impl ResidualRecord {
-    /// The only sanctioned mutation: record a closure. Rejects a missing or
+    /// The only sanctioned mutations: record a closure. Rejects a missing or
     /// multi-line reason and refuses to move a residual back to `open`.
     pub fn dispose(&mut self, kind: ClosureKind, reason: String) -> crate::error::Result<()> {
-        if reason.trim().is_empty() {
-            return Err(crate::error::FrfError::new(
-                "disposition requires a non-empty one-line reason",
-            ));
-        }
-        if reason.contains('\n') {
-            return Err(crate::error::FrfError::new(
-                "reason must be a single line (no newlines)",
-            ));
-        }
+        validate_reason(&reason)?;
         self.disposition = Disposition::Closed { kind, reason };
         Ok(())
     }
+
+    /// Record a `fixed` closure: the reason plus the resolution run whose
+    /// captures show the residual no longer reproduces. `fixed` cannot be
+    /// spelled without that run — a disposition is not evidence.
+    pub fn dispose_fixed(
+        &mut self,
+        reason: String,
+        resolution_run_id: String,
+    ) -> crate::error::Result<()> {
+        validate_reason(&reason)?;
+        if resolution_run_id.trim().is_empty() {
+            return Err(crate::error::FrfError::new(
+                "a fixed disposition requires a resolution_run_id",
+            ));
+        }
+        self.disposition = Disposition::Fixed {
+            reason,
+            resolution_run_id,
+        };
+        Ok(())
+    }
+}
+
+fn validate_reason(reason: &str) -> crate::error::Result<()> {
+    if reason.trim().is_empty() {
+        return Err(crate::error::FrfError::new(
+            "disposition requires a non-empty one-line reason",
+        ));
+    }
+    if reason.contains('\n') {
+        return Err(crate::error::FrfError::new(
+            "reason must be a single line (no newlines)",
+        ));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -564,6 +657,10 @@ pub struct ReceiptResidual {
     /// Mandatory reason for closed dispositions; absent while `open`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The resolution run backing a `fixed` disposition — v0 addition, the
+    /// evidence edge a disposition must never substitute for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_run_id: Option<String>,
     pub reproducer: String,
     pub invariant: String,
     pub residual_fingerprint: String,
@@ -628,25 +725,50 @@ mod tests {
 
         // closed: reason required
         let closed: Disposition =
-            serde_yaml::from_str("disposition: fixed\nreason: candidate patched\n").unwrap();
+            serde_yaml::from_str("disposition: intentional\nreason: clearer wording\n").unwrap();
         assert_eq!(
             closed,
             Disposition::Closed {
-                kind: ClosureKind::Fixed,
-                reason: "candidate patched".into()
+                kind: ClosureKind::Intentional,
+                reason: "clearer wording".into()
             }
         );
         let yaml = serde_yaml::to_string(&closed).unwrap();
+        assert!(yaml.contains("disposition: intentional"));
+        assert!(yaml.contains("reason: clearer wording"));
+
+        // fixed: reason AND resolution_run_id are required — a disposition
+        // is not evidence.
+        let fixed: Disposition =
+            serde_yaml::from_str("disposition: fixed\nreason: patched\nresolution_run_id: run-x\n")
+                .unwrap();
+        assert_eq!(
+            fixed,
+            Disposition::Fixed {
+                reason: "patched".into(),
+                resolution_run_id: "run-x".into()
+            }
+        );
+        let yaml = serde_yaml::to_string(&fixed).unwrap();
         assert!(yaml.contains("disposition: fixed"));
-        assert!(yaml.contains("reason: candidate patched"));
+        assert!(yaml.contains("resolution_run_id: run-x"));
     }
 
     #[test]
     fn disposition_serde_rejects_forbidden_states() {
         // closed without reason
-        assert!(serde_yaml::from_str::<Disposition>("disposition: fixed\n").is_err());
+        assert!(serde_yaml::from_str::<Disposition>("disposition: intentional\n").is_err());
         // open with a reason
         assert!(serde_yaml::from_str::<Disposition>("disposition: open\nreason: x\n").is_err());
+        // fixed without a resolution run — the hole this tool closes
+        assert!(
+            serde_yaml::from_str::<Disposition>("disposition: fixed\nreason: patched\n").is_err()
+        );
+        // non-fixed closure carrying a resolution run
+        assert!(serde_yaml::from_str::<Disposition>(
+            "disposition: intentional\nreason: x\nresolution_run_id: run-y\n"
+        )
+        .is_err());
         // unknown status
         assert!(serde_yaml::from_str::<Disposition>("disposition: closed\n").is_err());
     }
@@ -693,13 +815,28 @@ mod tests {
             raw_candidate_sha256: "b".repeat(64),
             disposition: Disposition::Open,
         };
-        assert!(record.dispose(ClosureKind::Fixed, "   ".into()).is_err());
         assert!(record
-            .dispose(ClosureKind::Fixed, "line one\nline two".into())
+            .dispose(ClosureKind::Intentional, "   ".into())
+            .is_err());
+        assert!(record
+            .dispose(ClosureKind::Intentional, "line one\nline two".into())
             .is_err());
         record
-            .dispose(ClosureKind::Fixed, "one line".into())
+            .dispose(ClosureKind::Intentional, "one line".into())
+            .unwrap();
+        assert_eq!(record.disposition.as_str(), "intentional");
+
+        // fixed goes through dispose_fixed and carries its resolution run.
+        assert!(record
+            .dispose_fixed("patched".into(), "   ".into())
+            .is_err());
+        record
+            .dispose_fixed("patched".into(), "run-cli-malformed-input-x".into())
             .unwrap();
         assert_eq!(record.disposition.as_str(), "fixed");
+        assert_eq!(
+            record.disposition.resolution_run_id(),
+            Some("run-cli-malformed-input-x")
+        );
     }
 }

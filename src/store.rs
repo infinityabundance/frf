@@ -235,6 +235,28 @@ impl Store {
         }
         Ok(max + 1)
     }
+
+    /// The explicit closure predicate behind a `fixed` disposition: does a run
+    /// exist, for the same court, whose captures show authority and candidate
+    /// agreeing on `axis`? A disposition is never evidence; the run is.
+    ///
+    /// - missing run → error (`no such run`)
+    /// - run from a different court → error (wrong run picked)
+    /// - run from the same court but the axis still diverges → `Ok(false)`
+    pub fn run_closes_axis(&self, run: &str, court: &str, axis: Axis) -> Result<bool> {
+        let cap = self.load_capture(run)?;
+        if cap.court != court {
+            return Err(FrfError::new(format!(
+                "run '{run}' is for court '{}', not '{court}'",
+                cap.court
+            )));
+        }
+        let closes = match axis {
+            Axis::Exit => cap.reference.exit == cap.candidate.exit,
+            Axis::Stderr => cap.reference.stderr_first_line == cap.candidate.stderr_first_line,
+        };
+        Ok(closes)
+    }
 }
 
 #[cfg(test)]

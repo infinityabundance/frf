@@ -15,9 +15,17 @@ pub const MANIFEST: &str = "frf/courts/cli-malformed-input/manifest.yaml";
 pub const CANONICAL_FILES: &[&str] = &[
     "golden/reference.sh",
     "golden/candidate.sh",
+    "golden/work/candidate-fixed.sh",
     "frf/courts/cli-malformed-input/manifest.yaml",
+    "frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml",
     "frf/courts/cli-malformed-input/fixtures/malformed-path.conf",
 ];
+
+/// The resolution court declaration: the same court question against the
+/// patched candidate. Running it provides the closure evidence a `fixed`
+/// disposition must point at.
+pub const RESOLUTION_MANIFEST: &str =
+    "frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml";
 
 pub struct Workdir {
     pub dir: PathBuf,
@@ -125,7 +133,16 @@ pub fn admit_reference(work: &Workdir) {
 
 /// Run the canonical court and return the run id.
 pub fn run_court(work: &Workdir) -> String {
-    let out = frf(work, &["--root", ROOT, "court", "run", MANIFEST]);
+    run_court_manifest(work, MANIFEST)
+}
+
+/// Run the resolution court (patched candidate) and return the run id.
+pub fn run_resolution_court(work: &Workdir) -> String {
+    run_court_manifest(work, RESOLUTION_MANIFEST)
+}
+
+fn run_court_manifest(work: &Workdir, manifest: &str) -> String {
+    let out = frf(work, &["--root", ROOT, "court", "run", manifest]);
     assert_success(&out, "court run");
     let run = stdout(&out);
     assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");

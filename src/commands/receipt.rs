@@ -91,6 +91,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                 raw_candidate_hash: r.raw_candidate_sha256.clone(),
                 disposition: r.disposition.as_str().to_string(),
                 reason: r.disposition.reason().map(|s| s.to_string()),
+                resolution_run_id: r.disposition.resolution_run_id().map(|s| s.to_string()),
                 reproducer: replay_command.clone(),
                 invariant: String::new(),
                 residual_fingerprint: fingerprint,

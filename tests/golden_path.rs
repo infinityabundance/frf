@@ -6,10 +6,12 @@
 //! 1. admit the authority and run the court → two `open` residuals
 //!    (`cli-exit-*`, `cli-text-*`), raw captures, endoduction tokens;
 //! 2. refuse a positive claim while the residuals are open;
-//! 3. accept `fixed` (exit) and `intentional` (text) dispositions — and refuse
-//!    a disposition without a reason;
-//! 4. emit the final receipt and compile the bounded claim, with the
-//!    Section 12 non-claim printed next to it.
+//! 3. refuse `fixed` without a resolution run; accept `fixed` only when
+//!    backed by a NEW court run whose captures show the residual no longer
+//!    reproduces, and accept `intentional` for the documented wording
+//!    divergence;
+//! 4. emit the final receipt (with the resolution edge bound) and compile the
+//!    bounded claim, with the Section 12 non-claim printed next to it.
 
 mod common;
 use common::*;
@@ -164,6 +166,70 @@ fn golden_path_end_to_end() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("reason"));
 
+    // The evidence gate: `fixed` without a resolution run is refused — a
+    // disposition is not evidence.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--resolution-run"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // The resolution run must be a NEW run, not the one that observed the
+    // residual.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &run,
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("new court run"));
+
+    // And it must exist.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            "run-nope",
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no such run 'run-nope'"));
+
     // `open` is not settable.
     let out = frf(
         &work,
@@ -195,12 +261,16 @@ fn golden_path_end_to_end() {
             "fixed",
             "--reason",
             "x",
+            "--resolution-run",
+            "run-x",
         ],
     );
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no such residual"));
 
-    // Dispositions with reasons.
+    // Patch the candidate, re-run the court, and only then dispose `fixed`
+    // with the run that shows the residual no longer reproduces.
+    let resolution_run = run_resolution_court(&work);
     let out = frf(
         &work,
         &[
@@ -211,11 +281,14 @@ fn golden_path_end_to_end() {
             "cli-exit-0001",
             "--disposition",
             "fixed",
+            "--resolution-run",
+            &resolution_run,
             "--reason",
             "candidate patched to preserve reference exit class",
         ],
     );
-    assert_success(&out, "dispose exit");
+    assert_success(&out, "dispose exit (fixed, with closure evidence)");
+
     let out = frf(
         &work,
         &[
@@ -230,7 +303,22 @@ fn golden_path_end_to_end() {
             "clearer diagnostic wording; documented divergence",
         ],
     );
-    assert_success(&out, "dispose text");
+    assert_success(&out, "dispose text 0001");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "residual",
+            "dispose",
+            "cli-text-0002",
+            "--disposition",
+            "intentional",
+            "--reason",
+            "clearer diagnostic wording; documented divergence (re-observed)",
+        ],
+    );
+    assert_success(&out, "dispose text 0002");
 
     let exit_residual: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.yaml")).unwrap(),
@@ -241,6 +329,11 @@ fn golden_path_end_to_end() {
         .as_str()
         .unwrap()
         .contains("patched"));
+    assert_eq!(
+        exit_residual["resolution_run_id"].as_str().unwrap(),
+        resolution_run,
+        "the residual record must bind its resolution run"
+    );
     // The token file follows the disposition.
     let exit_token: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
@@ -273,6 +366,18 @@ fn golden_path_end_to_end() {
         .as_sequence()
         .unwrap()
         .is_empty());
+    // The receipt binds the resolution edge.
+    let exit_entry = receipt_yaml["residuals"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "cli-exit-0001")
+        .expect("exit residual in receipt");
+    assert_eq!(
+        exit_entry["resolution_run_id"].as_str().unwrap(),
+        resolution_run,
+        "the receipt must bind the resolution edge"
+    );
 
     let out = frf(&work, &["--root", root, "claim", "compile", &receipt_final]);
     assert_success(&out, "claim compile (final)");
