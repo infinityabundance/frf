@@ -257,6 +257,13 @@ pub fn set_permissions(path: &Path, mode: u32) -> Result<()> {
     Ok(())
 }
 
+/// The environment digest: the one formula, shared by capture (at
+/// observation time) and OpenReceipt semantic verification (rederived from
+/// the receipt's own os/architecture/kernel_release fields).
+pub fn environment_digest(os: &str, architecture: &str, kernel_release: &str) -> String {
+    sha256_bytes(format!("os={os}\narch={architecture}\nkernel={kernel_release}").as_bytes())
+}
+
 /// The environment an observation happens in, captured at court time: os,
 /// architecture, kernel release, and the digest over them. The receipt
 /// copies this identity verbatim — it never asks its own host what
@@ -268,8 +275,7 @@ pub fn environment_identity() -> EnvironmentIdentity {
     let os = std::env::consts::OS.to_string();
     let architecture = std::env::consts::ARCH.to_string();
     let kernel_release = kernel_release();
-    let digest =
-        sha256_bytes(format!("os={os}\narch={architecture}\nkernel={kernel_release}").as_bytes());
+    let digest = environment_digest(&os, &architecture, &kernel_release);
     EnvironmentIdentity {
         schema_version: crate::model::SCHEMA_ENVIRONMENT.to_string(),
         os,

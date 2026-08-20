@@ -149,6 +149,9 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             id: capture.fixture.clone(),
             hash: capture.fixture_sha256.clone(),
             arguments: capture.arguments.clone(),
+            // The semantic identity is computed over the DECLARED arguments;
+            // the receipt must carry them to rederive the question.
+            declared_arguments: spec.fixture.arguments.clone(),
         }],
         observables,
         residuals: receipt_residuals,

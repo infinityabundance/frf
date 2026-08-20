@@ -216,7 +216,8 @@ mod tests {
             fixtures: vec![ReceiptFixture {
                 id: "malformed-path.conf".into(),
                 hash: "1".repeat(64),
-                arguments: vec!["--strict".into(), "{fixture}".into()],
+                arguments: vec!["--strict".into(), "obj".into()],
+                declared_arguments: vec!["--strict".into(), "{fixture}".into()],
             }],
             observables: vec![
                 ReceiptObservable {

@@ -220,40 +220,33 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     }
 
     // -- content-address the run ----------------------------------------------
-    // Identity discipline: the preimage is a domain-separated canonical JSON
-    // document (FRF/RUN/v1), never a delimiter-assembled string.
-    let side = |s: &SideCapture| {
-        serde_json::json!({
-            "exit": s.exit,
-            "stdout_sha256": s.stdout_sha256,
-            "stderr_sha256": s.stderr_sha256,
-            "stdout_first_line": s.stdout_first_line,
-            "stderr_first_line": s.stderr_first_line,
-        })
-    };
-    let run_doc = serde_json::json!({
-        "court": spec.id,
-        "authority": authority.id,
-        "authority_interpreter": authority_interpreter.as_ref().map(|i| i.downstream_interpreter.sha256.as_str()),
+    // Identity discipline: ONE run-identity function, shared with replay,
+    // receipt verification, and the verification suite. The preimage is a
+    // domain-separated canonical JSON document (FRF/RUN/v1), never a
+    // delimiter-assembled string; a name is a claim until it is recomputed.
+    let pre = crate::semantics::RunPreimage {
+        court: &spec.id,
+        authority: &authority.id,
+        authority_interpreter: authority_interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
         // The candidate NAME is a label and deliberately absent: the
         // candidate_sha256 is the identity. (It is still recorded in the
         // capture's court_spec as metadata.)
-        "candidate_sha256": candidate_sha256,
-        "candidate_interpreter": candidate_interpreter.as_ref().map(|i| i.downstream_interpreter.sha256.as_str()),
-        "fixture_sha256": fixture_sha256,
-        "arguments": arguments,
-        "environment_digest": environment.digest,
-        "runner_hash": runner.frf_executable_hash,
-        "court_semantic_identity": court_semantic_identity,
-        "reference": side(&reference),
-        "candidate": side(&candidate),
-        "residuals": residuals.iter().map(|r| serde_json::json!({
-            "kind": r.kind.as_str(),
-            "raw_reference": r.raw_reference,
-            "raw_candidate": r.raw_candidate,
-        })).collect::<Vec<_>>(),
-    });
-    let run_hash = crate::semantics::hash_preimage("FRF/RUN/v1", &run_doc)?;
+        candidate_sha256: &candidate_sha256,
+        candidate_interpreter: candidate_interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
+        fixture_sha256: &fixture_sha256,
+        arguments: &arguments,
+        environment_digest: &environment.digest,
+        runner_hash: &runner.frf_executable_hash,
+        court_semantic_identity: &court_semantic_identity,
+        reference: &reference,
+        candidate: &candidate,
+        residuals: &residuals,
+    };
+    let run_hash = crate::semantics::run_identity(&pre)?;
     let run = format!("run-{}-{}", spec.id, run_hash);
     let run_dir = store.run_dir(&run)?;
     if run_dir.exists() {

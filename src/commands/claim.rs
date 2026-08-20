@@ -29,7 +29,22 @@ use crate::sentences;
 use crate::store::Store;
 
 pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
-    let receipt = store.load_receipt(receipt_id)?;
+    // The semantic non-bypass rule, enforced structurally: claim compilation
+    // accepts ONLY a ReceiptVerified — a receipt whose identity AND derivation
+    // have been verified (content-addressed, semantically conformant, derived
+    // from its verified capture, dispositions evidenced by the event history,
+    // fixed closures re-verified). Parsing data cannot turn it into evidence.
+    let verified = crate::verify::load_receipt_verified(store, receipt_id).map_err(|e| {
+        // An invalid id keeps its validation refusal; a valid id naming no
+        // receipt gets the friendly refusal; anything that exists but fails
+        // verification keeps the specific violation.
+        match store.receipt_path(receipt_id) {
+            Err(validation) => validation,
+            Ok(p) if p.is_file() => e,
+            Ok(_) => FrfError::new(format!("no such receipt '{receipt_id}'")),
+        }
+    })?;
+    let receipt = verified.body();
     let family = receipt.court.admissibility_envelope.fixture_family.clone();
 
     // 1. Run-level invalidation: harness blocks every claim from this run.
@@ -50,7 +65,7 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
     // 2. Axis-level blocking: an open/unknown residual excludes its axis;
     //    clean axes remain claimable. The sentence covers only axes THIS run
     //    observed passing.
-    let Some(sentence) = sentences::positive_claim(&receipt) else {
+    let Some(sentence) = sentences::positive_claim(receipt) else {
         // No clean axis: print the axis blockers (the non-claim boundaries)
         // plus the non-claim sentences, and refuse.
         for line in sentences::open_refusal_lines(&receipt.residuals, &family) {

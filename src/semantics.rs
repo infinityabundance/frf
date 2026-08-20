@@ -20,7 +20,7 @@
 //! the same implementation.
 
 use crate::canon;
-use crate::error::Result;
+use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
 use serde_json::{json, Value};
@@ -49,15 +49,43 @@ pub fn court_semantic_identity(
     fixture_sha256: &str,
     comparator_semantics: &[ComparatorSemantic],
 ) -> Result<String> {
-    let envelope = &spec.admissibility_envelope;
-    let doc = json!({
-        "question": spec.question,
-        "falsifier": spec.falsifier,
+    court_semantic_doc(
+        &spec.question,
+        &spec.falsifier,
+        authority_sha256,
+        &spec.fixture.id,
+        fixture_sha256,
+        &spec.fixture.arguments,
+        &spec.admissibility_envelope,
+        comparator_semantics,
+    )
+    .and_then(|doc| hash_preimage("FRF/COURT/v1", &doc))
+}
+
+/// The court-semantic-identity preimage document, built from the fields that
+/// define the evidentiary question. Shared by the capture-time computation
+/// and the receipt-side rederivation ([`court_semantic_identity_from_receipt`]),
+/// so a receipt's `semantic_identity` can be proven to re-derive — in any
+/// implementation, from the receipt document alone.
+#[allow(clippy::too_many_arguments)] // one argument per question dimension; the doc is the protocol shape
+fn court_semantic_doc(
+    question: &str,
+    falsifier: &str,
+    authority_sha256: &str,
+    fixture_id: &str,
+    fixture_sha256: &str,
+    fixture_arguments: &[String],
+    envelope: &AdmissibilityEnvelope,
+    comparator_semantics: &[ComparatorSemantic],
+) -> Result<Value> {
+    Ok(json!({
+        "question": question,
+        "falsifier": falsifier,
         "authority_artifact_identity": authority_sha256,
         "fixture": {
-            "id": spec.fixture.id,
+            "id": fixture_id,
             "sha256": fixture_sha256,
-            "arguments": spec.fixture.arguments,
+            "arguments": fixture_arguments,
         },
         "envelope": {
             "fixture_family": envelope.fixture_family,
@@ -75,8 +103,96 @@ pub fn court_semantic_identity(
                 "specification_hash": c.specification_hash,
             }))
             .collect::<Vec<_>>(),
+    }))
+}
+
+/// Rederive the court semantic identity from an OpenReceipt document alone.
+/// The receipt carries everything the question is made of: question,
+/// falsifier, authority artifact hash, fixture id/hash/arguments, the
+/// envelope, and the comparator semantics. The validator requires exactly one
+/// fixture (v0 courts have one), so `fixtures[0]` is the fixture.
+pub fn court_semantic_identity_from_receipt(rec: &Receipt) -> Result<String> {
+    let envelope = AdmissibilityEnvelope {
+        fixture_family: rec.court.admissibility_envelope.fixture_family.clone(),
+        platforms: rec.court.admissibility_envelope.platforms.clone(),
+        observables: rec.court.admissibility_envelope.observables.clone(),
+        normalizers: rec.court.admissibility_envelope.normalizers.clone(),
+        replay_scope: rec.court.admissibility_envelope.replay_scope.clone(),
+    };
+    let fixture = rec.fixtures.first().ok_or_else(|| {
+        FrfError::new("receipt carries no fixture; cannot rederive the semantic identity")
+    })?;
+    court_semantic_doc(
+        &rec.court.question,
+        &rec.court.falsifier,
+        &rec.authority.identity_hash,
+        &fixture.id,
+        &fixture.hash,
+        &fixture.declared_arguments,
+        &envelope,
+        &rec.comparator_semantics,
+    )
+    .and_then(|doc| hash_preimage("FRF/COURT/v1", &doc))
+}
+
+/// Every input that defines one court run's identity. The preimage is a
+/// domain-separated canonical JSON document (`FRF/RUN/v1`); the identity is
+/// its SHA-256. Built at court time by the runner and REDERIVED by replay,
+/// receipt verification, and the verification suite from the capture's own
+/// recorded fields — the name is a claim until it is recomputed.
+pub struct RunPreimage<'a> {
+    pub court: &'a str,
+    pub authority: &'a str,
+    pub authority_interpreter: Option<&'a str>,
+    pub candidate_sha256: &'a str,
+    pub candidate_interpreter: Option<&'a str>,
+    pub fixture_sha256: &'a str,
+    pub arguments: &'a [String],
+    pub environment_digest: &'a str,
+    pub runner_hash: &'a str,
+    pub court_semantic_identity: &'a str,
+    pub reference: &'a SideCapture,
+    pub candidate: &'a SideCapture,
+    pub residuals: &'a [ResidualRecord],
+}
+
+/// The one run-identity function, shared by `court run`, replay, receipt
+/// verification, and the verification suite. No duplicate implementation:
+/// a capture whose recorded fields hash to a different id is refused.
+pub fn run_identity(p: &RunPreimage) -> Result<String> {
+    let side = |s: &SideCapture| {
+        json!({
+            "exit": s.exit,
+            "stdout_sha256": s.stdout_sha256,
+            "stderr_sha256": s.stderr_sha256,
+            "stdout_first_line": s.stdout_first_line,
+            "stderr_first_line": s.stderr_first_line,
+        })
+    };
+    let doc = json!({
+        "court": p.court,
+        "authority": p.authority,
+        "authority_interpreter": p.authority_interpreter,
+        "candidate_sha256": p.candidate_sha256,
+        "candidate_interpreter": p.candidate_interpreter,
+        "fixture_sha256": p.fixture_sha256,
+        "arguments": p.arguments,
+        "environment_digest": p.environment_digest,
+        "runner_hash": p.runner_hash,
+        "court_semantic_identity": p.court_semantic_identity,
+        "reference": side(p.reference),
+        "candidate": side(p.candidate),
+        "residuals": p
+            .residuals
+            .iter()
+            .map(|r| json!({
+                "kind": r.kind.as_str(),
+                "raw_reference": r.raw_reference,
+                "raw_candidate": r.raw_candidate,
+            }))
+            .collect::<Vec<_>>(),
     });
-    hash_preimage("FRF/COURT/v1", &doc)
+    hash_preimage("FRF/RUN/v1", &doc)
 }
 
 /// The residual fingerprint: stable across repeated executions and (with the

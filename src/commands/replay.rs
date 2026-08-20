@@ -19,14 +19,30 @@ use crate::store::Store;
 use std::path::Path;
 
 pub fn run(store: &Store, id: &str) -> Result<()> {
+    // The name is a claim until recomputed: a run id must rederive its run
+    // identity, and a receipt id must verify (content-addressed, semantically
+    // conformant, derived from its capture) BEFORE it may be replayed.
     let (run, capture) = match store.load_capture(id) {
-        Ok(capture) => (id.to_string(), capture),
-        Err(_) => match store.load_receipt(id) {
-            Ok(receipt) => (receipt.run.clone(), store.load_capture(&receipt.run)?),
-            Err(_) => {
-                return Err(FrfError::new(format!("no such run or receipt '{id}'")));
-            }
-        },
+        Ok(_) => {
+            let cv = crate::verify::load_capture_verified(store, id)?;
+            (cv.run, cv.capture)
+        }
+        Err(_) => {
+            let verified =
+                crate::verify::load_receipt_verified(store, id).map_err(|e| {
+                    match store.receipt_path(id) {
+                        Err(validation) => validation,
+                        Ok(p) if p.is_file() => e,
+                        Ok(_) => FrfError::new(format!("no such run or receipt '{id}'")),
+                    }
+                })?;
+            let body = verified.body();
+            // `expected_run_identity` is enforced by the receipt verifier;
+            // replay the exact run the receipt binds.
+            let run = body.run.clone();
+            let cv = crate::verify::load_capture_verified(store, &run)?;
+            (cv.run, cv.capture)
+        }
     };
 
     // -- checked admissibility environment ----------------------------------

@@ -164,6 +164,13 @@ fn captures_are_self_consistent() {
         assert_eq!(cap.schema_version, SCHEMA_CAPTURE);
         assert_eq!(cap.run, run_dir.file_name().unwrap().to_string_lossy());
 
+        // The tree is self-authenticating: the verified loader rederives the
+        // run identity from the capture's own recorded fields (the same
+        // function the court used), rehashes the raw side files, verifies the
+        // content-addressed snapshots, and refuses any drift.
+        frf::verify::load_capture_verified(&store, &cap.run)
+            .unwrap_or_else(|e| panic!("capture {} fails verification: {e}", cap.run));
+
         // Provenance, bound at observation time: the environment is captured
         // structurally, comparator semantics re-derive from the registry, and
         // the runner + comparator implementations are recorded — two
@@ -535,6 +542,14 @@ fn receipts_are_self_consistent() {
         let rec: Receipt = load_json(&path);
         assert_eq!(rec.schema_version, SCHEMA_RECEIPT, "receipt {id}");
 
+        // Evidentiary verification: the receipt must be content-addressed,
+        // semantically conformant, and derived from its verified capture
+        // (court, artifacts, environment, provenance, comparators,
+        // observables, residuals, fingerprints, tokens, dispositions,
+        // resolution edges) before the tree will treat it as evidence.
+        frf::verify::load_receipt_verified(&store, &id)
+            .unwrap_or_else(|e| panic!("receipt {id} fails verification: {e}"));
+
         // The id is content-addressed: receipt-{run}-{full SHA-256 of the
         // canonical (RFC 8785) body bytes}.
         let rest = id
@@ -589,6 +604,10 @@ fn receipts_are_self_consistent() {
         assert_eq!(rec.fixtures[0].id, cap.fixture);
         assert_eq!(rec.fixtures[0].hash, cap.fixture_sha256);
         assert_eq!(rec.fixtures[0].arguments, cap.arguments);
+        assert_eq!(
+            rec.fixtures[0].declared_arguments, cap.court_spec.fixture.arguments,
+            "the declared arguments are the semantic identity's input"
+        );
 
         // Runner + comparator semantics + environment are copied from the
         // capture (bound at observation time), never reconstructed at emit
@@ -754,7 +773,9 @@ fn claims_are_re_derivable_from_receipts() {
             "claim must reference its receipt"
         );
 
-        let rec: Receipt = store.load_receipt(&receipt_id).unwrap();
+        let verified = frf::verify::load_receipt_verified(&store, &receipt_id)
+            .unwrap_or_else(|e| panic!("claim {receipt_id}: receipt fails verification: {e}"));
+        let rec = verified.body();
         let family = &rec.court.admissibility_envelope.fixture_family;
 
         // A claim may only exist over a receipt whose run's evidence is not
@@ -766,7 +787,7 @@ fn claims_are_re_derivable_from_receipts() {
         );
 
         // Exactly one conservative sentence, byte-for-byte re-derivable.
-        let expected = sentences::positive_claim(&rec).expect("claimable receipt");
+        let expected = sentences::positive_claim(rec).expect("claimable receipt");
         assert_eq!(
             claim.positive,
             vec![expected],
