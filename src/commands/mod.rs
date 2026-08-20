@@ -2,6 +2,7 @@
 //! machine-readable id a command produces, stderr carries narration.
 
 pub mod admit;
+pub mod bundle;
 pub mod claim;
 pub mod court;
 pub mod dispose;
@@ -55,5 +56,16 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             replay::run(store, &id)?;
             Ok(())
         }
+        Command::Bundle { sub } => match sub {
+            BundleCmd::Export { receipt, output } => {
+                let output = output.unwrap_or_else(|| {
+                    std::path::PathBuf::from("bundles").join(format!("{receipt}.frf"))
+                });
+                let path = bundle::export(store, &receipt, &output)?;
+                println!("{}", path.display());
+                Ok(())
+            }
+            BundleCmd::Verify { path } => bundle::verify(&path),
+        },
     }
 }

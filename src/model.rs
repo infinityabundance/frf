@@ -53,6 +53,10 @@ pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v1";
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 
+/// Bundle manifest schema (OpenReceipt bundle: the receipt + its portable
+/// object closure — see `spec/openreceipt.md`).
+pub const SCHEMA_BUNDLE: &str = "frf-bundle-v1";
+
 // ---------------------------------------------------------------------------
 // Observable axes
 // ---------------------------------------------------------------------------

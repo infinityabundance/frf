@@ -56,6 +56,8 @@ Allow five minutes; it takes about five seconds.
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed, and each residual binds the EXACT disposition event (`disposition_event_id`) that supplied its state — a receipt points at an immutable node in the event graph, it does not merely copy state |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim, and it accepts ONLY a *verified* receipt: the id must equal the SHA-256 of the canonical body, the document must pass OpenReceipt semantic conformance, and it must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
 | `frf replay RUN_ID \| RECEIPT_ID` | rederives the run identity from the capture's own recorded fields (the name is a claim until recomputed) and re-executes the exact snapshotted artifacts + captured argv under a checked environment, requiring the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). A receipt id additionally enforces its `expected_run_identity`. Writes nothing: replay is evidence verification, not re-observation |
+| `frf bundle export RECEIPT_ID [--output DIR]` | exports a receipt's portable closure — manifest + receipt + captures + content-addressed objects + residuals + disposition-event chains (+ the compiled claim when present), sealed read-only, only after the receipt verifies against the source tree. The default output is `bundles/<receipt-id>.frf` |
+| `frf bundle verify BUNDLE.frf` | verifies a bundle against ITSELF: every inventory file must exist and hash to its recorded digest, the manifest must cover the receipt's complete re-computed closure, and the receipt must verify against the bundled evidence alone — no original source tree, no exporting FRF installation. Verification never executes anything |
 
 Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
@@ -124,13 +126,13 @@ says no more than that receipt licenses.
   and re-verify `fixed` resolution edges. Parsing data cannot turn it into
   evidence. The type distinction is structural — a `ReceiptVerified` cannot
   be fabricated outside the verifier.
-- **The event chain is still flat**: disposition events are immutable but
-  carry no parent hash, and receipts bind disposition STATE rather than a
-  specific event id; parent-hashed event chaining, `disposition_event_id`
-  binding, and resolution-receipt edges are the evidence-graph milestone.
+- **The resolution edge references a run, not a resolution RECEIPT**: a
+  `fixed` event's `evidence_refs` names the closing run; a resolution-receipt
+  edge and `frf status` (materializing the current graph state as a
+  projection) are future work.
 - **The receipt is a root into the evidence graph, not the whole graph**:
-  trajectories, minimization attempts, witness statements, and bundle
-  portability are future protocol objects (`frf verify bundle` etc.).
+  trajectories, minimization attempts, and witness statements are future
+  protocol objects; bundles already make the receipt's closure portable.
 - **The semantic validator is document-level by design**: cross-store
   checks (a `fixed` resolution edge actually closing, run existence) happen
   in the verified loader, not in `validate_semantics`; the corpus in
@@ -155,9 +157,13 @@ says no more than that receipt licenses.
   binds the exact `disposition_event_id` that supplied each disposition, so
   the verifier reloads that event and requires its fields to match exactly.
   Rewriting any event breaks every subsequent link and is refused on read.
-  Remaining: resolution-RECEIPT edges (the resolution edge currently
-  references a run), `frf status` to materialize the current graph state,
-  and bundle portability.
+- **Bundles are directories, not single files**: `frf bundle export`
+  writes a directory tree (`bundle.frf/`) that you may archive by hand
+  (tar/zip); a single-file container with an internal manifest is a future
+  packaging concern. Bundle verification is read-only and never executes —
+  replaying a bundle's runs (re-executing its snapshots under a checked
+  environment) is future work, as is exporting trajectories and witness
+  statements once those protocol objects exist.
 - **Claim dependency algebra is implemented**: a residual blocks only
   claims whose observable scope intersects it — `open`/`unknown` block
   their axis, `harness` invalidates the run's evidence entirely, and any
