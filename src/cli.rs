@@ -85,6 +85,11 @@ pub enum CourtCmd {
     Run {
         /// Path to the court manifest (working-directory-relative)
         manifest: PathBuf,
+        /// Execute the court this many times (fresh processes each time) and
+        /// write a residual trajectory per observed divergence fingerprint;
+        /// identical repetitions reuse the content-addressed run
+        #[arg(long, default_value_t = 1, value_name = "N")]
+        repeat: u32,
     },
 }
 

@@ -10,7 +10,7 @@
 //! no-op; emitting after a disposition change yields a new receipt. Receipts
 //! are never rewritten.
 
-use crate::error::Result;
+use crate::error::{FrfError, Result};
 use crate::host;
 use crate::kappa;
 use crate::model::*;
@@ -79,15 +79,21 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                 .map(|e| e.disposition.clone())
                 .unwrap_or(Disposition::Open);
             let fingerprint = crate::semantics::residual_fingerprint(r)?;
+            // The sign: a single-run court honestly records that drift/slew
+            // were not observed; a repeated-run court derives them from the
+            // residual's trajectory (fail closed if it is missing — the
+            // repeated court wrote it before a receipt could be emitted).
+            let sign = crate::verify::sign_for(store, &capture, r).map_err(|e| {
+                FrfError::new(format!(
+                    "receipt of run {run}: cannot derive the sign of residual {}: {e}",
+                    r.id
+                ))
+            })?;
             Ok(ReceiptResidual {
                 id: r.id.clone(),
                 axis: r.axis.as_str().to_string(),
                 kind: r.kind,
-                sign: ResidualSign {
-                    norm: "single-run".to_string(),
-                    drift: "not-observed".to_string(),
-                    slew: "not-observed".to_string(),
-                },
+                sign,
                 grammar_state: kappa::grammar_state(&disposition).to_string(),
                 raw_reference_hash: r.raw_reference_sha256.clone(),
                 raw_candidate_hash: r.raw_candidate_sha256.clone(),

@@ -236,6 +236,34 @@ fn fail(violations: &mut Vec<String>, msg: impl Into<String>) {
     violations.push(msg.into());
 }
 
+/// The sign a receipt entry MUST carry for a residual record of `capture`:
+/// single-run courts honestly record `not-observed` drift/slew; repeated-run
+/// courts derive them from the residual's trajectory (missing trajectory is
+/// an error — the repeated court wrote it before any receipt could exist).
+/// One function, shared by receipt emission and verification.
+pub(crate) fn sign_for(
+    store: &Store,
+    capture: &CaptureManifest,
+    record: &ResidualRecord,
+) -> Result<ResidualSign> {
+    match (capture.repeat_index, capture.repeat_count) {
+        (Some(_), Some(_)) => {
+            let fp = crate::semantics::residual_fingerprint(record)?;
+            let t = store.load_trajectory(&fp)?;
+            Ok(ResidualSign {
+                norm: "repeated-run".to_string(),
+                drift: t.derivation.drift.as_str().to_string(),
+                slew: t.derivation.slew.as_str().to_string(),
+            })
+        }
+        _ => Ok(ResidualSign {
+            norm: "single-run".to_string(),
+            drift: "not-observed".to_string(),
+            slew: "not-observed".to_string(),
+        }),
+    }
+}
+
 /// The disposition a receipt entry claims, rebuilt from its fields after the
 /// cross-field rules have validated them.
 fn disposition_of(res: &ReceiptResidual) -> Option<Disposition> {
@@ -412,6 +440,16 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
             return Err(FrfError::new(format!(
                 "receipt {id}: residual fingerprint of {} does not rederive",
                 res.id
+            )));
+        }
+        // The sign rederives: single-run stays not-observed; repeated-run
+        // must match the residual's trajectory derivation (missing trajectory
+        // is a refusal, not a fallback).
+        let expected_sign = sign_for(store, cap, &record)?;
+        if res.sign != expected_sign {
+            return Err(FrfError::new(format!(
+                "receipt {id}: residual {} sign does not rederive (recorded {:?}, expected {:?})",
+                res.id, res.sign, expected_sign
             )));
         }
         // Dispositions must be bound to the EXACT immutable event that
@@ -852,14 +890,42 @@ impl Receipt {
                     );
                 }
             }
-            if r.sign.norm != "single-run"
-                || r.sign.drift != "not-observed"
-                || r.sign.slew != "not-observed"
-            {
-                fail(&mut violations, format!(
-                    "residual {} sign must be {{norm: single-run, drift: not-observed, slew: not-observed}} in v0 (single-run courts)",
-                    r.id
-                ));
+            // The sign: a single-run court honestly records that drift/slew
+            // were not observed; a repeated-run court derives them from the
+            // residual's trajectory.
+            match r.sign.norm.as_str() {
+                "single-run" => {
+                    if r.sign.drift != "not-observed" || r.sign.slew != "not-observed" {
+                        fail(&mut violations, format!(
+                            "single-run residual {} must carry drift/slew not-observed — one run cannot observe them",
+                            r.id
+                        ));
+                    }
+                }
+                "repeated-run" => {
+                    if TrajectoryDrift::parse(&r.sign.drift).is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "repeated-run residual {} has invalid drift {:?}",
+                                r.id, r.sign.drift
+                            ),
+                        );
+                    }
+                    if TrajectorySlew::parse(&r.sign.slew).is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "repeated-run residual {} has invalid slew {:?}",
+                                r.id, r.sign.slew
+                            ),
+                        );
+                    }
+                }
+                other => fail(
+                    &mut violations,
+                    format!("residual {} has invalid sign norm {other:?}", r.id),
+                ),
             }
             if r.reproducer != self.run {
                 fail(

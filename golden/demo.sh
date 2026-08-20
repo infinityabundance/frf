@@ -38,9 +38,10 @@ step() { printf '\n== %s ==\n' "$*"; }
 step "1. admit the authority (golden/reference.sh as ref-cli 1.8.2)"
 "$FRF_BIN" --root "$ROOT" authority admit golden/reference.sh --name ref-cli --version 1.8.2
 
-step "2. run the court (authority vs candidate on the malformed fixture)"
-RUN_ID=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest.yaml)
+step "2. run the court (authority vs candidate on the malformed fixture, 3 repetitions)"
+RUN_ID=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest.yaml --repeat 3)
 echo "run: $RUN_ID"
+echo "-- the deterministic divergence is re-observed every repetition: drift/slew become evidence (see trajectories/)"
 
 step "3. try to compile a claim while both residuals are open (must be refused)"
 RECEIPT_OPEN=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")

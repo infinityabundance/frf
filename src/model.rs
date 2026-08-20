@@ -27,7 +27,12 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v4";
+/// Capture schema. v5 records the repetition context of a repeated-run
+/// court (`repeat_index`/`repeat_count`, absent for single-run courts): a
+/// run's identity stays content-addressed over the observation itself, and
+/// the repetition context is execution provenance that lets a receipt
+/// derive its `sign` from the residual's trajectory.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v5";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -56,6 +61,11 @@ pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 /// Bundle manifest schema (OpenReceipt bundle: the receipt + its portable
 /// object closure — see `spec/openreceipt.md`).
 pub const SCHEMA_BUNDLE: &str = "frf-bundle-v1";
+
+/// Residual trajectory schema: an ordered series of observations of one
+/// residual FINGERPRINT over a declared coordinate system (v0.1.17:
+/// `repeat_index` only), with a deterministic derivation.
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v1";
 
 // ---------------------------------------------------------------------------
 // Observable axes
@@ -512,6 +522,16 @@ pub struct CaptureManifest {
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
+    /// Repetition context when this run belongs to a repeated-run court
+    /// (`frf court run --repeat N`): which repetition it was, and of how
+    /// many. Absent for single-run courts. The run's IDENTITY never depends
+    /// on these — identical evidence is the same run whatever its repetition
+    /// context — but a receipt uses them to derive its `sign` from the
+    /// residual's trajectory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u32>,
 }
 
 /// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
@@ -822,6 +842,130 @@ pub struct TokenRecord {
 }
 
 // ---------------------------------------------------------------------------
+// Residual trajectory (the repeat axis in v0.1.17)
+// ---------------------------------------------------------------------------
+
+/// The deterministic repeat-axis classification of a residual fingerprint
+/// across N repetitions of a court: how STABLE the divergence is (drift) and
+/// what pattern of change it shows (slew). See
+/// [`crate::trajectory::classify_repeat`] for the exact table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrajectoryDrift {
+    /// Observed in every repetition.
+    Persistent,
+    /// Observed in some but not all repetitions.
+    Transient,
+    /// Transient AND observed in both the first and the last repetition
+    /// (it came back).
+    Recurrent,
+}
+
+impl TrajectoryDrift {
+    pub const ALL: [TrajectoryDrift; 3] = [
+        TrajectoryDrift::Persistent,
+        TrajectoryDrift::Transient,
+        TrajectoryDrift::Recurrent,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TrajectoryDrift::Persistent => "persistent",
+            TrajectoryDrift::Transient => "transient",
+            TrajectoryDrift::Recurrent => "recurrent",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        TrajectoryDrift::ALL
+            .iter()
+            .copied()
+            .find(|d| d.as_str() == s)
+    }
+}
+
+/// The slew classification of a repeat-axis trajectory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrajectorySlew {
+    /// No change across the axis.
+    Stable,
+    /// One boundary: appeared or disappeared at the start or end of the series.
+    Abrupt,
+    /// A contiguous interior window (appeared, then disappeared).
+    Burst,
+    /// Non-contiguous observation pattern.
+    Recurrent,
+}
+
+impl TrajectorySlew {
+    pub const ALL: [TrajectorySlew; 4] = [
+        TrajectorySlew::Stable,
+        TrajectorySlew::Abrupt,
+        TrajectorySlew::Burst,
+        TrajectorySlew::Recurrent,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TrajectorySlew::Stable => "stable",
+            TrajectorySlew::Abrupt => "abrupt",
+            TrajectorySlew::Burst => "burst",
+            TrajectorySlew::Recurrent => "recurrent",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        TrajectorySlew::ALL
+            .iter()
+            .copied()
+            .find(|s2| s2.as_str() == s)
+    }
+}
+
+/// The derived classification of one trajectory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrajectoryDerivation {
+    pub drift: TrajectoryDrift,
+    pub slew: TrajectorySlew,
+}
+
+/// One point of a trajectory: repetition index, the run that repetition
+/// produced (identical repetitions share the content-addressed run), whether
+/// the subject was observed in it, and the residual record that observed it
+/// (when observed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrajectoryObservation {
+    pub repetition: u32,
+    pub run: String,
+    pub observed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub residual: Option<String>,
+}
+
+/// The trajectory protocol object: an ordered series of observations of one
+/// residual FINGERPRINT over a declared coordinate system, with the
+/// deterministic derivation. The subject is the fingerprint, not a residual
+/// id: the same divergence re-observed in later runs (later candidates,
+/// authorities, environments) has the same subject, so trajectories can span
+/// executions once those axes exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrajectoryRecord {
+    pub schema_version: String,
+    /// The residual fingerprint (`FRF/RESIDUAL-FINGERPRINT/v1`) — the stable
+    /// identity of the divergence.
+    pub subject: String,
+    pub axis: String,
+    /// v0.1.17: only `repeat_index` is executable.
+    pub coordinate_system: String,
+    /// How many repetitions the series spans.
+    pub repeat_count: u32,
+    pub observations: Vec<TrajectoryObservation>,
+    pub derivation: TrajectoryDerivation,
+}
+
+// ---------------------------------------------------------------------------
 // Receipt (Appendix A, trimmed: verdict_case_file, taste_gates, invariants
 // are real but not needed to prove the kernel — see README Known Limitations)
 // ---------------------------------------------------------------------------
@@ -975,8 +1119,10 @@ pub enum ObservableVerdict {
 }
 
 /// Appendix A `sign` block. v0 runs each court once, so drift and slew cannot
-/// be observed; the honest values are literal, not enum-named guesses.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// be observed; the honest values are literal, not enum-named guesses. A
+/// repeated-run court (`--repeat N`) derives them from the residual's
+/// trajectory instead.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResidualSign {
     pub norm: String,
     pub drift: String,

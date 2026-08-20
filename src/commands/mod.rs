@@ -28,8 +28,8 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             }
         },
         Command::Court { sub } => match sub {
-            CourtCmd::Run { manifest } => {
-                let run = court::run(store, &manifest)?;
+            CourtCmd::Run { manifest, repeat } => {
+                let run = court::run(store, &manifest, repeat)?;
                 println!("{run}");
                 Ok(())
             }
