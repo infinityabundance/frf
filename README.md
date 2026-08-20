@@ -51,7 +51,7 @@ Allow five minutes; it takes about five seconds.
 | verb | what it does |
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
-| `frf court run MANIFEST.yaml [--repeat N]` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement. `--repeat N` re-executes the same court N times (fresh processes — nondeterminism is the point): identical repetitions reuse the content-addressed run, and each observed divergence fingerprint gets a `trajectories/<fingerprint>.yaml` record over the `repeat_index` axis with the deterministic drift/slew classification (persistent/transient/recurrent × stable/abrupt/burst/recurrent) |
+| `frf court run MANIFEST.yaml [--repeat N]` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement. Declared axes are compared by the in-binary comparators, or by an EXTERNAL comparator program when the manifest declares one (`comparators:` — the extension protocol: canonical JSON request on stdin, base64 streams, fail-closed response interpretation). `--repeat N` re-executes the same court N times (fresh processes — nondeterminism is the point): identical repetitions reuse the content-addressed run, and each observed divergence fingerprint gets a `trajectories/<fingerprint>.yaml` record over the `repeat_index` axis with the deterministic drift/slew classification (persistent/transient/recurrent × stable/abrupt/burst/recurrent) |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable, content-addressed disposition EVENT to `residuals/<id>.events/` (`fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`); a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). Events are hash-chained: each carries its own `event_id` (SHA-256 of its content), its `parent_event_id`, and its `evidence_refs` (the resolution run). The observation file is never rewritten; the current disposition is the projection of the last event |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed, and each residual binds the EXACT disposition event (`disposition_event_id`) that supplied its state — a receipt points at an immutable node in the event graph, it does not merely copy state |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim, and it accepts ONLY a *verified* receipt: the id must equal the SHA-256 of the canonical body, the document must pass OpenReceipt semantic conformance, and it must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
@@ -112,6 +112,18 @@ says no more than that receipt licenses.
 - **Wire/timing/filesystem/state courts** — `exit`, `stderr`, and `stdout`
   (first line only) are the v0.1.6 axes; a new axis is a new comparator,
   never a core change. Comparator identity is recorded in every receipt.
+- **Comparator extension protocol** (`spec/comparator.md`): an observable
+  axis can be served by an EXTERNAL program — any language — through a
+  canonical stdin/stdout protocol (base64 raw streams, canonical JSON
+  request/response). The declared relation/extractor/version define the
+  comparator's SEMANTIC identity (the same formula as the in-binary
+  registry: same spec, same question); the program's bytes define its
+  IMPLEMENTATION identity, snapshotted and re-hashed before every use, and
+  recorded in the capture's provenance alongside the runner hash. Failing,
+  indeterminate, contradictory, or undeclared comparators refuse the court.
+  Remaining: the normalizer/minimizer/capture-adapter/witness extension
+  protocols, and running the built-in comparators through the same subprocess
+  boundary.
 - **No GUI, dashboard, or metrics**; **no networked admission** — local executables, YAML on disk.
 - **stdout is compared on its first line only, and only when the court
   declares the `stdout` axis**; the full stdout stream is captured and

@@ -16,6 +16,7 @@ pub const CANONICAL_FILES: &[&str] = &[
     "golden/reference.sh",
     "golden/candidate.sh",
     "golden/work/candidate-fixed.sh",
+    "golden/comparators/stderr-first-line.py",
     "frf/courts/cli-malformed-input/manifest.yaml",
     "frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml",
     "frf/courts/cli-malformed-input/fixtures/malformed-path.conf",

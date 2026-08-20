@@ -1,6 +1,6 @@
 [package]
 name = "frf"
-version = "0.1.17"
+version = "0.1.18"
 edition = "2021"
 description = "Minimal reference implementation of the Forensic Residual Framework kernel: authority -> court -> capture -> residual -> endoduction -> disposition -> receipt -> claim."
 license = "MIT OR Apache-2.0"
@@ -20,6 +20,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
+# Comparator extension protocol: raw side streams are passed to external
+# comparator programs base64-encoded inside canonical JSON requests.
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -29,7 +29,7 @@ use crate::model::{
     EnvironmentIdentity, InterpreterExecutable, InterpreterIdentity, InterpreterResolver,
 };
 use sha2::{Digest, Sha256};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -104,13 +104,35 @@ pub struct ProcessOutcome {
 /// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
 /// before failing; everything else fails immediately.
 pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
+    run_impl(program, args, None)
+}
+
+/// Execute `program` with `args` and the given bytes on stdin (used by the
+/// comparator extension protocol: the canonical request is written to the
+/// comparator's stdin, which sees EOF once the write completes). Same
+/// hostile-runner guarantees as [`run_process`]: own process group, pipes
+/// drained concurrently (stdin written concurrently too), bounded timeout,
+/// descendant termination.
+pub fn run_process_with_stdin(
+    program: &Path,
+    args: &[String],
+    stdin: &[u8],
+) -> Result<ProcessOutcome> {
+    run_impl(program, args, Some(stdin))
+}
+
+fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<ProcessOutcome> {
     // Every side runs in its own process group (unix) so the harness can
     // terminate the entire tree — direct process plus any descendants that
     // inherited the capture pipes — when the side exits or times out.
     let mut command = Command::new(program);
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     #[cfg(unix)]
@@ -145,15 +167,27 @@ pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
     // Drain both pipes *concurrently* with the wait loop, then join before
     // returning. Reading after the child exits is a deadlock: a child that
     // fills a 64 KiB pipe blocks on write while the parent blocks on
-    // try_wait, and the run fails with a false timeout.
+    // try_wait, and the run fails with a false timeout. The same rule holds
+    // for stdin: it is written from its own thread and then closed (EOF), so
+    // a child that fills the output pipes while still consuming input cannot
+    // deadlock the harness.
     let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
+    let mut stdin_pipe = child.stdin.take();
+    let stdin_bytes = stdin.map(|b| b.to_vec());
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let timeout = exec_timeout();
     let start = Instant::now();
 
     let status = std::thread::scope(|s| {
+        if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin_bytes) {
+            // `pipe` is dropped when the thread ends, closing stdin: the
+            // comparator sees EOF after its request.
+            s.spawn(move || {
+                let _ = pipe.write_all(&bytes);
+            });
+        }
         let _drain_out = s.spawn(|| {
             let _ = stdout_pipe.read_to_end(&mut stdout);
         });
@@ -192,8 +226,8 @@ pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
         #[cfg(unix)]
         terminate_process_group(child.id());
         result
-        // `scope` joins both drain threads here, so the buffers are complete
-        // before the caller sees them.
+        // `scope` joins all threads here (stdin writer + both drains), so the
+        // buffers are complete before the caller sees them.
     })?;
 
     let exit = exit_string(&status);
