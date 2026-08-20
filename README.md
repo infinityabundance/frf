@@ -2,6 +2,11 @@
 
 [![ci](https://github.com/infinityabundance/frf/actions/workflows/ci.yml/badge.svg)](https://github.com/infinityabundance/frf/actions/workflows/ci.yml)
 
+> de Beer, R. (2026). The Forensic Residual Framework - Evidence-First Software
+> Construction, Behavioral Reconstruction, and Deterministic Residual
+> Endoduction from the DSFB Prior-Art Stack (Version v1.0). Zenodo.
+> <https://doi.org/10.5281/zenodo.22020499>
+
 A minimal reference implementation of the FRF kernel (de Beer, 2026):
 
 ```
@@ -12,12 +17,10 @@ Seven verbs, raw captures never rewritten, one bounded claim per receipt,
 and no code path that emits claim prose except the claim compiler.
 
 The canonical object model, field names, and schema are defined in
-*The Forensic Residual Framework* (R. de Beer, v1.0, 2026), which ships with
-this repo as `forensic_residual_framework.pdf` (LaTeX source:
-`forensic_residual_framework.tex`). This README does not re-explain FRF.
-Read Section 2 (kernel), Section 6 (endoduction), Section 10 (formal model),
-Section 12 (the worked court this tool reproduces), and Appendix A (receipt
-schema) there.
+*The Forensic Residual Framework* (de Beer, 2026; see the reference above).
+This README does not re-explain FRF. Read Section 2 (kernel), Section 6
+(endoduction), Section 10 (formal model), Section 12 (the worked court this
+tool reproduces), and Appendix A (receipt schema) there.
 
 ## Install
 
