@@ -1,0 +1,4 @@
+disposition: fixed
+reason: patched and re-observed
+resolution_run_id: run-cli-malformed-input-cafebabe
+closure_predicate: "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality"

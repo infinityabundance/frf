@@ -4,16 +4,18 @@
 //! from receipt fields, and nothing else writes into `claims/`.
 //!
 //! Positive-claim rule (Section 12 + the semantic non-bypass rule):
-//! - A declared axis is *claimable* when it has no residual, or when every
-//!   residual on it is `fixed` with a `resolution_run_id` — the court run
-//!   whose captures show the residual no longer reproduces. A disposition is
-//!   never evidence; the run is. `fixed` without that edge is not claimable.
-//! - No other closure licenses parity: `intentional` is a documented
-//!   divergence, `environmental` and `oracle_version` weaken the envelope
-//!   rather than claim it, and `harness`/`unknown`/`open` block entirely.
+//! - A positive parity claim is compiled ONLY from a receipt whose run
+//!   actually observed the axis passing — an axis is claimable iff this
+//!   receipt has no residual on it. A receipt that observed divergence can
+//!   never become a parity receipt, however its residuals are disposed: a
+//!   disposition links historical evidence (e.g. `fixed` with its resolution
+//!   run) but never rewrites what an old run demonstrated. Compile the
+//!   positive claim from the resolution run's receipt instead.
+//! - `open`, `unknown`, and `harness` block the entire claim; other closures
+//!   exclude only their own axis.
 //! - The compiled sentence is scoped to the executed court, the admitted
-//!   authority id, the fixture family, and the environment digest — never
-//!   beyond the receipt's surface.
+//!   authority id, the EXACT candidate artifact, the fixture family, and the
+//!   environment digest — never beyond the receipt's surface.
 
 use crate::model::*;
 
@@ -31,10 +33,11 @@ fn environment_label(env: &ReceiptEnvironment) -> String {
 
 /// The single conservative positive sentence, or `None` when a positive claim
 /// is not licensed: any blocking residual (open/unknown/harness) refuses the
-/// whole claim, and an axis is only claimable when it matched or was closed
-/// as `fixed` **with a resolution run**. `intentional` axes are documented
-/// divergences, `environmental`/`oracle_version` weaken the envelope — none
-/// of them licenses parity.
+/// whole claim, and an axis is claimable only when THIS receipt's run observed
+/// it passing (no residual on the axis). A disposed residual — `fixed`
+/// included — links history; it never makes the old failing observation into
+/// parity. The claim is attributed to the exact candidate artifact the run
+/// executed.
 pub fn positive_claim(r: &Receipt) -> Option<String> {
     let family = &r.court.admissibility_envelope.fixture_family;
     // Blocking dispositions refuse the entire claim, not just their axis.
@@ -46,15 +49,9 @@ pub fn positive_claim(r: &Receipt) -> Option<String> {
     }
     let mut clauses: Vec<String> = Vec::new();
     for obs in &r.observables {
-        // An axis is claimable only when every residual on it is fixed and
-        // points at its resolution run. The run itself is verified by the
-        // caller (claim compile / verify); here the edge must exist.
-        let claimable = r
-            .residuals
-            .iter()
-            .filter(|res| res.axis == obs.axis)
-            .all(|res| res.disposition == "fixed" && res.resolution_run_id.is_some());
-        if !claimable {
+        // The run observed a residual on this axis → the axis cannot be
+        // claimed as parity from this receipt, whatever the disposition.
+        if r.residuals.iter().any(|res| res.axis == obs.axis) {
             continue;
         }
         let clause = match obs.axis.as_str() {
@@ -70,9 +67,19 @@ pub fn positive_claim(r: &Receipt) -> Option<String> {
     let authority = format!("{}-{}", r.authority.name, r.authority.version);
     let env = environment_label(&r.environment);
     let court = &r.court.id;
+    // Attribute to the exact candidate artifact: name/version are labels, the
+    // identity hash is the executed bytes.
+    let digest = &r.candidate.identity_hash;
+    let short = if digest.len() >= 8 {
+        &digest[..8]
+    } else {
+        digest
+    };
     Some(format!(
         "For reference {authority}, fixture family {family}, and environment {env}, \
-         the candidate preserves {} for the {family} cases in court {court}.",
+         candidate {} {} ({short}) preserves {} for the {family} cases in court {court}.",
+        r.candidate.name,
+        r.candidate.version_or_commit,
         clauses.join(" and ")
     ))
 }
@@ -161,6 +168,7 @@ mod tests {
                 name: "cand-cli".into(),
                 version_or_commit: "0.1.0".into(),
                 build_profile: "debug".into(),
+                identity_hash: "c".repeat(64),
             },
             environment: env(),
             fixtures: vec![ReceiptFixture {
@@ -223,35 +231,35 @@ mod tests {
             disposition: disposition.into(),
             reason: None,
             resolution_run_id: None,
+            closure_predicate: None,
             reproducer: "replay".into(),
             invariant: String::new(),
             residual_fingerprint: "0".repeat(64),
         }
     }
 
-    /// A `fixed` receipt residual carrying its resolution run.
+    /// A `fixed` receipt residual carrying its resolution run and predicate.
     fn res_fixed(id: &str, axis: &str, run: &str) -> ReceiptResidual {
         let mut r = res(id, axis, "fixed");
         r.reason = Some("candidate patched".into());
         r.resolution_run_id = Some(run.into());
+        r.closure_predicate = Some(CLOSURE_PREDICATE_FIX_COURT.into());
         r
     }
 
     #[test]
-    fn golden_claim_sentence_shape() {
-        // exit fixed (with its resolution run), stderr intentional → the
-        // claim covers exit only.
+    fn claim_comes_from_the_run_that_observed_the_pass() {
+        // The positive claim is compiled from the RESOLUTION run's receipt:
+        // exit clean (no residual — the run observed the pass), stderr
+        // intentional. The sentence is attributed to the exact candidate
+        // artifact that ran.
         let mut r = receipt_base();
-        r.residuals.push(res_fixed(
-            "cli-exit-0001",
-            "exit",
-            "run-cli-malformed-input-verify",
-        ));
+        r.candidate.version_or_commit = "0.1.0-fixed".into();
         r.residuals
             .push(res("cli-text-0001", "stderr", "intentional"));
         let sentence = positive_claim(&r).unwrap();
         assert!(
-            sentence.starts_with("For reference ref-cli-1.8.2, fixture family malformed-input, and environment x86_64-linux (aabbccdd), the candidate preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input."),
+            sentence.starts_with("For reference ref-cli-1.8.2, fixture family malformed-input, and environment x86_64-linux (aabbccdd), candidate cand-cli 0.1.0-fixed (cccccccc) preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input."),
             "got: {sentence}"
         );
         assert!(!sentence.contains("stderr"));
@@ -259,26 +267,32 @@ mod tests {
     }
 
     #[test]
-    fn fixed_without_a_resolution_run_is_not_claimable() {
-        // The hole this tool closes: a bare `fixed` label licenses nothing.
-        let mut r = receipt_base();
-        r.residuals.push(res("cli-exit-0001", "exit", "fixed"));
-        r.residuals
-            .push(res("cli-text-0001", "stderr", "intentional"));
-        assert_eq!(positive_claim(&r), None);
-    }
-
-    #[test]
-    fn environmental_and_oracle_version_weaken_the_envelope_not_parity() {
-        for disposition in ["environmental", "oracle_version"] {
+    fn receipt_that_observed_divergence_never_yields_parity() {
+        // Whatever the disposition — open, fixed with its resolution run,
+        // intentional, environmental — a residual on the axis means THIS
+        // receipt's run observed divergence, so the axis is not claimable
+        // from this receipt. A disposition links history; it never rewrites
+        // the observation.
+        for disposition in [
+            "open",
+            "fixed",
+            "intentional",
+            "environmental",
+            "oracle_version",
+        ] {
             let mut r = receipt_base();
-            r.residuals.push(res("cli-exit-0001", "exit", disposition));
+            let res_entry = if disposition == "fixed" {
+                res_fixed("cli-exit-0001", "exit", "run-verify")
+            } else {
+                res("cli-exit-0001", "exit", disposition)
+            };
+            r.residuals.push(res_entry);
             r.residuals
                 .push(res("cli-text-0001", "stderr", "intentional"));
             assert_eq!(
                 positive_claim(&r),
                 None,
-                "{disposition} must not license parity"
+                "disposition '{disposition}' on an observed axis must not license parity from this receipt"
             );
         }
     }
@@ -297,8 +311,8 @@ mod tests {
 
     #[test]
     fn intentional_stderr_excludes_only_stderr() {
-        // Only stderr diverges (intentionally); exit matched, so the claim
-        // covers exit class alone.
+        // Only stderr diverges (intentionally); exit was observed passing, so
+        // the claim covers exit class alone.
         let mut r = receipt_base();
         r.residuals
             .push(res("cli-text-0001", "stderr", "intentional"));

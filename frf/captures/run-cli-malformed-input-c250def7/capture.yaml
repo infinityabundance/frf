@@ -1,5 +1,5 @@
 schema_version: frf-capture-v1
-run: run-cli-malformed-input-f951ec56
+run: run-cli-malformed-input-c250def7
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest.yaml
@@ -34,6 +34,7 @@ court_spec:
     - stderr
     normalizers: []
     replay_scope: single-run
+candidate_sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
 reference:
   exit: '2'
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35

@@ -69,17 +69,22 @@ fn disposition_from_receipt(res: &ReceiptResidual) -> Disposition {
                 .resolution_run_id
                 .clone()
                 .unwrap_or_else(|| panic!("fixed residual {} without a resolution_run_id", res.id));
+            let closure_predicate = res
+                .closure_predicate
+                .clone()
+                .unwrap_or_else(|| panic!("fixed residual {} without a closure_predicate", res.id));
             Disposition::Fixed {
                 reason,
                 resolution_run_id,
+                closure_predicate,
             }
         }
         other => {
             let kind = ClosureKind::parse(other)
                 .unwrap_or_else(|| panic!("unknown disposition '{other}' on {}", res.id));
             assert!(
-                res.resolution_run_id.is_none(),
-                "non-fixed residual {} carries a resolution_run_id",
+                res.resolution_run_id.is_none() && res.closure_predicate.is_none(),
+                "non-fixed residual {} carries a resolution_run_id or closure_predicate",
                 res.id
             );
             let reason = res
@@ -249,8 +254,29 @@ fn residuals_and_tokens_are_self_consistent() {
             r.id,
             r.run
         );
-        match &r.disposition {
-            Disposition::Open => assert!(r.disposition.reason().is_none()),
+        // The observation is bound to the exact candidate artifact that ran.
+        let capture = store.load_capture(&r.run).unwrap();
+        assert_eq!(
+            r.candidate_sha256, capture.candidate_sha256,
+            "residual {} candidate identity must match its run",
+            r.id
+        );
+        // The observation record must never carry a disposition.
+        let raw_yaml = fs::read_to_string(&path).unwrap();
+        assert!(
+            !raw_yaml.contains("disposition"),
+            "observation {} must be immutable (no disposition field)",
+            r.id
+        );
+        // Dispositions live in append-only events; the projection is the
+        // last event, and the token follows it.
+        let events = store.disposition_events(&r.id).unwrap();
+        let disposition = events
+            .last()
+            .map(|e| e.disposition.clone())
+            .unwrap_or(Disposition::Open);
+        match &disposition {
+            Disposition::Open => assert!(disposition.reason().is_none()),
             Disposition::Closed { reason, .. } => {
                 assert!(
                     !reason.trim().is_empty(),
@@ -266,6 +292,7 @@ fn residuals_and_tokens_are_self_consistent() {
             Disposition::Fixed {
                 reason,
                 resolution_run_id,
+                closure_predicate,
             } => {
                 assert!(
                     !reason.trim().is_empty() && !reason.contains('\n'),
@@ -277,21 +304,39 @@ fn residuals_and_tokens_are_self_consistent() {
                     "fixed residual {} lacks a resolution run",
                     r.id
                 );
-                // The resolution run must exist and must actually close the
-                // residual: same court, axis now agreeing. A disposition is
-                // not evidence; the run is.
                 assert!(
-                    store
-                        .run_closes_axis(resolution_run_id, &r.court, r.axis)
-                        .expect("resolution run must load and match court"),
-                    "resolution run {resolution_run_id} does not close residual {}",
+                    !closure_predicate.is_empty(),
+                    "fixed residual {} lacks a closure predicate",
                     r.id
                 );
+                // The resolution run must rerun the same question under a
+                // compatible envelope and actually close the residual.
+                store
+                    .resolution_compatibility(&r.run, resolution_run_id, r.axis)
+                    .expect("resolution run must satisfy the comparability predicate");
             }
         }
-        // The token file must be exactly κ(residual).
+        // Event sequence numbers are dense and start at 0001.
+        for (i, e) in events.iter().enumerate() {
+            assert_eq!(
+                e.residual_id, r.id,
+                "event {i} of {} has a mismatched residual_id",
+                r.id
+            );
+            assert!(
+                e.disposition.as_str() != "open",
+                "event {i} of {} is 'open' — events are closures only",
+                r.id
+            );
+        }
+        // The token file must be exactly κ(residual, projection).
         let token: TokenRecord = load(&store.token_path(&r.id).unwrap());
-        assert_eq!(token, kappa::kappa(&r), "token for {} drifted", r.id);
+        assert_eq!(
+            token,
+            kappa::kappa(&r, &disposition),
+            "token for {} drifted",
+            r.id
+        );
         count += 1;
     }
     assert!(count >= 2, "the golden path must leave two residuals");
@@ -409,17 +454,29 @@ fn receipts_are_self_consistent() {
             if res.disposition == "fixed" {
                 // Receipts are snapshots: the resolution edge is bound only
                 // for entries that were fixed at emit time, and it must match
-                // the residual file's.
+                // the projected disposition (the last event).
+                let projected = store.current_disposition(&res.id).unwrap();
                 assert_eq!(
                     res.resolution_run_id,
-                    record.disposition.resolution_run_id().map(str::to_string),
+                    projected.resolution_run_id().map(str::to_string),
                     "resolution edge for {} drifted",
+                    res.id
+                );
+                assert_eq!(
+                    res.closure_predicate.as_deref(),
+                    match &projected {
+                        Disposition::Fixed {
+                            closure_predicate, ..
+                        } => Some(closure_predicate.as_str()),
+                        _ => None,
+                    },
+                    "closure predicate for {} drifted",
                     res.id
                 );
             } else {
                 assert!(
-                    res.resolution_run_id.is_none(),
-                    "non-fixed entry {} carries a resolution_run_id",
+                    res.resolution_run_id.is_none() && res.closure_predicate.is_none(),
+                    "non-fixed entry {} carries a resolution_run_id or closure_predicate",
                     res.id
                 );
             }
@@ -432,9 +489,9 @@ fn receipts_are_self_consistent() {
         assert_eq!(rec.endoduction.schema_version, TOKEN_SCHEMA_VERSION);
         assert_eq!(rec.endoduction.tokens.len(), rec.residuals.len());
         for (res, token) in rec.residuals.iter().zip(&rec.endoduction.tokens) {
-            let mut seen = store.load_residual(&res.id).unwrap();
-            seen.disposition = disposition_from_receipt(res);
-            let k = kappa::kappa(&seen);
+            let seen = store.load_residual(&res.id).unwrap();
+            let disposition = disposition_from_receipt(res);
+            let k = kappa::kappa(&seen, &disposition);
             assert_eq!(token.residual_id, res.id);
             assert_eq!(token.token, k.token, "token for {}", res.id);
             assert_eq!(token.next_court, k.next_court);
@@ -512,14 +569,29 @@ fn claims_are_re_derivable_from_receipts() {
 
         // The claimed receipt reflects the current residual dispositions.
         for res in &rec.residuals {
-            let record = store.load_residual(&res.id).unwrap();
+            let projected = store.current_disposition(&res.id).unwrap();
             assert_eq!(
                 res.disposition,
-                record.disposition.as_str(),
+                projected.as_str(),
                 "receipt {receipt_id} disposition for {} is stale",
                 res.id
             );
         }
+
+        // The claim is attributed to the EXACT candidate artifact the
+        // receipt's run executed: the identity hash must equal the run's
+        // captured candidate bytes, never a label.
+        let rest = receipt_id
+            .strip_prefix("receipt-")
+            .unwrap_or_else(|| panic!("bad receipt id {receipt_id}"));
+        let (run, _) = rest
+            .rsplit_once('-')
+            .expect("receipt id must end in -hash8");
+        let cap = store.load_capture(run).unwrap();
+        assert_eq!(
+            claim.candidate.identity_hash, cap.candidate_sha256,
+            "claim {receipt_id} is attributed to a candidate artifact the run did not execute"
+        );
         found += 1;
     }
     assert!(found >= 1, "at least one compiled claim must exist");

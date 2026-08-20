@@ -1,15 +1,14 @@
 schema_version: frf-residual-v1
 id: cli-text-0002
 court: cli-malformed-input
-run: run-cli-malformed-input-14589ea6
+run: run-cli-malformed-input-52cfe6ba
 axis: stderr
 kind: text
 surface: first-diagnostic-line
 authority: ref-cli-1.8.2
 scope: malformed-input
+candidate_sha256: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
 raw_reference: 'tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive ''servre'''
 raw_candidate: 'error: unknown directive servre at line 4'
 raw_reference_sha256: 8ee3d9f0cbdee73d35f79fca0eff3702a462f6865540d1aaed9c6749cc8aa05a
 raw_candidate_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
-disposition: intentional
-reason: clearer diagnostic wording; documented divergence (re-observed by the resolution run)

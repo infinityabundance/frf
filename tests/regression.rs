@@ -11,11 +11,46 @@ use common::*;
 
 use std::fs;
 
+/// The immutable observation record.
 fn raw_residual(work: &Workdir, id: &str) -> serde_yaml::Value {
     serde_yaml::from_str(
         &fs::read_to_string(work.path(&format!("frf/residuals/{id}.yaml"))).unwrap(),
     )
     .unwrap()
+}
+
+/// The last appended disposition event (the projection).
+fn last_event(work: &Workdir, id: &str) -> serde_yaml::Value {
+    let dir = work.path(&format!("frf/residuals/{id}.events"));
+    let mut seqs: Vec<u32> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse().ok())
+        })
+        .collect();
+    seqs.sort_unstable();
+    let last = seqs.last().expect("at least one event");
+    serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.events/{last:04}.yaml")))
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+/// The projected disposition string of a residual (from its last event).
+fn projected_disposition(work: &Workdir, id: &str) -> String {
+    let events_dir = work.path(&format!("frf/residuals/{id}.events"));
+    if !events_dir.is_dir() {
+        return "open".to_string();
+    }
+    last_event(work, id)["disposition"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -263,15 +298,15 @@ fn closure_kinds_round_trip_and_claim_semantics() {
     );
     assert_success(&out, "dispose text");
 
-    // Every non-fixed closure round-trips through the file, in sequence, on
-    // the same residual (re-disposition is allowed; `open` is not). `fixed`
-    // is exercised separately: it needs a resolution run.
+    // Every non-fixed closure appends an event, in sequence, on the same
+    // residual (re-disposition is allowed; `open` is not). `fixed` is
+    // exercised separately: it needs a resolution run. Whatever the
+    // disposition, the ORIGINAL run's receipt observed divergence on exit,
+    // so it can never yield a parity claim.
     for (kind, expect_refusal) in [
-        // These weaken the envelope: no parity claim is licensed.
         ("environmental", "no declared observable axis"),
         ("oracle_version", "no declared observable axis"),
         ("intentional", "no declared observable axis"),
-        // These block outright.
         ("harness", "harness"),
         ("unknown", "unknown"),
     ] {
@@ -290,21 +325,29 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             ],
         );
         assert_success(&out, &format!("dispose {kind}"));
-        let rec = raw_residual(&work, "cli-exit-0001");
-        assert_eq!(rec["disposition"], kind);
-        assert_eq!(rec["reason"], format!("regression: {kind}"));
+        // The observation record stays immutable; the event carries the
+        // disposition.
         assert!(
-            rec.get("resolution_run_id").is_none(),
+            raw_residual(&work, "cli-exit-0001")
+                .get("disposition")
+                .is_none(),
+            "observation must never carry a disposition"
+        );
+        let event = last_event(&work, "cli-exit-0001");
+        assert_eq!(event["disposition"], kind);
+        assert_eq!(event["reason"], format!("regression: {kind}"));
+        assert!(
+            event.get("resolution_run_id").is_none(),
             "{kind} must not carry a resolution_run_id"
         );
-        // The token follows.
+        // The token follows the projection.
         let tok: serde_yaml::Value = serde_yaml::from_str(
             &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
         )
         .unwrap();
         assert_eq!(tok["token"], format!("exit/exit-class/class-change/{kind}"));
 
-        // Claim semantics per closure kind.
+        // Claim semantics per closure kind on the ORIGINAL run's receipt.
         let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
         assert_success(&out, "receipt emit");
         let receipt = stdout(&out);
@@ -335,7 +378,10 @@ fn closure_kinds_round_trip_and_claim_semantics() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("--resolution-run"));
 
-    // `fixed` backed by a real resolution run licenses the claim.
+    // `fixed` backed by a real resolution run appends the event with the
+    // verified predicate — but the ORIGINAL receipt still cannot become a
+    // parity receipt: it observed divergence. The positive claim belongs to
+    // the resolution run's receipt.
     let resolution_run = run_resolution_court(&work);
     let out = frf(
         &work,
@@ -354,15 +400,49 @@ fn closure_kinds_round_trip_and_claim_semantics() {
         ],
     );
     assert_success(&out, "dispose exit fixed with closure evidence");
-    let rec = raw_residual(&work, "cli-exit-0001");
-    assert_eq!(rec["disposition"], "fixed");
-    assert_eq!(rec["resolution_run_id"], resolution_run);
+    let event = last_event(&work, "cli-exit-0001");
+    assert_eq!(event["disposition"], "fixed");
+    assert_eq!(event["resolution_run_id"], resolution_run);
+    assert!(event["closure_predicate"]
+        .as_str()
+        .unwrap()
+        .contains("fix-court"));
+
+    // The resolution run re-observed the wording divergence; dispose it as
+    // intentional so the resolution run's receipt can carry the claim.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-text-0002",
+            "--disposition",
+            "intentional",
+            "--reason",
+            "clearer diagnostic wording; documented divergence",
+        ],
+    );
+    assert_success(&out, "dispose text 0002");
 
     let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
-    assert_success(&out, "receipt emit");
-    let receipt = stdout(&out);
-    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
-    assert_success(&out, "claim compile after evidenced fix");
+    assert_success(&out, "receipt emit (original run)");
+    let receipt_old = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt_old]);
+    assert!(
+        !out.status.success(),
+        "the failing run's receipt must never become a parity receipt"
+    );
+    assert!(stderr(&out).contains("compile the claim from the resolution run"));
+
+    // The claim comes from the resolution run's receipt, which observed the
+    // exit axis passing.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &resolution_run]);
+    assert_success(&out, "receipt emit (resolution run)");
+    let receipt_res = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt_res]);
+    assert_success(&out, "claim compile from the resolution run");
     let text = stdout(&out);
     assert!(text.contains("malformed-input exit class"));
 }
@@ -449,13 +529,101 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
     );
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("does not close residual"),
+        stderr(&out).contains("does not close"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // The comparability predicate holds EVERYTHING but the candidate stable:
+    // a run with a different fixture id must be refused before axis checks.
+    let variant2 = work.path("frf/courts/variant2.yaml");
+    let text = fs::read_to_string(work.path(MANIFEST)).unwrap();
+    let text = text
+        .replace("    name: cand-cli", "    name: cand-cli-fix2")
+        .replace("id: malformed-path.conf", "id: malformed-path2.conf");
+    fs::write(&variant2, text).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "frf/courts/variant2.yaml"],
+    );
+    assert_success(&out, "court run (different fixture id)");
+    let other_fixture_run = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &other_fixture_run,
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("fixture id differs"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // A run under a different admitted authority must be refused.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "authority",
+            "admit",
+            "golden/reference.sh",
+            "--name",
+            "ref-cli2",
+            "--version",
+            "1.8.2",
+        ],
+    );
+    assert_success(&out, "admit second authority");
+    let variant3 = work.path("frf/courts/variant3.yaml");
+    let text = fs::read_to_string(work.path(MANIFEST)).unwrap();
+    let text = text
+        .replace("    name: cand-cli", "    name: cand-cli-fix3")
+        .replace("  authority: ref-cli-1.8.2", "  authority: ref-cli2-1.8.2");
+    fs::write(&variant3, text).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "frf/courts/variant3.yaml"],
+    );
+    assert_success(&out, "court run (different authority)");
+    let other_authority_run = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &other_authority_run,
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("authority differs"),
         "stderr: {}",
         stderr(&out)
     );
 
     // And the residual is still open after all refusals.
-    assert_eq!(raw_residual(&work, "cli-exit-0001")["disposition"], "open");
+    assert_eq!(projected_disposition(&work, "cli-exit-0001"), "open");
 }
 
 #[test]
@@ -519,8 +687,71 @@ fn disposition_reason_gate() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("single line"));
 
-    // The residual is still open after all refusals.
-    assert_eq!(raw_residual(&work, "cli-exit-0001")["disposition"], "open");
+    // The residual is still open after all refusals (no events appended).
+    assert_eq!(projected_disposition(&work, "cli-exit-0001"), "open");
+}
+
+#[test]
+fn dispositions_are_append_only_events() {
+    let work = Workdir::new("append-only");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    run_court(&work);
+
+    // The observation record is byte-identical before and after disposal.
+    let observation = work.path("frf/residuals/cli-text-0001.yaml");
+    let before = fs::read(&observation).unwrap();
+
+    let dispose = |kind: &str, reason: &str| {
+        let out = frf(
+            &work,
+            &[
+                "--root",
+                ROOT,
+                "residual",
+                "dispose",
+                "cli-text-0001",
+                "--disposition",
+                kind,
+                "--reason",
+                reason,
+            ],
+        );
+        assert_success(&out, &format!("dispose {kind}"));
+    };
+    dispose("intentional", "clearer wording");
+    dispose("harness", "runner contamination suspected");
+    dispose("unknown", "reclassified after review");
+
+    // The observation never changed.
+    assert_eq!(
+        fs::read(&observation).unwrap(),
+        before,
+        "observation must be immutable"
+    );
+
+    // Three immutable events, in order, each carrying its own reason; the
+    // projection is the last one.
+    let events_dir = work.path("frf/residuals/cli-text-0001.events");
+    let names: Vec<String> = fs::read_dir(&events_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".yaml"))
+        .collect::<Vec<_>>();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(sorted, vec!["0001.yaml", "0002.yaml", "0003.yaml"]);
+    let e1: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(events_dir.join("0001.yaml")).unwrap()).unwrap();
+    assert_eq!(e1["disposition"], "intentional");
+    assert_eq!(e1["reason"], "clearer wording");
+    assert_eq!(projected_disposition(&work, "cli-text-0001"), "unknown");
+
+    // The trajectory survives: every event is still there after the last.
+    let e2: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(events_dir.join("0002.yaml")).unwrap()).unwrap();
+    assert_eq!(e2["disposition"], "harness");
 }
 
 #[test]

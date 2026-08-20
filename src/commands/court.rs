@@ -96,6 +96,9 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     let reference_out = host::run_process(authority_path, &arguments)?;
     let candidate_out = host::run_process(candidate_path, &arguments)?;
     let environment_digest = host::environment_digest();
+    // Bind the exact candidate artifact: labels are distrustful; the executed
+    // bytes are the identity.
+    let candidate_sha256 = host::sha256_file(candidate_path)?;
 
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
@@ -125,11 +128,11 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
                 surface,
                 authority: authority.id.clone(),
                 scope: spec.admissibility_envelope.fixture_family.clone(),
+                candidate_sha256: candidate_sha256.clone(),
                 raw_reference: raw_ref,
                 raw_candidate: raw_cand,
                 raw_reference_sha256: String::new(),
                 raw_candidate_sha256: String::new(),
-                disposition: Disposition::Open,
             });
         }
     }
@@ -137,10 +140,11 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     // -- content-address the run ----------------------------------------------
 
     let mut evidence = format!(
-        "court={}\nauthority={}\ncandidate={}\nfixture={}\nargs={:?}\nenv={}\nreference={}\ncandidate={}",
+        "court={}\nauthority={}\ncandidate={}|{}\nfixture={}\nargs={:?}\nenv={}\nreference={}\ncandidate={}",
         spec.id,
         authority.id,
         spec.candidate.name,
+        candidate_sha256,
         fixture_sha256,
         arguments,
         environment_digest,
@@ -174,13 +178,16 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     write_side_files(&run_dir, "reference", &reference_out, &reference)?;
     write_side_files(&run_dir, "candidate", &candidate_out, &candidate)?;
 
-    // Fill in run id + axis hashes, then persist residuals and tokens.
+    // Fill in run id + axis hashes, then persist the immutable observation
+    // records and their (open) endoduction tokens.
     for r in &mut residuals {
         r.run = run.clone();
         r.raw_reference_sha256 = host::sha256_bytes(r.raw_reference.as_bytes());
         r.raw_candidate_sha256 = host::sha256_bytes(r.raw_candidate.as_bytes());
-        store.write_residual(r)?;
-        let token = crate::kappa::kappa(r);
+        let yaml = store.to_yaml(r)?;
+        store.write_once(&store.residual_path(&r.id)?, &yaml)?;
+        store.write_token(r, &Disposition::Open)?;
+        let token = crate::kappa::kappa(r, &Disposition::Open);
         eprintln!(
             "residual {} ({}) open: reference={} candidate={} -> token {} -> {}",
             r.id,
@@ -205,6 +212,7 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
         arguments,
         environment_digest,
         court_spec: spec.clone(),
+        candidate_sha256,
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),

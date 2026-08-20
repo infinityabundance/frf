@@ -7,17 +7,19 @@
 //!    (`cli-exit-*`, `cli-text-*`), raw captures, endoduction tokens;
 //! 2. refuse a positive claim while the residuals are open;
 //! 3. refuse `fixed` without a resolution run; accept `fixed` only when
-//!    backed by a NEW court run whose captures show the residual no longer
-//!    reproduces, and accept `intentional` for the documented wording
-//!    divergence;
-//! 4. emit the final receipt (with the resolution edge bound) and compile the
-//!    bounded claim, with the Section 12 non-claim printed next to it.
+//!    backed by a NEW court run that reran the same question under a
+//!    compatible envelope and shows the residual no longer reproduces;
+//!    accept `intentional` for the documented wording divergence;
+//! 4. preserve the original receipt as what it was — it can never yield a
+//!    parity claim, however its residuals are disposed — and compile the
+//!    bounded claim from the RESOLUTION run's receipt, attributed to the
+//!    exact candidate artifact (0.1.0-fixed) that actually passed, with the
+//!    Section 12 non-claim printed next to it.
 
 mod common;
 use common::*;
 
 use std::fs;
-use std::path::PathBuf;
 
 #[test]
 fn golden_path_end_to_end() {
@@ -86,7 +88,16 @@ fn golden_path_end_to_end() {
             .starts_with('1')
     );
 
-    // Two residuals, both open, with endoduction tokens.
+    // The capture manifest binds the exact candidate artifact.
+    let capture: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("{root}/captures/{run}/capture.yaml"))).unwrap(),
+    )
+    .unwrap();
+    let candidate_hash = capture["candidate_sha256"].as_str().unwrap().to_string();
+    assert_eq!(candidate_hash.len(), 64);
+
+    // Two residuals, both open, with endoduction tokens; the observation
+    // records carry NO disposition (dispositions are events).
     let exit_residual: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.yaml")).unwrap(),
     )
@@ -94,7 +105,14 @@ fn golden_path_end_to_end() {
     assert_eq!(exit_residual["kind"], "exit");
     assert_eq!(exit_residual["raw_reference"], "2");
     assert_eq!(exit_residual["raw_candidate"], "1");
-    assert_eq!(exit_residual["disposition"], "open");
+    assert!(
+        exit_residual.get("disposition").is_none(),
+        "observations must not carry dispositions"
+    );
+    assert_eq!(
+        exit_residual["candidate_sha256"].as_str().unwrap(),
+        candidate_hash
+    );
 
     let text_residual: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-text-0001.yaml")).unwrap(),
@@ -102,7 +120,6 @@ fn golden_path_end_to_end() {
     .unwrap();
     assert_eq!(text_residual["kind"], "text");
     assert_eq!(text_residual["surface"], "first-diagnostic-line");
-    assert_eq!(text_residual["disposition"], "open");
     let ref_line = text_residual["raw_reference"].as_str().unwrap();
     assert!(
         ref_line.contains("malformed-path.conf:4: unknown directive 'servre'"),
@@ -268,8 +285,8 @@ fn golden_path_end_to_end() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no such residual"));
 
-    // Patch the candidate, re-run the court, and only then dispose `fixed`
-    // with the run that shows the residual no longer reproduces.
+    // Patch the candidate, re-run the court under the same question/envelope,
+    // and only then dispose `fixed` with the run that closes the residual.
     let resolution_run = run_resolution_court(&work);
     let out = frf(
         &work,
@@ -320,53 +337,49 @@ fn golden_path_end_to_end() {
     );
     assert_success(&out, "dispose text 0002");
 
+    // The observation record is untouched; the disposition is an appended
+    // event carrying the resolution edge and the verified predicate.
     let exit_residual: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.yaml")).unwrap(),
     )
     .unwrap();
-    assert_eq!(exit_residual["disposition"], "fixed");
-    assert!(exit_residual["reason"]
+    assert!(
+        exit_residual.get("disposition").is_none(),
+        "observation must remain immutable"
+    );
+    let event: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.events/0001.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(event["disposition"], "fixed");
+    assert!(event["reason"].as_str().unwrap().contains("patched"));
+    assert_eq!(event["resolution_run_id"].as_str().unwrap(), resolution_run);
+    assert!(event["closure_predicate"]
         .as_str()
         .unwrap()
-        .contains("patched"));
-    assert_eq!(
-        exit_residual["resolution_run_id"].as_str().unwrap(),
-        resolution_run,
-        "the residual record must bind its resolution run"
-    );
-    // The token file follows the disposition.
+        .contains("fix-court"));
+    // The token file follows the projected disposition.
     let exit_token: serde_yaml::Value = serde_yaml::from_str(
         &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_token["token"], "exit/exit-class/class-change/fixed");
 
-    // -- 5. final receipt + bounded claim ------------------------------------------
+    // -- 5. the old receipt stays what it was; the claim comes from the
+    //       resolution run ---------------------------------------------------------
 
     let out = frf(&work, &["--root", root, "receipt", "emit", &run]);
-    assert_success(&out, "receipt emit (final)");
-    let receipt_final = stdout(&out);
+    assert_success(&out, "receipt emit (original run, after dispositions)");
+    let receipt_old = stdout(&out);
     assert_ne!(
-        receipt_final, receipt_open,
+        receipt_old, receipt_open,
         "re-emitting after a disposition change must produce a new receipt"
     );
 
     let receipt_yaml: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{root}/receipts/{receipt_final}.yaml"))).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/receipts/{receipt_old}.yaml"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(
-        receipt_yaml["authority"]["identity_hash"]
-            .as_str()
-            .unwrap()
-            .len(),
-        64
-    );
-    assert!(receipt_yaml["claims"]["blocked_by_open_residuals"]
-        .as_sequence()
-        .unwrap()
-        .is_empty());
-    // The receipt binds the resolution edge.
     let exit_entry = receipt_yaml["residuals"]
         .as_sequence()
         .unwrap()
@@ -378,9 +391,34 @@ fn golden_path_end_to_end() {
         resolution_run,
         "the receipt must bind the resolution edge"
     );
+    assert!(exit_entry["closure_predicate"]
+        .as_str()
+        .unwrap()
+        .contains("fix-court"));
+
+    // The original (failing) run's receipt can never yield a parity claim,
+    // however its residuals are disposed.
+    let out = frf(&work, &["--root", root, "claim", "compile", &receipt_old]);
+    assert!(
+        !out.status.success(),
+        "the failing run's receipt must never become parity"
+    );
+    assert!(
+        stderr(&out).contains("compile the claim from the resolution run"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains(&resolution_run));
+
+    // The positive claim is compiled from the resolution run's receipt: the
+    // run that actually observed the passing candidate.
+    let out = frf(&work, &["--root", root, "receipt", "emit", &resolution_run]);
+    assert_success(&out, "receipt emit (resolution run)");
+    let receipt_final = stdout(&out);
+    assert_ne!(receipt_final, receipt_old);
 
     let out = frf(&work, &["--root", root, "claim", "compile", &receipt_final]);
-    assert_success(&out, "claim compile (final)");
+    assert_success(&out, "claim compile (resolution run)");
     let out_text = stdout(&out);
     assert!(
         out_text.contains(
@@ -388,9 +426,21 @@ fn golden_path_end_to_end() {
         ),
         "bounded claim sentence: {out_text}"
     );
+    // Attributed to the exact candidate artifact that actually passed — the
+    // resolution run's candidate (H1), not the original failing one (H0).
+    let res_capture: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("{root}/captures/{resolution_run}/capture.yaml")))
+            .unwrap(),
+    )
+    .unwrap();
+    let h1_hash = res_capture["candidate_sha256"].as_str().unwrap();
+    assert_ne!(h1_hash, candidate_hash, "H1 must differ from H0");
+    let cand_short = &h1_hash[..8];
     assert!(
-        out_text.contains("the candidate preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input."),
-        "claim scope: {out_text}"
+        out_text.contains(&format!(
+            "candidate cand-cli 0.1.0-fixed ({cand_short}) preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input."
+        )),
+        "claim attribution: {out_text}"
     );
     assert!(
         out_text.contains("This receipt does not establish byte-identical stderr, full CLI compatibility, or a drop-in replacement claim."),
@@ -405,6 +455,13 @@ fn golden_path_end_to_end() {
     let claim_yaml: serde_yaml::Value =
         serde_yaml::from_str(&fs::read_to_string(&claim_path).unwrap()).unwrap();
     assert_eq!(claim_yaml["receipt"], receipt_final);
+    assert_eq!(claim_yaml["candidate"]["name"], "cand-cli");
+    assert_eq!(claim_yaml["candidate"]["version_or_commit"], "0.1.0-fixed");
+    assert_eq!(
+        claim_yaml["candidate"]["identity_hash"].as_str().unwrap(),
+        h1_hash,
+        "the claim names the candidate artifact that actually passed"
+    );
     let positive = claim_yaml["positive"].as_sequence().unwrap();
     assert_eq!(positive.len(), 1, "exactly one conservative sentence");
 
@@ -427,13 +484,12 @@ fn golden_path_end_to_end() {
 fn raw_captures_are_immutable() {
     let work = Workdir::new("immutable");
     work.copy_canonical_tree();
-    let root = ROOT;
 
     admit_reference(&work);
     let run = run_court(&work);
 
     // Re-running the identical court must refuse (content-addressed captures).
-    let out = frf(&work, &["--root", root, "court", "run", MANIFEST]);
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("already exists"),
@@ -442,7 +498,7 @@ fn raw_captures_are_immutable() {
     );
 
     // The raw stderr file must be byte-identical to what the reference wrote.
-    let raw = fs::read(work.path(&format!("{root}/captures/{run}/reference.stderr"))).unwrap();
+    let raw = fs::read(work.path(&format!("{ROOT}/captures/{run}/reference.stderr"))).unwrap();
     assert_eq!(
         String::from_utf8_lossy(&raw),
         "tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive 'servre'\n"
@@ -456,21 +512,20 @@ fn refusal_writes_no_claim_file() {
     // written to claims/.
     let work = Workdir::new("refusal");
     work.copy_canonical_tree();
-    let root = ROOT;
 
     admit_reference(&work);
     let run = run_court(&work);
-    let out = frf(&work, &["--root", root, "receipt", "emit", &run]);
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
     assert_success(&out, "receipt emit");
     let receipt = stdout(&out);
 
-    let out = frf(&work, &["--root", root, "claim", "compile", &receipt]);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
         stdout(&out).is_empty(),
         "no claim prose on stdout when refused"
     );
-    let claims_dir = work.path(&format!("{root}/claims"));
+    let claims_dir = work.path(&format!("{ROOT}/claims"));
     assert!(
         fs::read_dir(&claims_dir).unwrap().next().is_none(),
         "refused compile must not write a claim file"
@@ -481,7 +536,7 @@ fn refusal_writes_no_claim_file() {
 fn tree_imports_resolve() {
     // Guard: the canonical manifest and fixture files exist in the repo, so
     // every other test's copy_canonical_tree works.
-    let src_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for rel in CANONICAL_FILES {
         assert!(src_root.join(rel).is_file(), "missing canonical file {rel}");
     }

@@ -67,6 +67,9 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
     let receipt_residuals: Vec<ReceiptResidual> = residuals
         .iter()
         .map(|r| {
+            // The disposition is the projection of the residual's append-only
+            // event history at emit time; the observation itself is immutable.
+            let disposition = store.current_disposition(&r.id)?;
             let fingerprint = host::sha256_bytes(
                 format!(
                     "{}|{}|{}|{}",
@@ -77,7 +80,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                 )
                 .as_bytes(),
             );
-            ReceiptResidual {
+            Ok(ReceiptResidual {
                 id: r.id.clone(),
                 axis: r.axis.as_str().to_string(),
                 kind: r.kind,
@@ -86,18 +89,24 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                     drift: "not-observed".to_string(),
                     slew: "not-observed".to_string(),
                 },
-                grammar_state: kappa::grammar_state(&r.disposition).to_string(),
+                grammar_state: kappa::grammar_state(&disposition).to_string(),
                 raw_reference_hash: r.raw_reference_sha256.clone(),
                 raw_candidate_hash: r.raw_candidate_sha256.clone(),
-                disposition: r.disposition.as_str().to_string(),
-                reason: r.disposition.reason().map(|s| s.to_string()),
-                resolution_run_id: r.disposition.resolution_run_id().map(|s| s.to_string()),
+                disposition: disposition.as_str().to_string(),
+                reason: disposition.reason().map(|s| s.to_string()),
+                resolution_run_id: disposition.resolution_run_id().map(|s| s.to_string()),
+                closure_predicate: match &disposition {
+                    Disposition::Fixed {
+                        closure_predicate, ..
+                    } => Some(closure_predicate.clone()),
+                    _ => None,
+                },
                 reproducer: replay_command.clone(),
                 invariant: String::new(),
                 residual_fingerprint: fingerprint,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     // Draft the receipt body; the id is a hash of this body.
     let blocked = crate::sentences::refusal_lines_from_residuals(&receipt_residuals, family);
@@ -127,6 +136,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             name: spec.candidate.name.clone(),
             version_or_commit: spec.candidate.version_or_commit.clone(),
             build_profile: spec.candidate.build_profile.clone(),
+            identity_hash: capture.candidate_sha256.clone(),
         },
         environment: ReceiptEnvironment {
             os: std::env::consts::OS.to_string(),
@@ -146,7 +156,10 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             tokens: residuals
                 .iter()
                 .map(|r| {
-                    let token = kappa::kappa(r);
+                    let disposition = store
+                        .current_disposition(&r.id)
+                        .unwrap_or(Disposition::Open);
+                    let token = kappa::kappa(r, &disposition);
                     ReceiptToken {
                         residual_id: r.id.clone(),
                         token: token.token,
@@ -179,15 +192,16 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         return Ok(id);
     }
     store.write_once(&path, &yaml)?;
-    let open_count = residuals
+    let blocking_count = body
+        .residuals
         .iter()
-        .filter(|r| r.disposition.is_blocking())
+        .filter(|r| matches!(r.disposition.as_str(), "open" | "unknown" | "harness"))
         .count();
     eprintln!(
         "receipt {id}: {} observable(s), {} residual(s) ({} blocking), tokens bound",
         body.observables.len(),
-        residuals.len(),
-        open_count
+        body.residuals.len(),
+        blocking_count
     );
     Ok(id)
 }
