@@ -1,4 +1,4 @@
-# frf-rs — the Forensic Residual Framework kernel, executed
+# frf — the Forensic Residual Framework kernel, executed
 
 [![ci](https://github.com/infinityabundance/frf/actions/workflows/ci.yml/badge.svg)](https://github.com/infinityabundance/frf/actions/workflows/ci.yml)
 

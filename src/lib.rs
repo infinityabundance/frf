@@ -1,4 +1,4 @@
-//! frf-rs — the Forensic Residual Framework kernel, executed.
+//! frf — the Forensic Residual Framework kernel, executed.
 //!
 //! Library root. The binary (`frf`) is a thin argument-parsing shell over
 //! [`commands::dispatch`]; everything testable lives here so the regression,

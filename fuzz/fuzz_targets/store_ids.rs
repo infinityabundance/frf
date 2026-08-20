@@ -7,7 +7,7 @@
 
 #![no_main]
 
-use frf_rs::store::{is_valid_id, validate_id};
+use frf::store::{is_valid_id, validate_id};
 use libfuzzer_sys::fuzz_target;
 use std::path::PathBuf;
 
