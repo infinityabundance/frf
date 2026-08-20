@@ -93,7 +93,10 @@ fn golden_path_end_to_end() {
         &fs::read_to_string(work.path(&format!("{root}/captures/{run}/capture.yaml"))).unwrap(),
     )
     .unwrap();
-    let candidate_hash = capture["candidate_sha256"].as_str().unwrap().to_string();
+    let candidate_hash = capture["candidate_artifact"]["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(candidate_hash.len(), 64);
 
     // Two residuals, both open, with endoduction tokens; the observation
@@ -122,8 +125,12 @@ fn golden_path_end_to_end() {
     assert_eq!(text_residual["surface"], "first-diagnostic-line");
     let ref_line = text_residual["raw_reference"].as_str().unwrap();
     assert!(
-        ref_line.contains("malformed-path.conf:4: unknown directive 'servre'"),
+        ref_line.contains(":4: unknown directive 'servre'"),
         "reference stderr line: {ref_line}"
+    );
+    assert!(
+        ref_line.contains("objects/sha256/"),
+        "the side reads the content-addressed fixture snapshot: {ref_line}"
     );
     let cand_line = text_residual["raw_candidate"].as_str().unwrap();
     assert_eq!(cand_line, "error: unknown directive servre at line 4");
@@ -433,7 +440,9 @@ fn golden_path_end_to_end() {
             .unwrap(),
     )
     .unwrap();
-    let h1_hash = res_capture["candidate_sha256"].as_str().unwrap();
+    let h1_hash = res_capture["candidate_artifact"]["sha256"]
+        .as_str()
+        .unwrap();
     assert_ne!(h1_hash, candidate_hash, "H1 must differ from H0");
     let cand_short = &h1_hash[..8];
     assert!(
@@ -497,11 +506,14 @@ fn raw_captures_are_immutable() {
         stderr(&out)
     );
 
-    // The raw stderr file must be byte-identical to what the reference wrote.
+    // The raw stderr file must be byte-identical to what the reference wrote:
+    // the side reports the content-addressed fixture snapshot path it opened.
     let raw = fs::read(work.path(&format!("{ROOT}/captures/{run}/reference.stderr"))).unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&raw),
-        "tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive 'servre'\n"
+    let text = String::from_utf8_lossy(&raw);
+    assert!(
+        text.starts_with("tool: frf/objects/sha256/")
+            && text.contains(":4: unknown directive 'servre'\n"),
+        "reference stderr: {text}"
     );
 }
 

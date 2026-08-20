@@ -170,6 +170,69 @@ fn captures_are_self_consistent() {
         assert_eq!(cap.schema_version, SCHEMA_CAPTURE);
         assert_eq!(cap.run, run_dir.file_name().unwrap().to_string_lossy());
 
+        // Provenance, bound at observation time: the runner identifies the
+        // executable that observed the run, comparators name the applied
+        // relations, and artifacts are content-addressed snapshots that were
+        // hashed BEFORE execution.
+        assert_eq!(cap.runner.schema_version, SCHEMA_RUNNER);
+        assert_eq!(cap.runner.frf_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(cap.runner.frf_executable_hash.len(), 64);
+        assert_eq!(
+            cap.comparators.len(),
+            cap.court_spec.admissibility_envelope.observables.len()
+        );
+        for c in &cap.comparators {
+            assert_eq!(c.implementation_hash, cap.runner.frf_executable_hash);
+            assert!(
+                cap.court_spec
+                    .admissibility_envelope
+                    .observables
+                    .contains(&c.id),
+                "comparator {} not declared",
+                c.id
+            );
+        }
+        for artifact in [&cap.authority_artifact, &cap.candidate_artifact] {
+            assert_eq!(artifact.sha256.len(), 64);
+            let object = store.object_path(&artifact.sha256).unwrap();
+            assert!(object.is_file(), "missing snapshot {}", object.display());
+            assert_eq!(
+                artifact.path,
+                object.strip_prefix(&store.root).unwrap().to_string_lossy()
+            );
+            // Interpreter identity is present iff the snapshot is a script
+            // with a shebang; the recorded interpreter path must be real.
+            let bytes = fs::read(&object).unwrap();
+            let has_shebang = bytes.starts_with(b"#!");
+            match (&artifact.interpreter, has_shebang) {
+                (Some(i), true) => {
+                    assert_eq!(i.sha256.len(), 64);
+                    assert!(
+                        Path::new(&i.path).is_file(),
+                        "interpreter {} missing",
+                        i.path
+                    );
+                }
+                (None, false) => {}
+                (Some(_), false) => panic!("interpreter recorded for a non-script artifact"),
+                (None, true) => panic!("script artifact without interpreter identity"),
+            }
+        }
+        assert_eq!(cap.authority_artifact.sha256.len(), 64);
+        // The admitted authority is exactly the artifact that ran.
+        let admitted: AuthorityRecord = store.load_authority(&cap.authority).unwrap();
+        assert_eq!(cap.authority_artifact.sha256, admitted.executable_sha256);
+        // The semantic identity re-derives from the captured declaration.
+        assert_eq!(
+            frf::semantics::court_semantic_identity(
+                &cap.court_spec,
+                &cap.fixture_sha256,
+                &cap.comparators
+            )
+            .unwrap(),
+            cap.court_semantic_identity
+        );
+
         let fixture = repo_path(&cap.court_spec.fixture.path);
         assert!(fixture.is_file(), "fixture {} missing", fixture.display());
         assert_eq!(
@@ -294,7 +357,7 @@ fn residuals_and_tokens_are_self_consistent() {
         // The observation is bound to the exact candidate artifact that ran.
         let capture = store.load_capture(&r.run).unwrap();
         assert_eq!(
-            r.candidate_sha256, capture.candidate_sha256,
+            r.candidate_sha256, capture.candidate_artifact.sha256,
             "residual {} candidate identity must match its run",
             r.id
         );
@@ -434,6 +497,21 @@ fn receipts_are_self_consistent() {
         assert_eq!(rec.fixtures[0].id, cap.fixture);
         assert_eq!(rec.fixtures[0].hash, cap.fixture_sha256);
         assert_eq!(rec.fixtures[0].arguments, cap.arguments);
+
+        // Runner + comparators are copied from the capture (bound at
+        // observation time), never reconstructed at emit time.
+        assert_eq!(rec.runner, cap.runner);
+        assert_eq!(rec.comparators, cap.comparators);
+        assert_eq!(rec.court.semantic_identity, cap.court_semantic_identity);
+        assert_eq!(
+            rec.authority.interpreter,
+            cap.authority_artifact.interpreter
+        );
+        assert_eq!(rec.candidate.identity_hash, cap.candidate_artifact.sha256);
+        assert_eq!(
+            rec.candidate.interpreter,
+            cap.candidate_artifact.interpreter
+        );
 
         // Observables are consistent with the residuals on each axis.
         let family = &rec.court.admissibility_envelope.fixture_family;
@@ -636,7 +714,7 @@ fn claims_are_re_derivable_from_receipts() {
             .expect("receipt id must end in the digest");
         let cap = store.load_capture(run).unwrap();
         assert_eq!(
-            claim.candidate.identity_hash, cap.candidate_sha256,
+            claim.candidate.identity_hash, cap.candidate_artifact.sha256,
             "claim {receipt_id} is attributed to a candidate artifact the run did not execute"
         );
         found += 1;
@@ -655,6 +733,7 @@ fn tree_mirrors_section_19_3() {
         "authorities",
         "courts",
         "captures",
+        "objects",
         "residuals",
         "receipts",
         "claims",

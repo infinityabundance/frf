@@ -25,9 +25,10 @@
 //!   persistently busy executable never hangs the court.
 
 use crate::error::{FrfError, Result};
+use crate::model::InterpreterIdentity;
 use sha2::{Digest, Sha256};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -58,6 +59,19 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex(&hasher.finalize())
+}
+
+/// Read a file's bytes with a user-facing error.
+pub fn read_file(path: &Path) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))
+}
+
+/// SHA-256 of the currently running frf executable — the runner identity
+/// bound into every capture at observation time.
+pub fn current_exe_hash() -> Result<String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| FrfError::new(format!("cannot locate the frf executable: {e}")))?;
+    sha256_file(&exe)
 }
 
 /// SHA-256 hex digest of a file's bytes.
@@ -224,6 +238,23 @@ fn exit_string(status: &std::process::ExitStatus) -> String {
     }
 }
 
+/// Mark a file executable (unix). Content-addressed snapshots are written
+/// with default permissions; the authority and candidate snapshots are
+/// executed, so they need the exec bit. Deterministic: `rwxr-xr-x`.
+pub fn make_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .map_err(|e| FrfError::new(format!("cannot stat {}: {e}", path.display())))?
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms)
+            .map_err(|e| FrfError::new(format!("cannot chmod {}: {e}", path.display())))?;
+    }
+    Ok(())
+}
+
 /// Environment digest: a content hash of the host strata a court run depends
 /// on (os, architecture, kernel release). Two runs with the same digest are
 /// replay-comparable; a changed digest means a changed environment.
@@ -235,6 +266,59 @@ pub fn environment_digest() -> String {
         kernel_release()
     );
     sha256_bytes(src.as_bytes())
+}
+
+/// Bind the interpreter a script artifact executes under: parse the `#!`
+/// line, resolve the interpreter (absolute path, or PATH lookup — an `env`
+/// shebang resolves its next token), canonicalize, and hash it. For a
+/// script, "the exact artifact" is bytes + interpreter; binaries (no
+/// shebang) yield `None`.
+///
+/// A script whose interpreter cannot be resolved or hashed is an error: the
+/// exact-artifact claim is the point, and an unbound interpreter would leave
+/// it unverifiable.
+pub fn interpreter_identity(artifact: &[u8]) -> Result<Option<InterpreterIdentity>> {
+    let Some(first_line) = artifact.split(|b| *b == b'\n').next() else {
+        return Ok(None);
+    };
+    if first_line.len() < 2 || first_line[0] != b'#' || first_line[1] != b'!' {
+        return Ok(None);
+    }
+    let line = String::from_utf8_lossy(first_line);
+    let mut tokens = line[2..].split_whitespace();
+    let Some(mut interp) = tokens.next() else {
+        return Ok(None);
+    };
+    // `#!/usr/bin/env python3` -> the real interpreter is the next token.
+    if interp == "env" || interp.ends_with("/env") {
+        interp = tokens
+            .next()
+            .ok_or_else(|| FrfError::new("shebang uses 'env' without naming an interpreter"))?;
+    }
+    let resolved = if interp.contains('/') {
+        PathBuf::from(interp)
+    } else {
+        let path_var = std::env::var_os("PATH").unwrap_or_default();
+        std::env::split_paths(&path_var)
+            .map(|dir| dir.join(interp))
+            .find(|candidate| candidate.is_file())
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "interpreter '{interp}' from the shebang was not found on PATH"
+                ))
+            })?
+    };
+    let canonical = resolved.canonicalize().map_err(|e| {
+        FrfError::new(format!(
+            "cannot resolve interpreter {}: {e}",
+            resolved.display()
+        ))
+    })?;
+    let sha256 = sha256_file(&canonical)?;
+    Ok(Some(InterpreterIdentity {
+        path: canonical.to_string_lossy().into_owned(),
+        sha256,
+    }))
 }
 
 /// Kernel release via `uname -r`; `unknown` if unavailable.

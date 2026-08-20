@@ -136,9 +136,16 @@ mod tests {
         ReceiptEnvironment {
             os: "linux".into(),
             architecture: "x86_64".into(),
-            toolchain: "frf/0.1.0".into(),
             environment_digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
                 .into(),
+        }
+    }
+
+    fn runner() -> RunnerIdentity {
+        RunnerIdentity {
+            schema_version: SCHEMA_RUNNER.into(),
+            frf_version: env!("CARGO_PKG_VERSION").into(),
+            frf_executable_hash: "0".repeat(64),
         }
     }
 
@@ -157,19 +164,24 @@ mod tests {
                     normalizers: vec![],
                     replay_scope: "single-run".into(),
                 },
+                semantic_identity: "1".repeat(64),
             },
+            runner: runner(),
+            comparators: vec![],
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
                 kind: "executable_reference".into(),
                 version: "1.8.2".into(),
                 identity_hash: "0".repeat(64),
                 provenance: "file:golden/reference.sh".into(),
+                interpreter: None,
             },
             candidate: ReceiptCandidate {
                 name: "cand-cli".into(),
                 version_or_commit: "0.1.0".into(),
                 build_profile: "debug".into(),
                 identity_hash: "c".repeat(64),
+                interpreter: None,
             },
             environment: env(),
             fixtures: vec![ReceiptFixture {

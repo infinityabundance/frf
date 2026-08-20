@@ -7,6 +7,7 @@
 //!   authorities/   admitted once, never rewritten
 //!   courts/        hand-authored declarations (never created by the tool)
 //!   captures/      raw observations, written once (create_new)
+//!   objects/       content-addressed execution snapshots (sha256/<H>)
 //!   residuals/     residual records + derived token files
 //!   receipts/      bindings, written once (content-addressed ids)
 //!   claims/        compiled claim artifacts, written only by `frf claim compile`
@@ -66,7 +67,14 @@ impl Store {
     /// `courts/` is intentionally not created: court declarations are source,
     /// not tool output.
     pub fn ensure_tree(&self) -> Result<()> {
-        for dir in ["authorities", "captures", "residuals", "receipts", "claims"] {
+        for dir in [
+            "authorities",
+            "captures",
+            "objects",
+            "residuals",
+            "receipts",
+            "claims",
+        ] {
             fs::create_dir_all(self.root.join(dir)).map_err(|e| {
                 FrfError::new(format!(
                     "cannot create {}: {e}",
@@ -113,6 +121,36 @@ impl Store {
         Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
     }
 
+    /// `objects/sha256/<H>` — the content-addressed execution snapshot for a
+    /// hash. Deterministic; the path is the identity.
+    pub fn object_path(&self, sha256: &str) -> Result<PathBuf> {
+        validate_id("object", sha256)?;
+        Ok(self.root.join("objects").join("sha256").join(sha256))
+    }
+
+    /// Materialize bytes as an immutable content-addressed object and return
+    /// its path. Re-materializing identical bytes is a no-op (same hash,
+    /// same content); nothing is ever overwritten with different content.
+    pub fn materialize_object(&self, bytes: &[u8]) -> Result<PathBuf> {
+        let sha256 = crate::host::sha256_bytes(bytes);
+        let path = self.object_path(&sha256)?;
+        if !path.is_file() {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| {
+                    FrfError::new(format!("cannot create {}: {e}", parent.display()))
+                })?;
+            }
+            // Content-addressed: if a concurrent writer created it first,
+            // the hash guarantees the bytes are identical.
+            match self.write_once_bytes(&path, bytes) {
+                Ok(()) => {}
+                Err(_e) if path.is_file() => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(path)
+    }
+
     // -- serialization helpers ----------------------------------------------
 
     pub fn to_yaml<T: serde::Serialize>(&self, value: &T) -> Result<String> {
@@ -132,13 +170,20 @@ impl Store {
     /// Write a file that must not already exist. Used for authorities, raw
     /// captures, and receipts: re-observation is refused, not overwritten.
     pub fn write_once(&self, path: &Path, contents: &str) -> Result<()> {
+        self.write_once_bytes(path, contents.as_bytes())
+    }
+
+    /// Binary variant of [`Store::write_once`]. `AlreadyExists` is an error
+    /// here — except for content-addressed objects, where the caller treats
+    /// it as a no-op because the hash guarantees identical bytes.
+    pub fn write_once_bytes(&self, path: &Path, bytes: &[u8]) -> Result<()> {
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(path)
         {
             Ok(mut f) => f
-                .write_all(contents.as_bytes())
+                .write_all(bytes)
                 .and_then(|_| f.flush())
                 .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display()))),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(FrfError::new(format!(
@@ -288,14 +333,16 @@ impl Store {
     /// The resolution-comparability predicate behind a `fixed` disposition.
     ///
     /// A resolution of residual R must rerun the SAME evidentiary question
-    /// under a compatible envelope, holding everything stable except the
-    /// candidate (the thing a fix is allowed to change), and show the axis
-    /// now agreeing. Every check fails with a specific message; `Ok(())`
-    /// means the run is valid resolution evidence for this residual.
+    /// under a compatible envelope. The predicate is the court's semantic
+    /// identity — the canonical hash of everything defining the question
+    /// (court, question, falsifier, authority, fixture bytes + arguments,
+    /// full envelope, comparator identities), computed at court time — plus
+    /// the environment digest. The candidate is deliberately NOT compared:
+    /// it is the one entity a fix court may change, and both runs record
+    /// their artifact hashes so the evolution is explicit.
     ///
-    /// The candidate is deliberately NOT compared: it is the one entity a fix
-    /// court may change, and both runs record their candidate artifact hashes
-    /// so the evolution is explicit rather than silently crossed.
+    /// Every failure names the specific dimension that drifted (via
+    /// [`crate::semantics::semantic_diff`]) so the refusal is actionable.
     pub fn resolution_compatibility(
         &self,
         original_run: &str,
@@ -310,54 +357,25 @@ impl Store {
         let original = self.load_capture(original_run)?;
         let resolution = self.load_capture(resolution_run)?;
 
-        let check = |what: &str, a: &str, b: &str| -> Result<()> {
-            if a == b {
-                Ok(())
-            } else {
-                Err(FrfError::new(format!(
-                    "resolution run '{resolution_run}' is not comparable to '{original_run}': {what} differs ({a:?} != {b:?})"
-                )))
-            }
-        };
-
-        check("court", &original.court, &resolution.court)?;
-        check("authority", &original.authority, &resolution.authority)?;
-        check("fixture id", &original.fixture, &resolution.fixture)?;
-        check(
-            "fixture bytes (sha256)",
-            &original.fixture_sha256,
-            &resolution.fixture_sha256,
-        )?;
-        let orig_args = format!("{:?}", original.arguments);
-        let res_args = format!("{:?}", resolution.arguments);
-        check("fixture arguments", &orig_args, &res_args)?;
-        let orig_obs = original
-            .court_spec
-            .admissibility_envelope
-            .observables
-            .join(",");
-        let res_obs = resolution
-            .court_spec
-            .admissibility_envelope
-            .observables
-            .join(",");
-        check("observables", &orig_obs, &res_obs)?;
-        let orig_norm = original
-            .court_spec
-            .admissibility_envelope
-            .normalizers
-            .join(",");
-        let res_norm = resolution
-            .court_spec
-            .admissibility_envelope
-            .normalizers
-            .join(",");
-        check("normalizers", &orig_norm, &res_norm)?;
-        check(
-            "environment digest",
-            &original.environment_digest,
-            &resolution.environment_digest,
-        )?;
+        // Same evidentiary question: identical semantic identity. Everything
+        // that defines the question is in the hash; only the candidate may
+        // differ (it is excluded by construction).
+        if original.court_semantic_identity != resolution.court_semantic_identity {
+            let what = crate::semantics::semantic_diff(&original, &resolution)
+                .unwrap_or_else(|| "semantic court identity".to_string());
+            return Err(FrfError::new(format!(
+                "resolution run '{resolution_run}' is not comparable to '{original_run}': {what}"
+            )));
+        }
+        // Same environment envelope: a resolution that silently crossed an
+        // environment boundary is not a resolution of the same question.
+        if original.environment_digest != resolution.environment_digest {
+            return Err(FrfError::new(format!(
+                "resolution run '{resolution_run}' is not comparable to '{original_run}': environment digest differs ({} != {})",
+                &original.environment_digest[..8],
+                &resolution.environment_digest[..8]
+            )));
+        }
 
         // The axis being resolved must be declared by the resolution run, and
         // must now agree.

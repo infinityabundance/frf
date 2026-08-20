@@ -37,54 +37,81 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 
     let authority = store.load_authority(&spec.authority)?;
 
-    // Drift check: the authority file must still hash to its admitted value.
-    let authority_path = Path::new(&authority.path);
-    if !authority_path.is_file() {
-        return Err(FrfError::new(format!(
-            "authority file {} is missing; the court cannot run (re-admit as a new version)",
-            authority_path.display()
-        )));
-    }
-    let current = host::sha256_file(authority_path)?;
-    if current != authority.executable_sha256 {
+    // -- read + hash BEFORE any execution -----------------------------------
+    //
+    // Every artifact is hashed first and executed ONLY through an immutable
+    // content-addressed snapshot (`objects/sha256/<H>`). There is no window
+    // in which a path can change between being hashed and being executed:
+    // the bytes that ran are the bytes that were hashed, exactly.
+    let authority_bytes = host::read_file(Path::new(&authority.path))?;
+    let authority_sha256 = host::sha256_bytes(&authority_bytes);
+    if authority_sha256 != authority.executable_sha256 {
         return Err(FrfError::new(format!(
             "authority file {} changed since admission ({} != {}); refusing to run against a drifted oracle — admit the new file as a new version",
-            authority_path.display(),
-            &current[..16],
+            authority.path,
+            &authority_sha256[..16],
             &authority.executable_sha256[..16]
         )));
     }
 
     let candidate_path = Path::new(&spec.candidate.path);
-    if !candidate_path.is_file() {
-        return Err(FrfError::new(format!(
-            "candidate {} not found",
-            candidate_path.display()
-        )));
-    }
+    let candidate_bytes = host::read_file(candidate_path)?;
+    let candidate_sha256 = host::sha256_bytes(&candidate_bytes);
 
     let fixture_path = Path::new(&spec.fixture.path);
-    if !fixture_path.is_file() {
-        return Err(FrfError::new(format!(
-            "fixture {} not found",
-            fixture_path.display()
-        )));
-    }
-    let fixture_sha256 = host::sha256_file(fixture_path)?;
+    let fixture_bytes = host::read_file(fixture_path)?;
+    let fixture_sha256 = host::sha256_bytes(&fixture_bytes);
 
+    // -- content-addressed execution snapshots -------------------------------
+
+    let authority_snapshot = store.materialize_object(&authority_bytes)?;
+    let candidate_snapshot = store.materialize_object(&candidate_bytes)?;
+    let fixture_snapshot = store.materialize_object(&fixture_bytes)?;
+    // The snapshots of the executed artifacts need the exec bit.
+    host::make_executable(&authority_snapshot)?;
+    host::make_executable(&candidate_snapshot)?;
+
+    // Scripts execute under an interpreter; bind it for the exact-artifact
+    // claim (binaries yield None).
+    let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
+    let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
+
+    // -- provenance identities, bound NOW (observation time) ------------------
+    // A receipt emitted later copies these; it never reconstructs them from
+    // whatever binary happens to be installed.
+    let runner = RunnerIdentity {
+        schema_version: SCHEMA_RUNNER.to_string(),
+        frf_version: env!("CARGO_PKG_VERSION").to_string(),
+        frf_executable_hash: host::current_exe_hash()?,
+    };
+    let comparators: Vec<ComparatorIdentity> = observables
+        .iter()
+        .map(|axis| ComparatorIdentity {
+            id: axis.as_str().to_string(),
+            version: COMPARATOR_VERSION.to_string(),
+            implementation_hash: runner.frf_executable_hash.clone(),
+        })
+        .collect();
+    let court_semantic_identity =
+        crate::semantics::court_semantic_identity(spec, &fixture_sha256, &comparators)?;
+
+    // The fixture argument resolves to the SNAPSHOT path: the side reads
+    // exactly the hashed bytes, and the recorded arguments are replayable
+    // without the original tree.
+    let fixture_arg = fixture_snapshot.to_string_lossy().into_owned();
     let arguments: Vec<String> = spec
         .fixture
         .arguments
         .iter()
         .map(|a| {
             if a == "{fixture}" {
-                spec.fixture.path.clone()
+                fixture_arg.clone()
             } else {
                 a.clone()
             }
         })
         .collect();
-    if !arguments.contains(&spec.fixture.path) {
+    if !arguments.contains(&fixture_arg) {
         eprintln!(
             "frf: warning: fixture {} is not referenced by the declared arguments; this execution does not exercise it",
             spec.fixture.path
@@ -93,12 +120,9 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 
     // -- observe both sides ---------------------------------------------------
 
-    let reference_out = host::run_process(authority_path, &arguments)?;
-    let candidate_out = host::run_process(candidate_path, &arguments)?;
+    let reference_out = host::run_process(&authority_snapshot, &arguments)?;
+    let candidate_out = host::run_process(&candidate_snapshot, &arguments)?;
     let environment_digest = host::environment_digest();
-    // Bind the exact candidate artifact: labels are distrustful; the executed
-    // bytes are the identity.
-    let candidate_sha256 = host::sha256_file(candidate_path)?;
 
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
@@ -155,14 +179,24 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     // -- content-address the run ----------------------------------------------
 
     let mut evidence = format!(
-        "court={}\nauthority={}\ncandidate={}|{}\nfixture={}\nargs={:?}\nenv={}\nreference={}\ncandidate={}",
+        "court={}\nauthority={}|{}\ncandidate={}|{}|{}\nfixture={}\nargs={:?}\nenv={}\nrunner={}\nsemantic={}\nreference={}\ncandidate={}",
         spec.id,
         authority.id,
+        authority_interpreter
+            .as_ref()
+            .map(|i| i.sha256.as_str())
+            .unwrap_or("-"),
         spec.candidate.name,
         candidate_sha256,
+        candidate_interpreter
+            .as_ref()
+            .map(|i| i.sha256.as_str())
+            .unwrap_or("-"),
         fixture_sha256,
         arguments,
         environment_digest,
+        runner.frf_executable_hash,
+        court_semantic_identity,
         reference.serialize(),
         candidate.serialize(),
     );
@@ -214,6 +248,12 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
         );
     }
 
+    let rel_to_root = |p: &Path| {
+        p.strip_prefix(&store.root)
+            .map(|r| r.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| p.to_string_lossy().into_owned())
+    };
+
     // -- capture manifest --------------------------------------------------------
 
     let capture = CaptureManifest {
@@ -227,7 +267,21 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
         arguments,
         environment_digest,
         court_spec: spec.clone(),
-        candidate_sha256,
+        runner,
+        comparators,
+        // Artifact paths are ROOT-relative pointers (stable across machines);
+        // the capture's `arguments` are the verbatim argv the side received.
+        authority_artifact: ArtifactIdentity {
+            path: rel_to_root(&authority_snapshot),
+            sha256: authority_sha256,
+            interpreter: authority_interpreter,
+        },
+        candidate_artifact: ArtifactIdentity {
+            path: rel_to_root(&candidate_snapshot),
+            sha256: candidate_sha256,
+            interpreter: candidate_interpreter,
+        },
+        court_semantic_identity,
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),

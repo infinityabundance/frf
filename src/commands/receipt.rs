@@ -130,24 +130,33 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                 normalizers: spec.admissibility_envelope.normalizers.clone(),
                 replay_scope: spec.admissibility_envelope.replay_scope.clone(),
             },
+            // The semantic identity was bound at observation time; the
+            // receipt copies it, never recomputes it.
+            semantic_identity: capture.court_semantic_identity.clone(),
         },
+        // Runner + comparators are copied from the capture: they describe
+        // the executable and comparators that OBSERVED the run, not the one
+        // that happens to emit the receipt later.
+        runner: capture.runner.clone(),
+        comparators: capture.comparators.clone(),
         authority: ReceiptAuthority {
             name: authority.name.clone(),
             kind: authority.kind.clone(),
             version: authority.version.clone(),
             identity_hash: authority.executable_sha256.clone(),
             provenance: format!("file:{}", authority.path),
+            interpreter: capture.authority_artifact.interpreter.clone(),
         },
         candidate: ReceiptCandidate {
             name: spec.candidate.name.clone(),
             version_or_commit: spec.candidate.version_or_commit.clone(),
             build_profile: spec.candidate.build_profile.clone(),
-            identity_hash: capture.candidate_sha256.clone(),
+            identity_hash: capture.candidate_artifact.sha256.clone(),
+            interpreter: capture.candidate_artifact.interpreter.clone(),
         },
         environment: ReceiptEnvironment {
             os: std::env::consts::OS.to_string(),
             architecture: std::env::consts::ARCH.to_string(),
-            toolchain: format!("frf/{}", env!("CARGO_PKG_VERSION")),
             environment_digest: capture.environment_digest.clone(),
         },
         fixtures: vec![ReceiptFixture {

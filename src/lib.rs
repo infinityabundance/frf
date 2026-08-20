@@ -13,5 +13,6 @@ pub mod error;
 pub mod host;
 pub mod kappa;
 pub mod model;
+pub mod semantics;
 pub mod sentences;
 pub mod store;

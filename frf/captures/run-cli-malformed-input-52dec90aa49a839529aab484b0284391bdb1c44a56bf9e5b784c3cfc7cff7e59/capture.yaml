@@ -1,5 +1,5 @@
-schema_version: frf-capture-v1
-run: run-cli-malformed-input-568128a8246e8ed3ab17ed01ad1f4cefd50d2ebe9fc63de9c1700aa8f8b66757
+schema_version: frf-capture-v2
+run: run-cli-malformed-input-52dec90aa49a839529aab484b0284391bdb1c44a56bf9e5b784c3cfc7cff7e59
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
@@ -7,7 +7,7 @@ fixture: malformed-path.conf
 fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
 arguments:
 - --strict
-- frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+- frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
 environment_digest: 02a5c0979cc141f7bfe659612cab23869d6ecb18ee59a03ec0a3105895da0f8d
 court_spec:
   id: cli-malformed-input
@@ -34,16 +34,39 @@ court_spec:
     - stderr
     normalizers: []
     replay_scope: single-run
-candidate_sha256: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+runner:
+  schema_version: frf-runner-v1
+  frf_version: 0.1.8
+  frf_executable_hash: 1465251ad4a73db75878f2b98e71552c157eddb9ee7144f0c41e98ff2b027e14
+comparators:
+- id: exit
+  version: v1
+  implementation_hash: 1465251ad4a73db75878f2b98e71552c157eddb9ee7144f0c41e98ff2b027e14
+- id: stderr
+  version: v1
+  implementation_hash: 1465251ad4a73db75878f2b98e71552c157eddb9ee7144f0c41e98ff2b027e14
+authority_artifact:
+  path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+  sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+  interpreter:
+    path: /usr/bin/bash
+    sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+candidate_artifact:
+  path: objects/sha256/86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+  sha256: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+  interpreter:
+    path: /usr/bin/bash
+    sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+court_semantic_identity: 42b69f1ae254e22854837a5824198f61a4131338adf159752826876a54561992
 reference:
   exit: '2'
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
-  stderr_first_line: 'tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive ''servre'''
-  stderr_first_line_sha256: 8ee3d9f0cbdee73d35f79fca0eff3702a462f6865540d1aaed9c6749cc8aa05a
+  stderr_first_line: 'tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
+  stderr_first_line_sha256: 3427a3b361b3110471c09cfbbcad867ed1356fc11d74ee638b558b452fc9f1b0
   stdout_first_line: 'ok: server 192.168.1.1'
   stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
-  stderr_sha256: 442031b8691d77f4a3ef553fd051898ff9d7c426daf9543732070080a208ccd6
+  stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
 candidate:
   exit: '2'
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
