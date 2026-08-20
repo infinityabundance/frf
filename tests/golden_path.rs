@@ -376,12 +376,12 @@ fn golden_path_end_to_end() {
         "re-emitting after a disposition change must produce a new receipt"
     );
 
-    let receipt_yaml: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{root}/receipts/{receipt_old}.yaml"))).unwrap(),
+    let receipt_yaml: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{root}/receipts/{receipt_old}.json"))).unwrap(),
     )
     .unwrap();
     let exit_entry = receipt_yaml["residuals"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|r| r["id"] == "cli-exit-0001")

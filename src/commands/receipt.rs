@@ -1,12 +1,14 @@
 //! `frf receipt emit`: bind court + authority + candidate + fixture +
-//! captures + residuals + dispositions into a receipt (Appendix A, trimmed:
-//! `verdict_case_file`, `taste_gates`, and `invariants` are deliberately
-//! dropped in v0 — see README Known Limitations).
+//! captures + residuals + dispositions into an OpenReceipt (Appendix A,
+//! trimmed: `verdict_case_file`, `taste_gates`, and `invariants` are
+//! deliberately dropped in v0 — see README Known Limitations).
 //!
-//! Receipt ids are content-addressed: `receipt-{run}-{hash of the receipt
-//! body}`. Re-emitting the same state yields the same id and is a no-op;
-//! emitting after a disposition change yields a new receipt. Receipts are
-//! never rewritten.
+//! The receipt body is serialized as canonical JSON (RFC 8785) and its id is
+//! `receipt-{run}-{full SHA-256 of the canonical bytes}` — the full digest,
+//! not a display prefix, is the identity (a short prefix is UI sugar, never
+//! the address). Re-emitting the same state yields the same id and is a
+//! no-op; emitting after a disposition change yields a new receipt. Receipts
+//! are never rewritten.
 
 use crate::error::Result;
 use crate::host;
@@ -179,11 +181,8 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         },
     };
 
-    let yaml = store.to_yaml(&body)?;
-    let id = format!(
-        "receipt-{run}-{}",
-        &host::sha256_bytes(yaml.as_bytes())[..8]
-    );
+    let json = crate::canon::canonical(&body)?;
+    let id = format!("receipt-{run}-{}", host::sha256_bytes(json.as_bytes()));
     let path = store.receipt_path(&id)?;
     if path.exists() {
         // Content-addressed: identical body means identical id, so this is
@@ -191,7 +190,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         eprintln!("receipt {id} already exists (identical evidence state); nothing rewritten");
         return Ok(id);
     }
-    store.write_once(&path, &yaml)?;
+    store.write_once(&path, &json)?;
     let blocking_count = body
         .residuals
         .iter()

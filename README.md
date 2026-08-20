@@ -53,7 +53,7 @@ Allow five minutes; it takes about five seconds.
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
 | `frf court run MANIFEST.yaml` | executes authority and candidate against the fixture, captures raw stdout/stderr/exit, writes `open` residuals + endoduction tokens for each declared-axis disagreement |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
-| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into a trimmed Appendix A receipt |
+| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Refuses while any residual is `open`/`unknown`/`harness`, and refuses a receipt whose run observed divergence — a failing run's receipt can never become parity, however its residuals are disposed; the refusal names the resolution run to compile from instead. Otherwise emits one conservative sentence + the non-claim, attributed to the exact candidate artifact the run executed |
 
 Residual creation and endoduction happen inside `court run`; re-run
@@ -84,7 +84,7 @@ frf/
   courts/        hand-authored court declarations (question, envelope, fixture)
   captures/      raw observations, content-addressed, immutable
   residuals/     immutable observations + derived tokens + <id>.events/ dispositions
-  receipts/      bindings, content-addressed
+  receipts/      OpenReceipts, canonical JSON (RFC 8785), content-addressed by full digest
   claims/        compiled claims, written only by `frf claim compile`
 ```
 
@@ -126,10 +126,12 @@ says no more than that receipt licenses.
   the positive claim must be compiled from the resolution run's receipt, the
   run that actually observed the passing candidate. This is enforced by the
   claim compiler, not by convention.
-- **Receipt and run ids expose the first 8 hex digits (32 bits) of a SHA-256
-  digest as a display identity**; lookup is exact within a store, but a
-  canonical OpenReceipt (deterministic JSON, RFC 8785) with full-digest
-  addressing is future work.
+- **Receipts are canonical JSON (RFC 8785); every other artifact is YAML.**
+  The receipt body is encoded with sorted keys, no whitespace, and the
+  RFC's exact escaping, so its bytes — and therefore its identity — are
+  reproducible by any implementation (the paper's cross-language
+  OpenReceipt goal). The mixed tree is deliberate and documented here.
+- **Run and receipt ids are full 64-hex SHA-256 digests** (`run-{court}-{sha256}`, `receipt-{run}-{sha256}`), the complete digest, not a display prefix. A short prefix is not accepted as input; ids are meant to be copied whole. CBOR (RFC 8949) as an alternative canonical encoding is future work.
 - **The environment digest covers os + architecture + kernel release only**;
   environment admission (libc, locale, timezone data, dynamic dependencies,
   container/Nix digests) is future work.

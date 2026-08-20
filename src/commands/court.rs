@@ -162,7 +162,7 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     let run = format!(
         "run-{}-{}",
         spec.id,
-        &host::sha256_bytes(evidence.as_bytes())[..8]
+        host::sha256_bytes(evidence.as_bytes())
     );
     let run_dir = store.run_dir(&run)?;
     if run_dir.exists() {

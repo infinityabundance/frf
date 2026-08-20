@@ -103,7 +103,9 @@ impl Store {
 
     pub fn receipt_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("receipt", id)?;
-        Ok(self.root.join("receipts").join(format!("{id}.yaml")))
+        // Receipts are canonical JSON (RFC 8785) — the OpenReceipt protocol
+        // representation — so their identity is stable across implementations.
+        Ok(self.root.join("receipts").join(format!("{id}.json")))
     }
 
     pub fn claim_path(&self, receipt_id: &str) -> Result<PathBuf> {
@@ -255,7 +257,10 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_yaml(&path)
+        let text = fs::read_to_string(&path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        serde_json::from_str(&text)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
     }
 
     /// Next zero-padded sequence number for a residual kind: max existing
