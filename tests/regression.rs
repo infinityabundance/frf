@@ -1020,6 +1020,96 @@ fn clean_stdout_axis_is_claimable() {
 }
 
 #[test]
+fn open_residual_blocks_only_its_own_axis() {
+    // exit clean, stderr open: the claim compiles scoped to exit parity,
+    // and the refusal names the open stderr residual as the non-claim
+    // boundary. An open residual never throws away unrelated knowledge.
+    let work = Workdir::new("axis-block");
+    work.copy_canonical_tree();
+    // Same exit class as the reference, empty stderr: only the text axis
+    // diverges.
+    work.write_candidate("#!/bin/sh\n# same exit class, no stderr\nexit 2\n");
+    admit_reference(&work);
+    let run = run_court(&work);
+
+    // Exactly one residual: text, open.
+    let residuals: Vec<String> = fs::read_dir(work.path("frf/residuals"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+        .collect();
+    assert_eq!(
+        residuals,
+        vec!["cli-text-0001.yaml"],
+        "only the stderr axis diverges"
+    );
+
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+
+    // The claim compiles (exit is clean), with the refusal printed.
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert_success(&out, "claim compile (exit scope only)");
+    let text = stdout(&out);
+    assert!(text.contains("malformed-input exit class"), "claim: {text}");
+    assert!(!text.contains("first diagnostic line"));
+    assert!(stderr(&out).contains(
+        "cannot claim compatibility for fixture family malformed-input because residual cli-text-0001 (text) is open"
+    ));
+
+    // The claim file carries the IR: scope = [exit], exclusions = [text].
+    let claim_yaml: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(claim_yaml["observable_scope"][0], "exit");
+    assert_eq!(claim_yaml["excluded_residuals"][0], "cli-text-0001");
+}
+
+#[test]
+fn harness_invalidates_the_entire_run_evidence() {
+    // harness is run-level: even a clean axis is not claimable while a
+    // harness residual exists.
+    let work = Workdir::new("harness-run");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\n# same exit class, no stderr\nexit 2\n");
+    admit_reference(&work);
+    let run = run_court(&work);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-text-0001",
+            "--disposition",
+            "harness",
+            "--reason",
+            "runner contamination suspected",
+        ],
+    );
+    assert_success(&out, "dispose harness");
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("invalidate the evidence of this run"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    let claims_dir = work.path(&format!("{ROOT}/claims"));
+    assert!(
+        fs::read_dir(&claims_dir).unwrap().next().is_none(),
+        "harness must refuse any claim file"
+    );
+}
+
+#[test]
 fn execution_timeout_kills_and_writes_nothing() {
     let work = Workdir::new("timeout");
     work.copy_canonical_tree();

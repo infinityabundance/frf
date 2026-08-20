@@ -914,10 +914,14 @@ pub struct ReceiptReplay {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled claim (claims/ — written only by `frf claim compile`)
-// ---------------------------------------------------------------------------
-
+/// A compiled claim (`claims/` — written only by `frf claim compile`).
+///
+/// The claim carries its IR: the observable scope it covers and the
+/// residuals it explicitly excludes. A residual blocks ONLY claims whose
+/// observable scope intersects it — an open stdout residual never blocks a
+/// claim about exit parity. Prose is one renderer of this structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClaimRecord {
     pub schema_version: String,
     pub receipt: String,
@@ -926,6 +930,12 @@ pub struct ClaimRecord {
     pub court: String,
     pub fixture_family: String,
     pub environment: String,
+    /// Claim IR — the axes this claim covers (never beyond the receipt's
+    /// declared observables, and never an axis this run observed diverging).
+    pub observable_scope: Vec<String>,
+    /// Claim IR — residuals excluded from this claim's scope (observed
+    /// divergences on other axes, whatever their disposition).
+    pub excluded_residuals: Vec<String>,
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
 }
