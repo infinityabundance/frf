@@ -1,5 +1,5 @@
 schema_version: frf-claim-v1
-receipt: receipt-run-cli-malformed-input-4c46f1262e60b83b6dcea36c1cbff553dd6efe50c5db9cc40688d2b5f41479aa-ba94c0920a83d645bc5d9dbc8ddfd42985caadb03340a8ba96aefd3918297497
+receipt: receipt-run-cli-malformed-input-53e41bfa86392ea402f396d4f757fc51055e23b5bda493870badb48ab8bd1ca6-6b846212f27741e7e7b255d39e906491ed60fe5e69276c6c75a1f634f08604fe
 authority: ref-cli-1.8.2
 candidate:
   name: cand-cli
