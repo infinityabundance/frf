@@ -37,12 +37,43 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 
     let authority = store.load_authority(&spec.authority)?;
 
+    // -- fail closed on the admissibility envelope --------------------------
+    // Declaration must never masquerade as enforcement: anything the executor
+    // does not actually enforce is refused up front.
+    let envelope = &spec.admissibility_envelope;
+    if !envelope.normalizers.is_empty() {
+        return Err(FrfError::new(format!(
+            "normalizers are not supported in this version (declared: {:?}); a declared normalizer that is not applied would falsify the evidence — remove the declaration",
+            envelope.normalizers
+        )));
+    }
+    if envelope.replay_scope != "single-run" {
+        return Err(FrfError::new(format!(
+            "replay_scope '{:?}' is not supported: only 'single-run' execution exists, and a declared scope that is not executed would falsify the evidence",
+            envelope.replay_scope
+        )));
+    }
+    let current_platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+    if !envelope.platforms.iter().any(|p| p == &current_platform) {
+        return Err(FrfError::new(format!(
+            "current platform {current_platform} is outside the declared envelope {:?}; refusing to run out-of-envelope",
+            envelope.platforms
+        )));
+    }
+    if authority.platform != current_platform {
+        return Err(FrfError::new(format!(
+            "authority {} was admitted for platform {} but this court is running on {current_platform}; refusing to run an out-of-envelope oracle (re-admit on this platform)",
+            authority.id, authority.platform
+        )));
+    }
+
     // -- read + hash BEFORE any execution -----------------------------------
     //
     // Every artifact is hashed first and executed ONLY through an immutable
-    // content-addressed snapshot (`objects/sha256/<H>`). There is no window
-    // in which a path can change between being hashed and being executed:
-    // the bytes that ran are the bytes that were hashed, exactly.
+    // content-addressed snapshot (`objects/sha256/<H>`, verified on every
+    // use, sealed read-only). There is no window in which a path can change
+    // between being hashed and being executed: the bytes that ran are the
+    // bytes that were hashed, exactly.
     let authority_bytes = host::read_file(Path::new(&authority.path))?;
     let authority_sha256 = host::sha256_bytes(&authority_bytes);
     if authority_sha256 != authority.executable_sha256 {
@@ -63,37 +94,50 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     let fixture_sha256 = host::sha256_bytes(&fixture_bytes);
 
     // -- content-addressed execution snapshots -------------------------------
+    // Executed artifacts are sealed 0555; data (fixture) 0444.
 
-    let authority_snapshot = store.materialize_object(&authority_bytes)?;
-    let candidate_snapshot = store.materialize_object(&candidate_bytes)?;
-    let fixture_snapshot = store.materialize_object(&fixture_bytes)?;
-    // The snapshots of the executed artifacts need the exec bit.
-    host::make_executable(&authority_snapshot)?;
-    host::make_executable(&candidate_snapshot)?;
+    let authority_snapshot = store.materialize_object(&authority_bytes, true)?;
+    let candidate_snapshot = store.materialize_object(&candidate_bytes, true)?;
+    let fixture_snapshot = store.materialize_object(&fixture_bytes, false)?;
 
     // Scripts execute under an interpreter; bind it for the exact-artifact
     // claim (binaries yield None).
     let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
     let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
 
-    // -- provenance identities, bound NOW (observation time) ------------------
-    // A receipt emitted later copies these; it never reconstructs them from
-    // whatever binary happens to be installed.
+    // -- identities, bound NOW (observation time) ----------------------------
+    // Two questions, answered separately: WHAT question was asked (semantic
+    // identity from comparator SEMANTICS + artifact hashes) and WHO asked it
+    // (provenance: runner + comparator implementations). A receipt emitted
+    // later copies both; it never reconstructs them from whatever binary or
+    // host happens to be installed.
+    let environment = host::environment_identity();
+    let comparator_semantics: Vec<ComparatorSemantic> = observables
+        .iter()
+        .map(|axis| crate::comparators::semantic(axis.as_str()))
+        .collect::<Result<_>>()?;
     let runner = RunnerIdentity {
         schema_version: SCHEMA_RUNNER.to_string(),
         frf_version: env!("CARGO_PKG_VERSION").to_string(),
         frf_executable_hash: host::current_exe_hash()?,
     };
-    let comparators: Vec<ComparatorIdentity> = observables
-        .iter()
-        .map(|axis| ComparatorIdentity {
-            id: axis.as_str().to_string(),
-            version: COMPARATOR_VERSION.to_string(),
-            implementation_hash: runner.frf_executable_hash.clone(),
-        })
-        .collect();
-    let court_semantic_identity =
-        crate::semantics::court_semantic_identity(spec, &fixture_sha256, &comparators)?;
+    let provenance = ObservationProvenance {
+        schema_version: SCHEMA_PROVENANCE.to_string(),
+        runner: runner.clone(),
+        comparator_implementations: crate::comparators::implementations(
+            &observables
+                .iter()
+                .map(|a| a.as_str().to_string())
+                .collect::<Vec<_>>(),
+            &runner.frf_executable_hash,
+        ),
+    };
+    let court_semantic_identity = crate::semantics::court_semantic_identity(
+        spec,
+        &authority_sha256,
+        &fixture_sha256,
+        &comparator_semantics,
+    )?;
 
     // The fixture argument resolves to the SNAPSHOT path: the side reads
     // exactly the hashed bytes, and the recorded arguments are replayable
@@ -122,7 +166,6 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
 
     let reference_out = host::run_process(&authority_snapshot, &arguments)?;
     let candidate_out = host::run_process(&candidate_snapshot, &arguments)?;
-    let environment_digest = host::environment_digest();
 
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
@@ -177,42 +220,41 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     }
 
     // -- content-address the run ----------------------------------------------
-
-    let mut evidence = format!(
-        "court={}\nauthority={}|{}\ncandidate={}|{}|{}\nfixture={}\nargs={:?}\nenv={}\nrunner={}\nsemantic={}\nreference={}\ncandidate={}",
-        spec.id,
-        authority.id,
-        authority_interpreter
-            .as_ref()
-            .map(|i| i.sha256.as_str())
-            .unwrap_or("-"),
-        spec.candidate.name,
-        candidate_sha256,
-        candidate_interpreter
-            .as_ref()
-            .map(|i| i.sha256.as_str())
-            .unwrap_or("-"),
-        fixture_sha256,
-        arguments,
-        environment_digest,
-        runner.frf_executable_hash,
-        court_semantic_identity,
-        reference.serialize(),
-        candidate.serialize(),
-    );
-    for r in &residuals {
-        evidence.push_str(&format!(
-            "\nresidual={}|{}|{}",
-            r.kind.as_str(),
-            r.raw_reference,
-            r.raw_candidate
-        ));
-    }
-    let run = format!(
-        "run-{}-{}",
-        spec.id,
-        host::sha256_bytes(evidence.as_bytes())
-    );
+    // Identity discipline: the preimage is a domain-separated canonical JSON
+    // document (FRF/RUN/v1), never a delimiter-assembled string.
+    let side = |s: &SideCapture| {
+        serde_json::json!({
+            "exit": s.exit,
+            "stdout_sha256": s.stdout_sha256,
+            "stderr_sha256": s.stderr_sha256,
+            "stdout_first_line": s.stdout_first_line,
+            "stderr_first_line": s.stderr_first_line,
+        })
+    };
+    let run_doc = serde_json::json!({
+        "court": spec.id,
+        "authority": authority.id,
+        "authority_interpreter": authority_interpreter.as_ref().map(|i| i.sha256.as_str()),
+        // The candidate NAME is a label and deliberately absent: the
+        // candidate_sha256 is the identity. (It is still recorded in the
+        // capture's court_spec as metadata.)
+        "candidate_sha256": candidate_sha256,
+        "candidate_interpreter": candidate_interpreter.as_ref().map(|i| i.sha256.as_str()),
+        "fixture_sha256": fixture_sha256,
+        "arguments": arguments,
+        "environment_digest": environment.digest,
+        "runner_hash": runner.frf_executable_hash,
+        "court_semantic_identity": court_semantic_identity,
+        "reference": side(&reference),
+        "candidate": side(&candidate),
+        "residuals": residuals.iter().map(|r| serde_json::json!({
+            "kind": r.kind.as_str(),
+            "raw_reference": r.raw_reference,
+            "raw_candidate": r.raw_candidate,
+        })).collect::<Vec<_>>(),
+    });
+    let run_hash = crate::semantics::hash_preimage("FRF/RUN/v1", &run_doc)?;
+    let run = format!("run-{}-{}", spec.id, run_hash);
     let run_dir = store.run_dir(&run)?;
     if run_dir.exists() {
         return Err(FrfError::new(format!(
@@ -265,10 +307,10 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
         fixture: spec.fixture.id.clone(),
         fixture_sha256,
         arguments,
-        environment_digest,
+        environment,
         court_spec: spec.clone(),
-        runner,
-        comparators,
+        comparator_semantics,
+        provenance,
         // Artifact paths are ROOT-relative pointers (stable across machines);
         // the capture's `arguments` are the verbatim argv the side received.
         authority_artifact: ArtifactIdentity {
@@ -318,17 +360,6 @@ impl SideCapture {
             stdout_sha256: host::sha256_bytes(&outcome.stdout),
             stderr_sha256: host::sha256_bytes(&outcome.stderr),
         }
-    }
-
-    fn serialize(&self) -> String {
-        format!(
-            "exit={}|stdout={}|stderr={}|first_out={}|first_err={}",
-            self.exit,
-            self.stdout_sha256,
-            self.stderr_sha256,
-            self.stdout_first_line,
-            self.stderr_first_line
-        )
     }
 }
 

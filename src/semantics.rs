@@ -1,50 +1,59 @@
-//! Court semantic identity — the resolution-comparability key.
+//! Identity discipline — every evidence identity in FRF.
 //!
-//! `resolution_compatibility` used to enumerate fields by hand ("same court
-//! string, same authority, same fixture…"), which is brittle: every new
-//! dimension of the question had to be remembered. Instead, the court's
-//! semantic identity is a canonical hash of EVERYTHING that defines the
-//! evidentiary question, computed once at court time and stored in the
-//! capture:
+//! One rule for all identities: the preimage is a fixed domain tag followed
+//! by canonical JSON (RFC 8785), and the identity is its SHA-256. No
+//! delimiter-assembled strings (`|`, newlines) anywhere: a JSON document
+//! cannot be ambiguous about field boundaries the way a concatenation can.
 //!
-//! - court id, question, falsifier
-//! - admitted authority id
-//! - fixture id + bytes (sha256) + declared arguments
-//! - the full admissibility envelope (fixture family, platforms,
-//!   observables, normalizers, replay scope)
-//! - the comparator identities applied (id + version + implementation hash)
+//!   FRF/RUN/v1                 run identity (per court run)
+//!   FRF/COURT/v1               court semantic identity (the question)
+//!   FRF/COMPARATOR-SPEC/v1     comparator relation specification
+//!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
 //!
-//! The candidate is deliberately absent: a fix court changes the candidate
-//! while holding the question stable. The environment is deliberately
-//! absent: the resolution predicate checks it as a separate dimension.
-//!
-//! This is one instance of the general FRF idea of *evidence-transform
-//! predicates*: a transformation (fix, minimization, environment
-//! refinement, authority split) declares which dimensions may change and
-//! which must stay invariant. The fix-court predicate here is: same
-//! semantic identity, same environment, candidate MAY differ, target axis
-//! closes.
+//! The court semantic identity answers ONLY "what question was asked?":
+//! question, falsifier, authority ARTIFACT identity, fixture identity,
+//! arguments, the full envelope, and the comparator SEMANTIC identities
+//! (specification hashes). Implementation provenance (which runner, which
+//! comparator implementations) is bound separately in the capture — the
+//! question never depends on the implementation, so two independent FRF
+//! implementations can ask the same court question without pretending to be
+//! the same implementation.
 
 use crate::canon;
 use crate::error::Result;
 use crate::host;
 use crate::model::*;
-use serde_json::json;
+use serde_json::{json, Value};
 
-/// The canonical hash of the evidentiary question. Deterministic: the same
-/// court declaration, fixture bytes, and comparators always yield the same
-/// identity, in any implementation that serializes with RFC 8785.
+/// The one identity primitive: SHA-256 of `FRF/<kind>` + newline + the
+/// canonical JSON of `doc`.
+pub fn hash_preimage(kind: &str, doc: &Value) -> Result<String> {
+    let json = canon::canonical(doc)?;
+    Ok(host::sha256_bytes(format!("{kind}\n{json}").as_bytes()))
+}
+
+/// The court semantic identity — the resolution-comparability key. Contents:
+///
+/// - question, falsifier
+/// - the admitted authority ARTIFACT hash (bytes, not the id label)
+/// - fixture id + bytes + declared arguments
+/// - the full admissibility envelope
+/// - comparator SEMANTIC identities (relation + specification hash)
+///
+/// Deliberately absent: the court id (a label), the candidate (the one
+/// thing a fix court may change), the environment (checked separately by
+/// the resolution predicate), and all implementation identity.
 pub fn court_semantic_identity(
     spec: &CourtSpec,
+    authority_sha256: &str,
     fixture_sha256: &str,
-    comparators: &[ComparatorIdentity],
+    comparator_semantics: &[ComparatorSemantic],
 ) -> Result<String> {
     let envelope = &spec.admissibility_envelope;
     let doc = json!({
-        "court": spec.id,
         "question": spec.question,
         "falsifier": spec.falsifier,
-        "authority": spec.authority,
+        "authority_artifact_identity": authority_sha256,
         "fixture": {
             "id": spec.fixture.id,
             "sha256": fixture_sha256,
@@ -57,25 +66,43 @@ pub fn court_semantic_identity(
             "normalizers": envelope.normalizers,
             "replay_scope": envelope.replay_scope,
         },
-        "comparators": comparators
+        "comparators": comparator_semantics
             .iter()
-            .map(|c| json!({"id": c.id, "version": c.version, "implementation_hash": c.implementation_hash}))
+            .map(|c| json!({
+                "id": c.id,
+                "relation_id": c.relation_id,
+                "relation_version": c.relation_version,
+                "specification_hash": c.specification_hash,
+            }))
             .collect::<Vec<_>>(),
     });
-    let json = canon::canonical(&doc)?;
-    Ok(host::sha256_bytes(json.as_bytes()))
+    hash_preimage("FRF/COURT/v1", &doc)
+}
+
+/// The residual fingerprint: stable across repeated executions and (with the
+/// same raw projections) across stores, because it is built from the
+/// residual's hashed projections, not the raw values.
+pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
+    let doc = json!({
+        "kind": r.kind.as_str(),
+        "axis": r.axis.as_str(),
+        "surface": r.surface,
+        "reference_sha256": r.raw_reference_sha256,
+        "candidate_sha256": r.raw_candidate_sha256,
+    });
+    hash_preimage("FRF/RESIDUAL-FINGERPRINT/v1", &doc)
 }
 
 /// The first semantic dimension on which two captures differ, phrased for an
 /// error message ("fixture id differs (a != b)"). Only used for diagnostics:
 /// the PREDICATE is the semantic identity hash, this walk just names the
-/// mismatch.
+/// mismatch, aligned to exactly the fields that ARE in the identity.
 pub fn semantic_diff(a: &CaptureManifest, b: &CaptureManifest) -> Option<String> {
     let a_env = &a.court_spec.admissibility_envelope;
     let b_env = &b.court_spec.admissibility_envelope;
+    let a_sem = &a.comparator_semantics;
+    let b_sem = &b.comparator_semantics;
     let checks: Vec<(&str, String, String)> = vec![
-        ("court", a.court.clone(), b.court.clone()),
-        ("authority", a.authority.clone(), b.authority.clone()),
         (
             "question",
             a.court_spec.question.clone(),
@@ -85,6 +112,11 @@ pub fn semantic_diff(a: &CaptureManifest, b: &CaptureManifest) -> Option<String>
             "falsifier",
             a.court_spec.falsifier.clone(),
             b.court_spec.falsifier.clone(),
+        ),
+        (
+            "authority artifact (sha256)",
+            a.authority_artifact.sha256.clone(),
+            b.authority_artifact.sha256.clone(),
         ),
         ("fixture id", a.fixture.clone(), b.fixture.clone()),
         (
@@ -123,9 +155,9 @@ pub fn semantic_diff(a: &CaptureManifest, b: &CaptureManifest) -> Option<String>
             b_env.replay_scope.clone(),
         ),
         (
-            "comparators",
-            format!("{:?}", a.comparators),
-            format!("{:?}", b.comparators),
+            "comparator semantics",
+            format!("{:?}", a_sem),
+            format!("{:?}", b_sem),
         ),
     ];
     checks
@@ -138,12 +170,12 @@ pub fn semantic_diff(a: &CaptureManifest, b: &CaptureManifest) -> Option<String>
 mod tests {
     use super::*;
 
-    fn spec(id: &str, authority: &str) -> CourtSpec {
+    fn spec(question: &str) -> CourtSpec {
         CourtSpec {
-            id: id.into(),
-            question: "q".into(),
+            id: "cli-malformed-input".into(),
+            question: question.into(),
             falsifier: "f".into(),
-            authority: authority.into(),
+            authority: "ref-cli-1.8.2".into(),
             candidate: CandidateSpec {
                 name: "cand-cli".into(),
                 version_or_commit: "0.1.0".into(),
@@ -165,67 +197,133 @@ mod tests {
         }
     }
 
-    fn comparators() -> Vec<ComparatorIdentity> {
-        vec![ComparatorIdentity {
-            id: "exit".into(),
-            version: "v1".into(),
-            implementation_hash: "0".repeat(64),
-        }]
+    fn semantics() -> Vec<ComparatorSemantic> {
+        vec![crate::comparators::semantic("exit").unwrap()]
     }
 
     #[test]
     fn identity_is_deterministic_and_sensitive_to_the_question() {
-        let a = court_semantic_identity(&spec("c", "a"), &"1".repeat(64), &comparators()).unwrap();
+        let a = court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &semantics())
+            .unwrap();
         assert_eq!(
             a,
-            court_semantic_identity(&spec("c", "a"), &"1".repeat(64), &comparators()).unwrap()
+            court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &semantics())
+                .unwrap()
         );
         // The candidate is NOT part of the question.
-        let mut s2 = spec("c", "a");
+        let mut s2 = spec("q");
         s2.candidate.name = "something-else".into();
         assert_eq!(
             a,
-            court_semantic_identity(&s2, &"1".repeat(64), &comparators()).unwrap()
+            court_semantic_identity(&s2, &"1".repeat(64), &"2".repeat(64), &semantics()).unwrap()
         );
-        // Everything that defines the question is.
-        let mut s3 = spec("c", "a");
-        s3.admissibility_envelope.replay_scope = "repeated(3)".into();
+        // The court id is a label, not part of the question.
+        let mut s3 = spec("q");
+        s3.id = "renamed-court".into();
+        assert_eq!(
+            a,
+            court_semantic_identity(&s3, &"1".repeat(64), &"2".repeat(64), &semantics()).unwrap()
+        );
+        // The question, the authority ARTIFACT bytes, the fixture bytes, and
+        // the comparator semantics all move it.
         assert_ne!(
             a,
-            court_semantic_identity(&s3, &"1".repeat(64), &comparators()).unwrap()
+            court_semantic_identity(
+                &spec("different"),
+                &"1".repeat(64),
+                &"2".repeat(64),
+                &semantics()
+            )
+            .unwrap()
         );
         assert_ne!(
             a,
-            court_semantic_identity(&spec("c", "a"), &"2".repeat(64), &comparators()).unwrap()
+            court_semantic_identity(&spec("q"), &"9".repeat(64), &"2".repeat(64), &semantics())
+                .unwrap()
         );
         assert_ne!(
             a,
-            court_semantic_identity(&spec("c", "a"), &"1".repeat(64), &[]).unwrap()
+            court_semantic_identity(&spec("q"), &"1".repeat(64), &"9".repeat(64), &semantics())
+                .unwrap()
+        );
+        assert_ne!(
+            a,
+            court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &[]).unwrap()
+        );
+    }
+
+    #[test]
+    fn preimages_are_domain_separated() {
+        let a = hash_preimage("FRF/X/v1", &json!({"v": "1"})).unwrap();
+        // Same doc under a different domain must not collide.
+        assert_ne!(a, hash_preimage("FRF/Y/v1", &json!({"v": "1"})).unwrap());
+        // The domain tag is not part of the JSON: a doc that embeds the tag
+        // as data cannot be confused with a tagged doc.
+        let b = hash_preimage("FRF/X/v1", &json!({"v": "FRF/X/v1"})).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn fingerprint_is_structured_and_stable() {
+        let r = |surface: Option<String>, raw_ref: &str, raw_cand: &str| ResidualRecord {
+            schema_version: SCHEMA_RESIDUAL.into(),
+            id: "cli-text-0001".into(),
+            court: "c".into(),
+            run: "r".into(),
+            axis: Axis::Stderr,
+            kind: ResidualKind::Text,
+            surface,
+            authority: "a".into(),
+            scope: "s".into(),
+            candidate_sha256: "0".repeat(64),
+            raw_reference: raw_ref.into(),
+            raw_candidate: raw_cand.into(),
+            raw_reference_sha256: host::sha256_bytes(raw_ref.as_bytes()),
+            raw_candidate_sha256: host::sha256_bytes(raw_cand.as_bytes()),
+        };
+        // Values containing the old separator characters cannot be confused:
+        // the preimage is JSON, not concatenation.
+        let a = residual_fingerprint(&r(Some("a|b".into()), "c", "d")).unwrap();
+        let b = residual_fingerprint(&r(Some("a".into()), "b|c", "d")).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(
+            a,
+            residual_fingerprint(&r(Some("a|b".into()), "c", "d")).unwrap()
         );
     }
 
     #[test]
     fn diff_names_the_first_differing_dimension() {
-        let capture = |spec: CourtSpec| CaptureManifest {
+        let capture = |spec: CourtSpec, auth_sha: &str| CaptureManifest {
             schema_version: SCHEMA_CAPTURE.into(),
             run: "run-x".into(),
             court: spec.id.clone(),
             authority: spec.authority.clone(),
             manifest: "m.yaml".into(),
             fixture: spec.fixture.id.clone(),
-            fixture_sha256: "1".repeat(64),
+            fixture_sha256: "2".repeat(64),
             arguments: vec![],
-            environment_digest: "0".repeat(64),
-            court_spec: spec,
-            runner: RunnerIdentity {
-                schema_version: SCHEMA_RUNNER.into(),
-                frf_version: "0".into(),
-                frf_executable_hash: "0".repeat(64),
+            environment: EnvironmentIdentity {
+                schema_version: SCHEMA_ENVIRONMENT.into(),
+                os: "linux".into(),
+                architecture: "x86_64".into(),
+                kernel_release: "6".into(),
+                digest: "0".repeat(64),
             },
-            comparators: vec![],
+            court_spec: spec,
+            comparator_semantics: vec![],
+            provenance: ObservationProvenance {
+                schema_version: SCHEMA_PROVENANCE.into(),
+                runner: RunnerIdentity {
+                    schema_version: SCHEMA_RUNNER.into(),
+                    frf_version: "0".into(),
+                    frf_executable_hash: "0".repeat(64),
+                },
+                comparator_implementations: vec![],
+            },
             authority_artifact: ArtifactIdentity {
                 path: "p".into(),
-                sha256: "0".repeat(64),
+                sha256: auth_sha.into(),
                 interpreter: None,
             },
             candidate_artifact: ArtifactIdentity {
@@ -257,19 +355,26 @@ mod tests {
             residuals: vec![],
         };
 
-        let a = capture(spec("c", "a"));
-        let mut b = capture(spec("c", "a"));
-        assert_eq!(semantic_diff(&a, &b), None);
+        let a = capture(spec("q"), &"1".repeat(64));
+        assert_eq!(
+            semantic_diff(&a, &capture(spec("q"), &"1".repeat(64))),
+            None
+        );
+        let mut b = capture(spec("q"), &"1".repeat(64));
         b.fixture = "other.conf".into();
         assert_eq!(
             semantic_diff(&a, &b).unwrap(),
             "fixture id differs (\"malformed-path.conf\" != \"other.conf\")"
         );
-        let mut c = capture(spec("c", "a"));
-        c.authority = "other-1.0".into();
+        let mut c = capture(spec("q"), &"1".repeat(64));
+        c.authority_artifact.sha256 = "9".repeat(64);
         assert_eq!(
             semantic_diff(&a, &c).unwrap(),
-            "authority differs (\"a\" != \"other-1.0\")"
+            format!(
+                "authority artifact (sha256) differs ({:?} != {:?})",
+                "1".repeat(64),
+                "9".repeat(64)
+            )
         );
     }
 }

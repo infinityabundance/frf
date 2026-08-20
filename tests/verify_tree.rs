@@ -104,13 +104,7 @@ fn disposition_from_receipt(res: &ReceiptResidual) -> Disposition {
 }
 
 fn residual_fingerprint(r: &ResidualRecord) -> String {
-    hash_str(&format!(
-        "{}|{}|{}|{}",
-        r.kind.as_str(),
-        r.surface.as_deref().unwrap_or(""),
-        r.raw_reference,
-        r.raw_candidate
-    ))
+    frf::semantics::residual_fingerprint(r).unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -170,25 +164,55 @@ fn captures_are_self_consistent() {
         assert_eq!(cap.schema_version, SCHEMA_CAPTURE);
         assert_eq!(cap.run, run_dir.file_name().unwrap().to_string_lossy());
 
-        // Provenance, bound at observation time: the runner identifies the
-        // executable that observed the run, comparators name the applied
-        // relations, and artifacts are content-addressed snapshots that were
-        // hashed BEFORE execution.
-        assert_eq!(cap.runner.schema_version, SCHEMA_RUNNER);
-        assert_eq!(cap.runner.frf_version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(cap.runner.frf_executable_hash.len(), 64);
+        // Provenance, bound at observation time: the environment is captured
+        // structurally, comparator semantics re-derive from the registry, and
+        // the runner + comparator implementations are recorded — two
+        // questions answered separately: WHAT question (semantics) and WHO
+        // asked it (provenance).
+        assert_eq!(cap.environment.schema_version, SCHEMA_ENVIRONMENT);
+        assert_eq!(cap.environment.os, std::env::consts::OS);
+        assert_eq!(cap.environment.architecture, std::env::consts::ARCH);
+        assert_eq!(cap.environment.digest.len(), 64);
         assert_eq!(
-            cap.comparators.len(),
+            cap.comparator_semantics.len(),
             cap.court_spec.admissibility_envelope.observables.len()
         );
-        for c in &cap.comparators {
-            assert_eq!(c.implementation_hash, cap.runner.frf_executable_hash);
+        for c in &cap.comparator_semantics {
+            assert_eq!(
+                *c,
+                frf::comparators::semantic(&c.id).unwrap(),
+                "comparator semantics for {} must re-derive from the registry",
+                c.id
+            );
             assert!(
                 cap.court_spec
                     .admissibility_envelope
                     .observables
                     .contains(&c.id),
                 "comparator {} not declared",
+                c.id
+            );
+        }
+        assert_eq!(cap.provenance.schema_version, SCHEMA_PROVENANCE);
+        assert_eq!(cap.provenance.runner.schema_version, SCHEMA_RUNNER);
+        assert_eq!(cap.provenance.runner.frf_version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(cap.provenance.runner.frf_executable_hash.len(), 64);
+        assert_eq!(
+            cap.provenance.comparator_implementations.len(),
+            cap.comparator_semantics.len()
+        );
+        for c in &cap.provenance.comparator_implementations {
+            assert_eq!(
+                c.implementation_hash,
+                cap.provenance.runner.frf_executable_hash
+            );
+            assert_eq!(c.runner_hash, cap.provenance.runner.frf_executable_hash);
+            assert!(
+                cap.court_spec
+                    .admissibility_envelope
+                    .observables
+                    .contains(&c.id),
+                "implementation {} not declared",
                 c.id
             );
         }
@@ -222,12 +246,15 @@ fn captures_are_self_consistent() {
         // The admitted authority is exactly the artifact that ran.
         let admitted: AuthorityRecord = store.load_authority(&cap.authority).unwrap();
         assert_eq!(cap.authority_artifact.sha256, admitted.executable_sha256);
-        // The semantic identity re-derives from the captured declaration.
+        // The semantic identity re-derives from the captured declaration:
+        // authority ARTIFACT bytes + comparator SEMANTICS, no implementation
+        // identity.
         assert_eq!(
             frf::semantics::court_semantic_identity(
                 &cap.court_spec,
+                &cap.authority_artifact.sha256,
                 &cap.fixture_sha256,
-                &cap.comparators
+                &cap.comparator_semantics
             )
             .unwrap(),
             cap.court_semantic_identity
@@ -288,6 +315,39 @@ fn captures_are_self_consistent() {
         runs += 1;
     }
     assert!(runs >= 1, "at least one court run must be captured");
+}
+
+// ---------------------------------------------------------------------------
+// objects/ — content-addressed execution snapshots
+// ---------------------------------------------------------------------------
+
+#[test]
+fn objects_are_content_addressed_and_sealed() {
+    let store = store();
+    let mut found = 0;
+    for entry in fs::read_dir(store.root.join("objects/sha256")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert_eq!(name.len(), 64, "object name {name}");
+        assert!(name.chars().all(|c| c.is_ascii_hexdigit()));
+        // The name MUST be the content: a hand-planted or corrupted object
+        // fails here, and the court runner refuses to execute it.
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(
+            host::sha256_bytes(&bytes),
+            name,
+            "object {} is not content-addressed (hand-edited?)",
+            path.display()
+        );
+        // (Sealing is a materialization-time property, unit-tested in
+        // store.rs: git does not preserve write bits across checkouts, so a
+        // cloned tree's modes are not evidence.)
+        found += 1;
+    }
+    assert!(
+        found >= 3,
+        "the golden path must leave at least three objects (authority, candidate, fixture)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -498,10 +558,12 @@ fn receipts_are_self_consistent() {
         assert_eq!(rec.fixtures[0].hash, cap.fixture_sha256);
         assert_eq!(rec.fixtures[0].arguments, cap.arguments);
 
-        // Runner + comparators are copied from the capture (bound at
-        // observation time), never reconstructed at emit time.
-        assert_eq!(rec.runner, cap.runner);
-        assert_eq!(rec.comparators, cap.comparators);
+        // Runner + comparator semantics + environment are copied from the
+        // capture (bound at observation time), never reconstructed at emit
+        // time.
+        assert_eq!(rec.provenance, cap.provenance);
+        assert_eq!(rec.comparator_semantics, cap.comparator_semantics);
+        assert_eq!(rec.environment, cap.environment);
         assert_eq!(rec.court.semantic_identity, cap.court_semantic_identity);
         assert_eq!(
             rec.authority.interpreter,
@@ -688,7 +750,7 @@ fn claims_are_re_derivable_from_receipts() {
                 "{}-{} ({})",
                 rec.environment.architecture,
                 rec.environment.os,
-                &rec.environment.environment_digest[..8]
+                &rec.environment.digest[..8]
             )
         );
 

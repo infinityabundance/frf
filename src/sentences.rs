@@ -21,8 +21,8 @@ use crate::model::*;
 
 /// Short environment label used inside sentences: `x86_64-linux (ab12cd34)`
 /// (the paper's arch-os platform convention).
-fn environment_label(env: &ReceiptEnvironment) -> String {
-    let digest = &env.environment_digest;
+fn environment_label(env: &EnvironmentIdentity) -> String {
+    let digest = &env.digest;
     let short = if digest.len() >= 8 {
         &digest[..8]
     } else {
@@ -132,20 +132,25 @@ pub fn refusal_lines(r: &Receipt) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn env() -> ReceiptEnvironment {
-        ReceiptEnvironment {
+    fn env() -> EnvironmentIdentity {
+        EnvironmentIdentity {
+            schema_version: SCHEMA_ENVIRONMENT.into(),
             os: "linux".into(),
             architecture: "x86_64".into(),
-            environment_digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
-                .into(),
+            kernel_release: "6.1".into(),
+            digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".into(),
         }
     }
 
-    fn runner() -> RunnerIdentity {
-        RunnerIdentity {
-            schema_version: SCHEMA_RUNNER.into(),
-            frf_version: env!("CARGO_PKG_VERSION").into(),
-            frf_executable_hash: "0".repeat(64),
+    fn provenance() -> ObservationProvenance {
+        ObservationProvenance {
+            schema_version: SCHEMA_PROVENANCE.into(),
+            runner: RunnerIdentity {
+                schema_version: SCHEMA_RUNNER.into(),
+                frf_version: env!("CARGO_PKG_VERSION").into(),
+                frf_executable_hash: "0".repeat(64),
+            },
+            comparator_implementations: vec![],
         }
     }
 
@@ -166,8 +171,8 @@ mod tests {
                 },
                 semantic_identity: "1".repeat(64),
             },
-            runner: runner(),
-            comparators: vec![],
+            provenance: provenance(),
+            comparator_semantics: vec![],
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
                 kind: "executable_reference".into(),

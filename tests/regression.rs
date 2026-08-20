@@ -220,6 +220,67 @@ fn court_rejects_bad_declarations() {
 }
 
 #[test]
+fn envelope_declarations_are_fail_closed() {
+    // Declaration must never masquerade as enforcement: anything the
+    // executor does not actually apply is refused up front.
+    let work = Workdir::new("envelope");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    // Declared normalizers are never applied -> refused.
+    let m = manifest_variant(&work, "normalizers: []", "normalizers: [strip-ansi]");
+    let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("normalizers are not supported"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // A replay_scope beyond single-run is declared but not executed -> refused.
+    let m = manifest_variant(
+        &work,
+        "replay_scope: single-run",
+        "replay_scope: repeated(3)",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("only 'single-run'"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // The current platform outside the declared envelope -> refused.
+    let m = manifest_variant(
+        &work,
+        "platforms: [\"x86_64-linux\"]",
+        "platforms: [\"aarch64-darwin\"]",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("outside the declared envelope"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // An authority admitted for another platform is an out-of-envelope
+    // oracle -> refused.
+    let authority_path = work.path("frf/authorities/ref-cli-1.8.2.yaml");
+    let text = fs::read_to_string(&authority_path).unwrap();
+    let text = text.replace("platform: x86_64-linux", "platform: aarch64-darwin");
+    fs::write(&authority_path, text).unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("out-of-envelope oracle"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn court_rejects_ids_that_could_escape_the_root() {
     let work = Workdir::new("court-ids");
     work.copy_canonical_tree();
@@ -490,21 +551,16 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
     assert!(stderr(&out).contains("new court run"));
 
     // A resolution run whose captures still diverge on the axis must be
-    // refused: re-run the ORIGINAL (unfixed) candidate under a fresh
-    // candidate name so the run id differs, then point `fixed` at it.
-    let variant = work.path("frf/courts/variant.yaml");
-    let text = fs::read_to_string(work.path(MANIFEST)).unwrap();
-    let text = text.replace("    name: cand-cli", "    name: cand-cli-unfixed");
-    fs::write(&variant, text).unwrap();
-    let out = frf(
-        &work,
-        &["--root", ROOT, "court", "run", "frf/courts/variant.yaml"],
-    );
-    assert_success(&out, "court run (unfixed candidate, fresh identity)");
+    // refused: re-run an UNFIXED candidate under fresh artifact bytes (a
+    // byte-distinct script, so the run id is new — the candidate name is a
+    // label and does not enter the run identity), then point `fixed` at it.
+    work.write_candidate("#!/bin/sh\n# unfixed re-observation (byte-distinct artifact)\nexit 1\n");
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "court run (unfixed candidate, fresh artifact)");
     let unfixed_run = stdout(&out);
     assert_ne!(
         unfixed_run, run,
-        "fresh candidate identity must yield a new run"
+        "fresh candidate bytes must yield a new run"
     );
     let out = frf(
         &work,
@@ -566,7 +622,19 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
         stderr(&out)
     );
 
-    // A run under a different admitted authority must be refused.
+    // A run under a different admitted AUTHORITY ARTIFACT must be refused:
+    // the semantic identity binds the authority bytes, not the id label.
+    // (An authority id change with identical bytes asks the same question.)
+    let variant_ref2 = work.path("golden/reference2.sh");
+    fs::write(
+        &variant_ref2,
+        format!(
+            "#!/bin/sh\n# distinct authority artifact\n{}",
+            fs::read_to_string(work.path("golden/reference.sh")).unwrap()
+        ),
+    )
+    .unwrap();
+    set_exec(&variant_ref2);
     let out = frf(
         &work,
         &[
@@ -574,14 +642,14 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "authority",
             "admit",
-            "golden/reference.sh",
+            "golden/reference2.sh",
             "--name",
             "ref-cli2",
             "--version",
             "1.8.2",
         ],
     );
-    assert_success(&out, "admit second authority");
+    assert_success(&out, "admit second authority (distinct bytes)");
     let variant3 = work.path("frf/courts/variant3.yaml");
     let text = fs::read_to_string(work.path(MANIFEST)).unwrap();
     let text = text
@@ -592,7 +660,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
         &work,
         &["--root", ROOT, "court", "run", "frf/courts/variant3.yaml"],
     );
-    assert_success(&out, "court run (different authority)");
+    assert_success(&out, "court run (different authority artifact)");
     let other_authority_run = stdout(&out);
     let out = frf(
         &work,
@@ -612,7 +680,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
     );
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("authority differs"),
+        stderr(&out).contains("authority artifact"),
         "stderr: {}",
         stderr(&out)
     );

@@ -67,7 +67,7 @@ Three suites, mirroring the framework's own discipline:
 
 | suite | command | what it does |
 |---|---|---|
-| regression | `cargo test` | the invariant bank: every verb, every rejection path, reason-gate, re-disposition, id/path-safety boundary, timeout kill, and a zero-residual positive control |
+| regression | `cargo test` | the invariant bank: every verb, every rejection path, reason-gate, re-disposition, id/path-safety boundary, fail-closed envelope enforcement, object-store corruption refusal, timeout kill, and a zero-residual positive control |
 | verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
 | fuzzing | `cargo test --test fuzz` (deterministic, seeded, runs in CI) · `cargo +nightly fuzz run yaml_types\|cli_args\|store_ids` (libFuzzer, corpus-guided) | the negative controls: YAML deserializers never panic and never produce a forbidden disposition state, the CLI parser never panics, and ids that pass validation can never escape the store root |
 
@@ -83,7 +83,7 @@ frf/
   authorities/   admitted once, never rewritten
   courts/        hand-authored court declarations (question, envelope, fixture)
   captures/      raw observations, content-addressed, immutable
-  objects/       content-addressed execution snapshots (sha256/<H>)
+  objects/       content-addressed execution snapshots (sha256/<H>), verified + sealed
   residuals/     immutable observations + derived tokens + <id>.events/ dispositions
   receipts/      OpenReceipts, canonical JSON (RFC 8785), content-addressed by full digest
   claims/        compiled claims, written only by `frf claim compile`
@@ -137,9 +137,12 @@ says no more than that receipt licenses.
   reproducible by any implementation (the paper's cross-language
   OpenReceipt goal). The mixed tree is deliberate and documented here.
 - **Run and receipt ids are full 64-hex SHA-256 digests** (`run-{court}-{sha256}`, `receipt-{run}-{sha256}`), the complete digest, not a display prefix. A short prefix is not accepted as input; ids are meant to be copied whole. CBOR (RFC 8949) as an alternative canonical encoding is future work.
-- **The environment digest covers os + architecture + kernel release only**;
-  environment admission (libc, locale, timezone data, dynamic dependencies,
-  container/Nix digests) is future work.
+- **The environment identity is captured structurally at court time** (os,
+  architecture, kernel release, digest) and copied into receipts — a
+  receipt never asks its own host what environment an old court ran under.
+  The strata are still minimal; environment admission (libc, locale,
+  timezone data, dynamic dependencies, container/Nix digests, clock source)
+  is future work.
 - **The subprocess runner is hostile to its own process tree (unix)**: each
   side runs in its own process group, pipes are drained concurrently with the
   wait loop, signals are recorded by number, and the whole group is
@@ -148,26 +151,44 @@ says no more than that receipt licenses.
   bounded to 1 s. Remaining: a side that escapes via `setsid` is outside the
   policy, and the capture is the process group's output, not byte-timed.
 - **Artifacts execute from content-addressed snapshots** (`objects/sha256/<H>`):
-  bytes are hashed BEFORE execution and the snapshot is what runs, closing
-  the hash-vs-execute TOCTOU window. Consequence: a script's `$0` is the
-  snapshot path, so sides must not depend on their own path. The fixture is
-  snapshotted too, and `{fixture}` resolves to the snapshot path (the
-  capture's arguments are the verbatim argv).
+  bytes are hashed BEFORE execution, materialized via temp-write → fsync →
+  verify → atomic rename → seal (executed `0555`, data `0444`), RE-HASHED on
+  every use (a corrupt or hand-planted object is refused, never executed),
+  and re-sealed on every use. `{fixture}` resolves to the snapshot path; a
+  script's `$0` is the snapshot path, so sides must not depend on their own
+  path. This is content-addressed and corruption-checked; it is not
+  cryptographically impossible for the same OS user to mutate between
+  verification and execution (sealed memfd + execveat is future work).
 - **Script interpreter identity is bound for scripts with resolvable
   shebangs** (path + hash of the resolved interpreter); binaries carry no
   interpreter binding yet (ELF loader + dynamic dependencies are future
-  work). The interpreter hash is machine-specific: the checked-in tree's
-  recorded values are evidence, not re-derivable cross-machine.
-- **Runner + comparator identity is bound at court time** (frf version,
-  frf executable hash, comparator id/version/implementation hash) and
-  copied into receipts; a receipt never reconstructs provenance from the
-  binary that emits it later. Comparator versions must be bumped whenever
-  a comparator's semantics change.
-- **Resolution comparability is a semantic court identity**: a canonical
-  hash of everything defining the question (court, question, falsifier,
-  authority, fixture bytes + arguments, full envelope, comparator
-  identities); a fix court may change only the candidate. Environment is a
-  separate, required-equal dimension.
+  work). An `env` shebang (`#!/usr/bin/env python3`) records the
+  downstream interpreter, not `/usr/bin/env` itself — the kernel interpreter
+  chain (`InterpreterChain`) is a future refinement. Interpreter hashes are
+  machine-specific: the checked-in tree's recorded values are evidence, not
+  re-derivable cross-machine.
+- **Runner + comparator implementations are bound at court time** (frf
+  version, frf executable hash, per-axis implementation hashes) in the
+  capture's `provenance` block and copied into receipts; a receipt never
+  reconstructs provenance from the binary that emits it later. Comparator
+  RELATION versions must be bumped when a relation's semantics change.
+- **Semantic identity is separated from implementation provenance**: the
+  court's semantic identity hashes the question, falsifier, authority
+  ARTIFACT bytes, fixture bytes + arguments, the full envelope, and
+  comparator SEMANTIC identities (specification hashes) — never
+  implementation hashes, and never the court id or candidate name (labels).
+  Two independent FRF implementations that implement the same comparator
+  specifications ask the same question; resolution requires the same
+  semantic identity + environment digest, and deliberately does NOT require
+  equal provenance (a stricter reproducibility policy is future work).
+- **The admissibility envelope is fail-closed**: declared `normalizers`,
+  non-`single-run` `replay_scope`, a current platform outside the declared
+  `platforms`, or an authority admitted for another platform all REFUSE the
+  court — declaration never masquerades as enforcement.
+- **Every evidence identity uses a domain-separated structured preimage**
+  (`FRF/<KIND>/v1` + canonical JSON): run ids, court semantic identity,
+  comparator specifications, and residual fingerprints. No
+  delimiter-assembled strings, so no field-boundary ambiguity.
 - **`environmental` and `oracle_version` weaken the envelope**: they close the
   residual but never license parity on its axis (the claim compiler excludes
   the axis). Envelope refinement records are future work.
