@@ -54,7 +54,7 @@ Allow five minutes; it takes about five seconds.
 | `frf court run MANIFEST.yaml` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed |
-| `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Refuses while any residual is `open`/`unknown`/`harness`, and refuses a receipt whose run observed divergence — a failing run's receipt can never become parity, however its residuals are disposed; the refusal names the resolution run to compile from instead. Otherwise emits one conservative sentence + the non-claim, attributed to the exact candidate artifact the run executed |
+| `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
 
 Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
@@ -127,6 +127,13 @@ says no more than that receipt licenses.
   trajectory (`open` → suspected `harness` → … → `fixed`) survives
   re-disposition. The event chain is flat for now: parent-hash chaining and
   resolution-receipt edges are future work.
+- **Claim dependency algebra is implemented**: a residual blocks only
+  claims whose observable scope intersects it — `open`/`unknown` block
+  their axis, `harness` invalidates the run's evidence entirely, and any
+  residual on an axis excludes that axis from parity. Claims carry their IR
+  (`observable_scope`, `excluded_residuals`); prose is one renderer. A
+  full scope algebra (`fixture_scope`, `environment_scope`, `requires[]`,
+  set-containment admission `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`) is future work.
 - **`fixed` never licenses parity from the run that observed the failure**:
   the positive claim must be compiled from the resolution run's receipt, the
   run that actually observed the passing candidate. This is enforced by the

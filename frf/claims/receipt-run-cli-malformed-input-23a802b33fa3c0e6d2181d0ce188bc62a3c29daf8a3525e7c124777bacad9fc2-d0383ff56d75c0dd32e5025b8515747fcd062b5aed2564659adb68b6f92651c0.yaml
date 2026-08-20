@@ -1,5 +1,5 @@
 schema_version: frf-claim-v1
-receipt: receipt-run-cli-malformed-input-1d4361e0b8bf79ed2c72996ea69fc15445be1a30badd5604986e7789a8f4b5e2-d5da51af1dec49fa8afc4061ff3dd1df02138b51c866a00a8ac1206b2a1a977b
+receipt: receipt-run-cli-malformed-input-23a802b33fa3c0e6d2181d0ce188bc62a3c29daf8a3525e7c124777bacad9fc2-d0383ff56d75c0dd32e5025b8515747fcd062b5aed2564659adb68b6f92651c0
 authority: ref-cli-1.8.2
 candidate:
   name: cand-cli
@@ -8,6 +8,10 @@ candidate:
 court: cli-malformed-input
 fixture_family: malformed-input
 environment: x86_64-linux (02a5c097)
+observable_scope:
+- exit
+excluded_residuals:
+- cli-text-0002
 positive:
 - For reference ref-cli-1.8.2, fixture family malformed-input, and environment x86_64-linux (02a5c097), candidate cand-cli 0.1.0-fixed (86992b0b) preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input.
 non_claims:

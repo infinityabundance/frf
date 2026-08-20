@@ -724,10 +724,12 @@ fn claims_are_re_derivable_from_receipts() {
         let rec: Receipt = store.load_receipt(&receipt_id).unwrap();
         let family = &rec.court.admissibility_envelope.fixture_family;
 
-        // A claim may only exist over a non-blocking receipt.
+        // A claim may only exist over a receipt whose run's evidence is not
+        // invalidated by harness (run-level). Open/unknown residuals block
+        // only their own axis, so a scoped claim can coexist with them.
         assert!(
-            sentences::refusal_lines(&rec).is_empty(),
-            "claim {receipt_id} exists over a blocking receipt"
+            sentences::harness_refusal_lines(&rec.residuals, family).is_empty(),
+            "claim {receipt_id} exists over a harness-invalidated run"
         );
 
         // Exactly one conservative sentence, byte-for-byte re-derivable.
@@ -737,6 +739,22 @@ fn claims_are_re_derivable_from_receipts() {
             vec![expected],
             "claim {receipt_id} drifted from its receipt"
         );
+        // Claim IR re-derives: the observable scope is the axes THIS run
+        // observed passing; the exclusions are the residuals on other axes.
+        let expected_scope: Vec<String> = rec
+            .observables
+            .iter()
+            .filter(|obs| !rec.residuals.iter().any(|r| r.axis == obs.axis))
+            .map(|obs| obs.axis.clone())
+            .collect();
+        assert_eq!(claim.observable_scope, expected_scope);
+        let expected_excluded: Vec<String> = rec.residuals.iter().map(|r| r.id.clone()).collect();
+        assert_eq!(claim.excluded_residuals, expected_excluded);
+        // A claim never covers an axis with a residual on it.
+        assert!(claim
+            .observable_scope
+            .iter()
+            .all(|axis| !rec.residuals.iter().any(|r| r.axis == *axis)));
         assert_eq!(claim.non_claims, sentences::non_claims(family));
         assert_eq!(
             claim.authority,

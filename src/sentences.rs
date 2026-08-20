@@ -3,19 +3,23 @@
 //! string can be hand-authored anywhere: every sentence is assembled here
 //! from receipt fields, and nothing else writes into `claims/`.
 //!
-//! Positive-claim rule (Section 12 + the semantic non-bypass rule):
-//! - A positive parity claim is compiled ONLY from a receipt whose run
-//!   actually observed the axis passing — an axis is claimable iff this
-//!   receipt has no residual on it. A receipt that observed divergence can
-//!   never become a parity receipt, however its residuals are disposed: a
-//!   disposition links historical evidence (e.g. `fixed` with its resolution
-//!   run) but never rewrites what an old run demonstrated. Compile the
-//!   positive claim from the resolution run's receipt instead.
-//! - `open`, `unknown`, and `harness` block the entire claim; other closures
-//!   exclude only their own axis.
-//! - The compiled sentence is scoped to the executed court, the admitted
-//!   authority id, the EXACT candidate artifact, the fixture family, and the
-//!   environment digest — never beyond the receipt's surface.
+//! Claim dependency algebra (the paper's rule, implemented): a residual
+//! blocks ONLY the claims whose observable scope intersects it.
+//!
+//! - `harness` invalidates the EVIDENCE of the run: no claim from the
+//!   receipt, on any axis (harness is run-level, not axis-level).
+//! - `open` and `unknown` block claims on their axis only: an unexplained
+//!   stdout difference blocks stdout parity, never knowledge about exit.
+//! - a residual on an axis, whatever its disposition, means THIS run
+//!   observed divergence on that axis — the axis is never claimable as
+//!   parity from this receipt (a disposition links history; it never
+//!   rewrites an observation). Compile from the resolution run instead.
+//! - `fixed`, `intentional`, `environmental`, `oracle_version` exclude only
+//!   their axis and never license parity on it.
+//!
+//! The compiled sentence is scoped to the executed court, the admitted
+//! authority id, the EXACT candidate artifact, the fixture family, and the
+//! environment digest — never beyond the receipt's surface.
 
 use crate::model::*;
 
@@ -31,22 +35,19 @@ fn environment_label(env: &EnvironmentIdentity) -> String {
     format!("{}-{} ({short})", env.architecture, env.os)
 }
 
-/// The single conservative positive sentence, or `None` when a positive claim
-/// is not licensed: any blocking residual (open/unknown/harness) refuses the
-/// whole claim, and an axis is claimable only when THIS receipt's run observed
-/// it passing (no residual on the axis). A disposed residual — `fixed`
-/// included — links history; it never makes the old failing observation into
-/// parity. The claim is attributed to the exact candidate artifact the run
-/// executed.
+/// The single conservative positive sentence, or `None` when no positive
+/// claim is licensed: harness residuals invalidate the whole run's evidence,
+/// and an axis is claimable only when THIS receipt's run observed it passing
+/// (no residual on the axis) — whatever a residual's disposition, an axis
+/// this run observed diverging is never parity from this receipt. Open and
+/// unknown residuals block only their own axis (they fall out of the scope
+/// like any residual); harness blocks everything.
 pub fn positive_claim(r: &Receipt) -> Option<String> {
-    let family = &r.court.admissibility_envelope.fixture_family;
-    // Blocking dispositions refuse the entire claim, not just their axis.
-    if r.residuals
-        .iter()
-        .any(|res| matches!(res.disposition.as_str(), "open" | "unknown" | "harness"))
-    {
+    // Harness invalidates the evidence of the run, on every axis.
+    if r.residuals.iter().any(|res| res.disposition == "harness") {
         return None;
     }
+    let family = &r.court.admissibility_envelope.fixture_family;
     let mut clauses: Vec<String> = Vec::new();
     for obs in &r.observables {
         // The run observed a residual on this axis → the axis cannot be
@@ -95,22 +96,44 @@ pub fn non_claims(fixture_family: &str) -> Vec<String> {
     ]
 }
 
-/// Refusal lines for residuals that block a positive claim: one line per
-/// blocking residual, in the prompt's exact shape
-/// "cannot claim X because residual Y is open". Blocking dispositions are
-/// `open`, `unknown`, and `harness`.
+/// Refusal lines, split by level:
+///
+/// - [`harness_refusal_lines`]: run-level — harness invalidates the evidence
+///   of the run, blocking every claim from the receipt.
+/// - [`open_refusal_lines`]: axis-level — open/unknown residuals block only
+///   claims whose observable scope intersects their axis.
+///
+/// Each line uses the prompt's exact shape "cannot claim X because residual
+/// Y is open". [`refusal_lines_from_residuals`] is the union, used for the
+/// receipt's embedded claim state at emit time.
+pub fn harness_refusal_lines(residuals: &[ReceiptResidual], fixture_family: &str) -> Vec<String> {
+    refusal_lines_matching(residuals, fixture_family, |d| d == "harness")
+}
+
+pub fn open_refusal_lines(residuals: &[ReceiptResidual], fixture_family: &str) -> Vec<String> {
+    refusal_lines_matching(residuals, fixture_family, |d| {
+        matches!(d, "open" | "unknown")
+    })
+}
+
+/// Union of all refusal lines (harness + open + unknown).
 pub fn refusal_lines_from_residuals(
     residuals: &[ReceiptResidual],
     fixture_family: &str,
 ) -> Vec<String> {
+    refusal_lines_matching(residuals, fixture_family, |d| {
+        matches!(d, "open" | "unknown" | "harness")
+    })
+}
+
+fn refusal_lines_matching(
+    residuals: &[ReceiptResidual],
+    fixture_family: &str,
+    matches: impl Fn(&str) -> bool,
+) -> Vec<String> {
     residuals
         .iter()
-        .filter(|res| {
-            matches!(
-                res.disposition.as_str(),
-                "open" | "unknown" | "harness"
-            )
-        })
+        .filter(|res| matches(res.disposition.as_str()))
         .map(|res| {
             format!(
                 "cannot claim compatibility for fixture family {fixture_family} because residual {} ({}) is {}",
@@ -122,7 +145,7 @@ pub fn refusal_lines_from_residuals(
         .collect()
 }
 
-/// Refusal lines for a whole receipt (convenience wrapper).
+/// Refusal lines for a whole receipt (convenience wrapper, union form).
 pub fn refusal_lines(r: &Receipt) -> Vec<String> {
     let family = &r.court.admissibility_envelope.fixture_family;
     refusal_lines_from_residuals(&r.residuals, family)
@@ -316,15 +339,43 @@ mod tests {
     }
 
     #[test]
-    fn open_residual_blocks_the_whole_sentence() {
+    fn open_residual_blocks_only_its_axis() {
+        // exit open, stderr clean: the exit claim is blocked (its axis was
+        // observed diverging), but stderr remains claimable — an open
+        // residual never throws away unrelated positive knowledge.
         let mut r = receipt_base();
         r.residuals.push(res("cli-exit-0001", "exit", "open"));
-        // Even though stderr is clean, one open residual refuses everything.
-        assert_eq!(positive_claim(&r), None);
+        let sentence = positive_claim(&r).unwrap();
+        assert!(
+            sentence.contains("malformed-input first diagnostic line"),
+            "got: {sentence}"
+        );
+        assert!(!sentence.contains("exit class"));
         assert_eq!(
-            refusal_lines(&r),
+            open_refusal_lines(&r.residuals, "malformed-input"),
             vec!["cannot claim compatibility for fixture family malformed-input because residual cli-exit-0001 (exit) is open"]
         );
+    }
+
+    #[test]
+    fn harness_invalidates_the_whole_run() {
+        // harness is run-level: no claim on ANY axis, even clean ones.
+        let mut r = receipt_base();
+        r.residuals.push(res("cli-text-0001", "stderr", "harness"));
+        assert_eq!(positive_claim(&r), None);
+        assert_eq!(
+            harness_refusal_lines(&r.residuals, "malformed-input"),
+            vec!["cannot claim compatibility for fixture family malformed-input because residual cli-text-0001 (text) is harness"]
+        );
+    }
+
+    #[test]
+    fn unknown_blocks_only_its_axis() {
+        let mut r = receipt_base();
+        r.residuals.push(res("cli-exit-0001", "exit", "unknown"));
+        let sentence = positive_claim(&r).unwrap();
+        assert!(sentence.contains("malformed-input first diagnostic line"));
+        assert!(!sentence.contains("exit class"));
     }
 
     #[test]
