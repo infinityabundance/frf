@@ -51,7 +51,7 @@ jobs:
         run: cargo package
 
   msrv:
-    name: MSRV (rust-version: 1.85)
+    name: "MSRV (rust-version: 1.85)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
