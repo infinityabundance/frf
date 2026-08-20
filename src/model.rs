@@ -27,14 +27,17 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v1";
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v2";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-/// The OpenReceipt schema. v2 is the canonical-JSON (RFC 8785) protocol
-/// version: the receipt body is serialized canonically and its identity is
-/// the full SHA-256 digest of those canonical bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v2";
+/// The OpenReceipt schema. v3 binds runner + comparator identity (copied
+/// from the capture at observation time, never reconstructed at emit time)
+/// and the court's semantic identity. The body is serialized as canonical
+/// JSON (RFC 8785) and its identity is the full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v3";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
+/// Runner identity block recorded in every capture at court time.
+pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
@@ -458,6 +461,13 @@ pub struct AdmissibilityEnvelope {
 /// Self-contained record of one court run: the raw bytes of both sides plus
 /// the snapshot of the court declaration, so a receipt can be re-derived
 /// without the original manifest file.
+///
+/// v2 adds the provenance block: WHO ran the court (the frf executable
+/// identity), WHICH comparators were applied, WHICH exact artifacts were
+/// executed (content-addressed snapshots, hashed BEFORE execution), and the
+/// court's semantic identity (the resolution-comparability key). All of it
+/// is bound at observation time — a receipt emitted later copies it, it is
+/// never reconstructed from whatever binary happens to be installed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaptureManifest {
     pub schema_version: String,
@@ -470,11 +480,74 @@ pub struct CaptureManifest {
     pub arguments: Vec<String>,
     pub environment_digest: String,
     pub court_spec: CourtSpec,
-    /// SHA-256 of the exact candidate artifact bytes this run executed.
-    pub candidate_sha256: String,
+    /// The frf executable that executed this court (version + binary hash).
+    pub runner: RunnerIdentity,
+    /// The comparators applied to the declared observables, at court time.
+    pub comparators: Vec<ComparatorIdentity>,
+    /// The admitted reference artifact, snapshotted and executed.
+    pub authority_artifact: ArtifactIdentity,
+    /// The candidate artifact, snapshotted and executed.
+    pub candidate_artifact: ArtifactIdentity,
+    /// Content hash of everything defining the evidentiary question
+    /// (see [`crate::semantics::court_semantic_identity`]) — the key a
+    /// resolution run must reproduce, except the candidate.
+    pub court_semantic_identity: String,
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
+}
+
+/// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
+/// binary itself: the comparators, normalizers, and endoduction are code in
+/// that executable, so this one hash binds all their implementations at
+/// observation time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerIdentity {
+    pub schema_version: String,
+    pub frf_version: String,
+    pub frf_executable_hash: String,
+}
+
+/// One comparator applied at court time, identified by name, version, and
+/// the runner executable hash that implements it. `version` must be bumped
+/// whenever the comparator's semantics change, so a name alone can never
+/// outlive its implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorIdentity {
+    pub id: String,
+    pub version: String,
+    pub implementation_hash: String,
+}
+
+/// Version of the comparator implementations in this executable. Bump this
+/// whenever a comparator's semantics change (never reuse a name with new
+/// meaning under the old version).
+pub const COMPARATOR_VERSION: &str = "v1";
+
+/// The interpreter a script artifact was executed under (`#!` line resolved
+/// and hashed): for a script, "the exact artifact" is bytes + interpreter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InterpreterIdentity {
+    /// Resolved, canonicalized absolute path.
+    pub path: String,
+    pub sha256: String,
+}
+
+/// A content-addressed execution object: the exact bytes a run executed,
+/// materialized under `objects/sha256/<H>` BEFORE execution, so hashing and
+/// executing can never observe different bytes (no TOCTOU window).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactIdentity {
+    /// The snapshot path this run actually executed.
+    pub path: String,
+    pub sha256: String,
+    /// Present when the artifact is a script with a resolvable shebang.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<InterpreterIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -635,6 +708,10 @@ pub struct TokenRecord {
 pub struct Receipt {
     pub schema_version: String,
     pub court: ReceiptCourt,
+    /// Who observed: copied from the capture, never reconstructed.
+    pub runner: RunnerIdentity,
+    /// The comparators applied, copied from the capture.
+    pub comparators: Vec<ComparatorIdentity>,
     pub authority: ReceiptAuthority,
     pub candidate: ReceiptCandidate,
     pub environment: ReceiptEnvironment,
@@ -652,6 +729,9 @@ pub struct ReceiptCourt {
     pub question: String,
     pub falsifier: String,
     pub admissibility_envelope: ReceiptEnvelope,
+    /// The court's semantic identity (copied from the capture) — the key
+    /// that makes two runs answer the same evidentiary question.
+    pub semantic_identity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -672,6 +752,9 @@ pub struct ReceiptAuthority {
     /// The authority's admitted executable hash (Appendix A `identity_hash`).
     pub identity_hash: String,
     pub provenance: String,
+    /// The interpreter the authority's script executed under, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<InterpreterIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -682,13 +765,15 @@ pub struct ReceiptCandidate {
     /// SHA-256 of the exact candidate artifact bytes this receipt's run
     /// executed — labels are distrustful; bytes are not.
     pub identity_hash: String,
+    /// The interpreter the candidate's script executed under, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<InterpreterIdentity>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiptEnvironment {
     pub os: String,
     pub architecture: String,
-    pub toolchain: String,
     pub environment_digest: String,
 }
 

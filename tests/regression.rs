@@ -198,7 +198,7 @@ fn court_rejects_bad_declarations() {
     let m = manifest_variant(&work, "path: golden/candidate.sh", "path: golden/nope.sh");
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("candidate golden/nope.sh not found"));
+    assert!(stderr(&out).contains("cannot read golden/nope.sh"));
 
     // Missing fixture.
     let m = manifest_variant(
@@ -208,8 +208,7 @@ fn court_rejects_bad_declarations() {
     );
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert!(!out.status.success());
-    assert!(stderr(&out)
-        .contains("fixture frf/courts/cli-malformed-input/fixtures/nope.conf not found"));
+    assert!(stderr(&out).contains("cannot read frf/courts/cli-malformed-input/fixtures/nope.conf"));
 
     // Missing manifest file itself.
     let out = frf(

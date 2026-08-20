@@ -51,9 +51,9 @@ Allow five minutes; it takes about five seconds.
 | verb | what it does |
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
-| `frf court run MANIFEST.yaml` | executes authority and candidate against the fixture, captures raw stdout/stderr/exit, writes `open` residuals + endoduction tokens for each declared-axis disagreement |
+| `frf court run MANIFEST.yaml` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
-| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes |
+| `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Refuses while any residual is `open`/`unknown`/`harness`, and refuses a receipt whose run observed divergence — a failing run's receipt can never become parity, however its residuals are disposed; the refusal names the resolution run to compile from instead. Otherwise emits one conservative sentence + the non-claim, attributed to the exact candidate artifact the run executed |
 
 Residual creation and endoduction happen inside `court run`; re-run
@@ -83,6 +83,7 @@ frf/
   authorities/   admitted once, never rewritten
   courts/        hand-authored court declarations (question, envelope, fixture)
   captures/      raw observations, content-addressed, immutable
+  objects/       content-addressed execution snapshots (sha256/<H>)
   residuals/     immutable observations + derived tokens + <id>.events/ dispositions
   receipts/      OpenReceipts, canonical JSON (RFC 8785), content-addressed by full digest
   claims/        compiled claims, written only by `frf claim compile`
@@ -146,6 +147,27 @@ says no more than that receipt licenses.
   stdout/stderr can never hold the capture open. `ETXTBSY` spawn retries are
   bounded to 1 s. Remaining: a side that escapes via `setsid` is outside the
   policy, and the capture is the process group's output, not byte-timed.
+- **Artifacts execute from content-addressed snapshots** (`objects/sha256/<H>`):
+  bytes are hashed BEFORE execution and the snapshot is what runs, closing
+  the hash-vs-execute TOCTOU window. Consequence: a script's `$0` is the
+  snapshot path, so sides must not depend on their own path. The fixture is
+  snapshotted too, and `{fixture}` resolves to the snapshot path (the
+  capture's arguments are the verbatim argv).
+- **Script interpreter identity is bound for scripts with resolvable
+  shebangs** (path + hash of the resolved interpreter); binaries carry no
+  interpreter binding yet (ELF loader + dynamic dependencies are future
+  work). The interpreter hash is machine-specific: the checked-in tree's
+  recorded values are evidence, not re-derivable cross-machine.
+- **Runner + comparator identity is bound at court time** (frf version,
+  frf executable hash, comparator id/version/implementation hash) and
+  copied into receipts; a receipt never reconstructs provenance from the
+  binary that emits it later. Comparator versions must be bumped whenever
+  a comparator's semantics change.
+- **Resolution comparability is a semantic court identity**: a canonical
+  hash of everything defining the question (court, question, falsifier,
+  authority, fixture bytes + arguments, full envelope, comparator
+  identities); a fix court may change only the candidate. Environment is a
+  separate, required-equal dimension.
 - **`environmental` and `oracle_version` weaken the envelope**: they close the
   residual but never license parity on its axis (the claim compiler excludes
   the axis). Envelope refinement records are future work.
