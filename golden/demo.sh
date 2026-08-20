@@ -84,7 +84,14 @@ if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL"; then
   exit 1
 fi
 
-step "6. the evidence tree (Section 19.3 layout)"
+step "6. the portable bundle — verified away from the evidence tree"
+BUNDLE=golden/work/portable.frf
+"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
+# Verify from inside golden/work, where no evidence tree exists: the bundle
+# alone must authenticate the evidence graph.
+(cd golden/work && "$FRF_BIN" bundle verify portable.frf)
+
+step "7. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort
 
 echo

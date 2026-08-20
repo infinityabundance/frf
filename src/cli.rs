@@ -54,6 +54,11 @@ pub enum Command {
         /// Run id or receipt id (printed by `frf court run` / `frf receipt emit`)
         id: String,
     },
+    /// Export or verify a portable OpenReceipt bundle: the receipt + its complete object closure
+    Bundle {
+        #[command(subcommand)]
+        sub: BundleCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -117,6 +122,27 @@ pub enum ClaimCmd {
     Compile {
         /// Receipt id (printed by `frf receipt emit`)
         receipt: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum BundleCmd {
+    /// Export a receipt's portable closure: manifest + receipt + captures +
+    /// objects + residuals + disposition events (and the compiled claim when
+    /// present). Only verified evidence may be exported.
+    Export {
+        /// Receipt id (printed by `frf receipt emit`)
+        receipt: String,
+        /// Output bundle directory (default: bundles/<receipt-id>.frf)
+        #[arg(long, value_name = "DIR")]
+        output: Option<PathBuf>,
+    },
+    /// Verify a bundle: prove every inventory file, recompute the receipt's
+    /// required closure, and verify the receipt against the bundled evidence
+    /// alone — no original source tree or FRF installation needed
+    Verify {
+        /// Path to the bundle directory (e.g. bundles/<receipt-id>.frf)
+        path: PathBuf,
     },
 }
 

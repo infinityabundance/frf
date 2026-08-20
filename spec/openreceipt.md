@@ -177,3 +177,39 @@ is verified, so a hand-edited or broken event is refused); and `fixed`
 closures MUST be backed by a resolution run that reran the same question
 and closed the axis. Claim compilation accepts only a `ReceiptVerified` —
 parsing data cannot turn it into evidence.
+
+## 6. The OpenReceipt bundle — a portable evidence root
+
+A bundle (`frf bundle export`) is a receipt plus the complete object closure
+it references, laid out as a self-contained evidence tree with a
+canonical-JSON manifest:
+
+```text
+bundle.frf/
+  manifest.json        frf-bundle-v1: schema_version, receipt_id, run,
+                       created_by, and the content-addressed inventory
+                       (path, sha256, kind per file)
+  receipts/<id>.json
+  captures/<run>/      capture.yaml + raw side files, for the receipt's run
+                       and — transitively — every resolution run its
+                       disposition events reference
+  objects/sha256/<H>   content-addressed execution snapshots
+  residuals/           residual records + <id>.events/ event chains
+  claims/<id>.yaml     the compiled claim, when present
+```
+
+The bundle's defining property:
+
+> If you possess the bundle, you do not need the original source tree or
+> the original FRF installation to verify the evidence graph. Execution
+> (replay) may still require an appropriate environment; verification does
+> not.
+
+`frf bundle verify` proves (1) every inventory file exists and hashes to
+its recorded digest (objects must be named by their digest; inventory paths
+must not escape the bundle); (2) the receipt verifies against the bundled
+evidence alone — identity, derivation, event chains, and resolution edges
+all rechecked against the bundle; and (3) the manifest covers the receipt's
+complete required closure, recomputed from the bundle. Export only ever
+carries VERIFIED evidence: `frf bundle export` refuses a receipt that does
+not verify against the source tree first.
