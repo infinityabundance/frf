@@ -51,7 +51,7 @@ Allow five minutes; it takes about five seconds.
 | verb | what it does |
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
-| `frf court run MANIFEST.yaml` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement |
+| `frf court run MANIFEST.yaml [--repeat N]` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement. `--repeat N` re-executes the same court N times (fresh processes — nondeterminism is the point): identical repetitions reuse the content-addressed run, and each observed divergence fingerprint gets a `trajectories/<fingerprint>.yaml` record over the `repeat_index` axis with the deterministic drift/slew classification (persistent/transient/recurrent × stable/abrupt/burst/recurrent) |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable, content-addressed disposition EVENT to `residuals/<id>.events/` (`fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`); a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). Events are hash-chained: each carries its own `event_id` (SHA-256 of its content), its `parent_event_id`, and its `evidence_refs` (the resolution run). The observation file is never rewritten; the current disposition is the projection of the last event |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed, and each residual binds the EXACT disposition event (`disposition_event_id`) that supplied its state — a receipt points at an immutable node in the event graph, it does not merely copy state |
 | `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim, and it accepts ONLY a *verified* receipt: the id must equal the SHA-256 of the canonical body, the document must pass OpenReceipt semantic conformance, and it must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
@@ -141,8 +141,18 @@ says no more than that receipt licenses.
   corpus is the protocol-separation milestone.
 - **Minimization courts are not implemented**: `next_court` routes are
   recorded nominally, and claims scope to the executed court, not the routed one.
-- **`drift`/`slew` are `not-observed`** (sign block): v0 runs each court once;
-  measuring them needs a repeated-run court.
+- **`drift`/`slew` are executable evidence on the repeat axis only**: a
+  single-run court's receipts honestly say `not-observed` (one run cannot
+  observe drift or slew); a repeated-run court (`--repeat N`) writes a
+  residual trajectory per divergence fingerprint and its receipts derive
+  the `sign` from it. The other trajectory axes — candidate revision,
+  authority version, environment, fixture reduction, time — become
+  executable as those protocol objects (version ladders, environment
+  matrices, minimization) exist; a trajectory is currently a snapshot of
+  one repeated court, and the classification vocabulary is the repeat-axis
+  subset of the paper's (persistent/transient/recurrent ×
+  stable/abrupt/burst/recurrent; `gradual`, `version-stratified`, and
+  `boundary-localized` belong to the future axes).
 - **Execution timeout is 60 s by default**, overridable via `FRF_EXEC_TIMEOUT_MS`
   (a test hook used by the regression suite's kill-path test; not a public knob).
 - **`receipt.claims.positive` stays empty**: receipts are immutable, so the

@@ -1,7 +1,7 @@
 schema_version: frf-residual-v1
 id: cli-text-0002
 court: cli-malformed-input
-run: run-cli-malformed-input-1d046d7fa483dd726dae74c38dde2f890251d74650739072a8da7daa7bcce93d
+run: run-cli-malformed-input-2443766413989176cd59d0218b5e8e7356dc3ace4be92919b78d40a67cab872b
 axis: stderr
 kind: text
 surface: first-diagnostic-line

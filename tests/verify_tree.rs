@@ -715,12 +715,39 @@ fn receipts_are_self_consistent() {
                 "fingerprint for {}",
                 res.id
             );
-            assert_eq!(res.sign.norm, "single-run");
-            assert_eq!(res.sign.drift, "not-observed");
-            assert_eq!(res.sign.slew, "not-observed");
             // A residual reproduces by replaying the run that observed it.
             assert_eq!(res.reproducer, rec.run);
             assert!(res.invariant.is_empty(), "v0 has no invariants");
+            // The sign is re-derived by the verified loader; assert the
+            // vocabulary here: single-run stays not-observed, repeated-run
+            // carries a trajectory-derived classification.
+            match res.sign.norm.as_str() {
+                "single-run" => {
+                    assert_eq!(res.sign.drift, "not-observed");
+                    assert_eq!(res.sign.slew, "not-observed");
+                }
+                "repeated-run" => {
+                    assert!(
+                        frf::model::TrajectoryDrift::parse(&res.sign.drift).is_some(),
+                        "invalid drift {:?} for {}",
+                        res.sign.drift,
+                        res.id
+                    );
+                    assert!(
+                        frf::model::TrajectorySlew::parse(&res.sign.slew).is_some(),
+                        "invalid slew {:?} for {}",
+                        res.sign.slew,
+                        res.id
+                    );
+                    // The sign must match the residual's trajectory.
+                    let record = store.load_residual(&res.id).unwrap();
+                    let fp = frf::semantics::residual_fingerprint(&record).unwrap();
+                    let t = store.load_trajectory(&fp).unwrap();
+                    assert_eq!(res.sign.drift, t.derivation.drift.as_str());
+                    assert_eq!(res.sign.slew, t.derivation.slew.as_str());
+                }
+                other => panic!("invalid sign norm {other:?} on {}", res.id),
+            }
             if res.disposition == "fixed" {
                 // Receipts are snapshots: the resolution edge is bound only
                 // for entries that were fixed at emit time, and it must match
@@ -808,6 +835,80 @@ fn receipts_are_self_consistent() {
     assert!(
         found >= 2,
         "the golden path must leave two receipts (open + final)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// trajectories/ — residual trajectories over the repeat axis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trajectories_are_self_consistent() {
+    let store = store();
+    let mut found = 0;
+    for entry in fs::read_dir(store.root.join("trajectories")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let t: TrajectoryRecord = load(&path);
+        assert_eq!(t.schema_version, SCHEMA_TRAJECTORY, "trajectory {name}");
+        assert_eq!(
+            name,
+            format!("{}.yaml", t.subject),
+            "the filename must be the subject fingerprint"
+        );
+        assert_eq!(t.subject.len(), 64);
+        assert_eq!(
+            t.coordinate_system, "repeat_index",
+            "v0.1.17 executes the repeat axis only"
+        );
+        assert!(matches!(t.axis.as_str(), "exit" | "stderr" | "stdout"));
+        assert!(t.repeat_count >= 2, "a trajectory implies a repeated court");
+        assert_eq!(t.observations.len() as u32, t.repeat_count);
+
+        let observed: Vec<bool> = t.observations.iter().map(|o| o.observed).collect();
+        assert!(
+            observed.iter().any(|o| *o),
+            "a trajectory only exists for an observed divergence"
+        );
+        for (i, o) in t.observations.iter().enumerate() {
+            assert_eq!(o.repetition, (i + 1) as u32, "dense repetition series");
+            assert!(
+                store.run_dir(&o.run).unwrap().is_dir(),
+                "observation {} run {} missing",
+                o.repetition,
+                o.run
+            );
+            if o.observed {
+                let id = o
+                    .residual
+                    .as_deref()
+                    .expect("an observed entry must name the residual");
+                let rec = store.load_residual(id).unwrap();
+                assert_eq!(
+                    rec.run, o.run,
+                    "observation residual must belong to its run"
+                );
+                assert_eq!(
+                    frf::semantics::residual_fingerprint(&rec).unwrap(),
+                    t.subject,
+                    "observation residual must carry the subject fingerprint"
+                );
+                assert_eq!(rec.axis.as_str(), t.axis);
+            } else {
+                assert!(
+                    o.residual.is_none(),
+                    "an unobserved entry names no residual"
+                );
+            }
+        }
+        // The derivation is the deterministic classification of the pattern.
+        let expected = frf::trajectory::classify_repeat(&observed).unwrap();
+        assert_eq!(t.derivation, expected, "derivation must rederive");
+        found += 1;
+    }
+    assert!(
+        found >= 1,
+        "the golden path must leave at least one trajectory"
     );
 }
 
@@ -925,6 +1026,7 @@ fn tree_mirrors_section_19_3() {
         "captures",
         "objects",
         "residuals",
+        "trajectories",
         "receipts",
         "claims",
     ] {

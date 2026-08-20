@@ -17,4 +17,5 @@ pub mod model;
 pub mod semantics;
 pub mod sentences;
 pub mod store;
+pub mod trajectory;
 pub mod verify;

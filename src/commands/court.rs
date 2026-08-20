@@ -15,10 +15,116 @@ use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
 use crate::store::Store;
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
+/// `frf court run [--repeat N] MANIFEST.yaml`.
+///
+/// One court run executes authority and candidate against the fixture and
+/// captures the observation immutably. `--repeat N` re-executes the same
+/// court N times (fresh processes each time — nondeterminism is the point),
+/// and after the series writes a residual TRAJECTORY per observed divergence
+/// fingerprint (`trajectories/<fingerprint>.yaml`): the ordered
+/// observations over the `repeat_index` axis plus the deterministic
+/// drift/slew classification. Identical repetitions produce identical
+/// content-addressed runs and are reused, never re-captured; the returned
+/// run id is the first repetition's.
+pub fn run(store: &Store, manifest_path: &Path, repeat: u32) -> Result<String> {
+    if repeat == 0 {
+        return Err(FrfError::new("--repeat must be at least 1"));
+    }
+    if repeat == 1 {
+        return run_once(store, manifest_path, None, None);
+    }
+
+    let mut rep_runs: Vec<String> = Vec::with_capacity(repeat as usize);
+    // fingerprint -> (axis, per-repetition residual id that observed it)
+    let mut seen: BTreeMap<String, (String, Vec<Option<String>>)> = BTreeMap::new();
+    for k in 1..=repeat {
+        let run = run_once(store, manifest_path, Some(k), Some(repeat))?;
+        rep_runs.push(run.clone());
+        let capture = store.load_capture(&run)?;
+        for id in &capture.residuals {
+            let record = store.load_residual(id)?;
+            let fp = crate::semantics::residual_fingerprint(&record)?;
+            let entry = seen.entry(fp).or_insert_with(|| {
+                (
+                    record.axis.as_str().to_string(),
+                    vec![None; repeat as usize],
+                )
+            });
+            entry.1[k as usize - 1] = Some(id.clone());
+        }
+    }
+
+    // Trajectories are immutable evidence: identical content is a no-op,
+    // different content for the same subject is refused.
+    let mut written = 0usize;
+    for (fp, (axis, per_rep)) in &seen {
+        let observed: Vec<bool> = per_rep.iter().map(|o| o.is_some()).collect();
+        let derivation = crate::trajectory::classify_repeat(&observed)?;
+        let record = TrajectoryRecord {
+            schema_version: SCHEMA_TRAJECTORY.to_string(),
+            subject: fp.clone(),
+            axis: axis.clone(),
+            coordinate_system: "repeat_index".to_string(),
+            repeat_count: repeat,
+            observations: per_rep
+                .iter()
+                .enumerate()
+                .map(|(i, o)| TrajectoryObservation {
+                    repetition: (i + 1) as u32,
+                    run: rep_runs[i].clone(),
+                    observed: o.is_some(),
+                    residual: o.clone(),
+                })
+                .collect(),
+            derivation,
+        };
+        let path = store.trajectory_path(fp)?;
+        let yaml = store.to_yaml(&record)?;
+        if path.exists() {
+            let existing: TrajectoryRecord = store.parse_yaml(&path)?;
+            if existing != record {
+                return Err(FrfError::new(format!(
+                    "trajectory {} already exists with different content; refusing to rewrite immutable evidence (a trajectory is a snapshot of one repeated court)",
+                    &fp[..16]
+                )));
+            }
+        } else {
+            store.write_once(&path, &yaml)?;
+        }
+        written += 1;
+        eprintln!(
+            "trajectory {} (axis {}, repeat x{repeat}): drift={}, slew={}",
+            &fp[..16],
+            record.axis,
+            record.derivation.drift.as_str(),
+            record.derivation.slew.as_str()
+        );
+    }
+    eprintln!(
+        "repeated court: {repeat} repetition(s), {} distinct run(s), {written} trajectory(ies)",
+        rep_runs
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+    );
+    Ok(rep_runs[0].clone())
+}
+
+/// One court execution: validate the declaration, snapshot + hash every
+/// artifact BEFORE executing, execute authority and candidate against the
+/// fixture, capture the raw observation immutably, preserve residuals + κ
+/// tokens, and write the capture manifest. `repeat_index`/`repeat_count`
+/// record the repetition context when part of a repeated court.
+pub fn run_once(
+    store: &Store,
+    manifest_path: &Path,
+    repeat_index: Option<u32>,
+    repeat_count: Option<u32>,
+) -> Result<String> {
     let manifest: CourtManifest = store.parse_yaml(manifest_path)?;
     let spec = &manifest.court;
 
@@ -250,6 +356,17 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
     let run = format!("run-{}-{}", spec.id, run_hash);
     let run_dir = store.run_dir(&run)?;
     if run_dir.exists() {
+        if repeat_count.is_some() {
+            // A repeated court re-observed identical evidence: the
+            // content-addressed run IS the same run. Reuse it — raw captures
+            // are immutable, and identical evidence is captured once however
+            // often it is asked for.
+            eprintln!(
+                "repetition {}: identical evidence already captured as {run}; reusing",
+                repeat_index.unwrap_or(1)
+            );
+            return Ok(run);
+        }
         return Err(FrfError::new(format!(
             "run '{run}' already exists (identical evidence was already captured); raw captures are immutable — refusing to re-capture"
         )));
@@ -320,6 +437,8 @@ pub fn run(store: &Store, manifest_path: &Path) -> Result<String> {
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
+        repeat_index,
+        repeat_count,
     };
     let yaml = store.to_yaml(&capture)?;
     store.write_once(&run_dir.join("capture.yaml"), &yaml)?;

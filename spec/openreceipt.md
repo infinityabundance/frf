@@ -213,3 +213,51 @@ all rechecked against the bundle; and (3) the manifest covers the receipt's
 complete required closure, recomputed from the bundle. Export only ever
 carries VERIFIED evidence: `frf bundle export` refuses a receipt that does
 not verify against the source tree first.
+
+## 7. Residual trajectories — the executable repeat axis
+
+A trajectory is an ordered series of observations of one residual
+FINGERPRINT over a declared coordinate system, with a deterministic
+classification. `frf court run --repeat N` executes the `repeat_index`
+axis: the same court is re-executed N times (fresh processes —
+nondeterminism is the point), and each observed divergence fingerprint gets
+a record under `trajectories/<fingerprint>.yaml` (`frf-trajectory-v1`):
+
+```text
+Trajectory {
+    subject            the residual fingerprint (FRF/RESIDUAL-FINGERPRINT/v1)
+    axis
+    coordinate_system  "repeat_index" (v0.1.17; the other axes — candidate
+                       revision, authority version, environment, fixture
+                       reduction, time — become executable as those protocol
+                       objects exist)
+    repeat_count
+    observations[]     { repetition, run, observed, residual? } — identical
+                       repetitions share the content-addressed run
+    derivation         { drift, slew }
+}
+```
+
+The classification is a deterministic table (never a model): given the
+observed pattern `o[1..=N]` with `T = {i | o[i]}` non-empty —
+
+```text
+|T| == N                     -> drift=persistent, slew=stable
+T contiguous, touching an end -> drift=transient,  slew=abrupt
+T contiguous, interior        -> drift=transient,  slew=burst
+T non-contiguous, both ends   -> drift=recurrent,  slew=recurrent
+otherwise                     -> drift=transient,  slew=recurrent
+```
+
+A single-run court cannot observe drift or slew, and its receipts honestly
+say so (`sign: {norm: single-run, drift: not-observed, slew: not-observed}`
+— the paper's restraint, kept). A repeated-run court's captures record
+`repeat_index`/`repeat_count` (`frf-capture-v5`), and its receipts derive
+the `sign` from the trajectory — the receipt verifier rederives it, and the
+bundle closure carries the trajectory. Claim semantics are unchanged: a
+divergence observed in ANY repetition is still an observation.
+
+Trajectories are immutable: the record is a snapshot of one repeated
+court, keyed by the subject fingerprint, so the same divergence re-observed
+by later runs (later candidates, authorities, environments) can extend the
+series once those axes exist.

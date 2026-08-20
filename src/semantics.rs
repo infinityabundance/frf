@@ -529,6 +529,8 @@ mod tests {
                 stderr_sha256: "0".repeat(64),
             },
             residuals: vec![],
+            repeat_index: None,
+            repeat_count: None,
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

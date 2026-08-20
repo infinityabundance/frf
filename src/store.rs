@@ -72,6 +72,7 @@ impl Store {
             "captures",
             "objects",
             "residuals",
+            "trajectories",
             "receipts",
             "claims",
         ] {
@@ -119,6 +120,29 @@ impl Store {
     pub fn claim_path(&self, receipt_id: &str) -> Result<PathBuf> {
         validate_id("receipt", receipt_id)?;
         Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
+    }
+
+    /// `trajectories/<fingerprint>.yaml` — the residual trajectory protocol
+    /// object, keyed by the stable fingerprint of the divergence.
+    pub fn trajectory_path(&self, fingerprint: &str) -> Result<PathBuf> {
+        validate_id("trajectory", fingerprint)?;
+        Ok(self
+            .root
+            .join("trajectories")
+            .join(format!("{fingerprint}.yaml")))
+    }
+
+    /// Load a residual trajectory by its subject fingerprint.
+    pub fn load_trajectory(&self, fingerprint: &str) -> Result<TrajectoryRecord> {
+        let path = self.trajectory_path(fingerprint)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no trajectory for fingerprint {} (missing {})",
+                &fingerprint[..16],
+                path.display()
+            )));
+        }
+        self.parse_yaml(&path)
     }
 
     /// `objects/sha256/<H>` — the content-addressed execution snapshot for a

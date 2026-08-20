@@ -1,0 +1,21 @@
+schema_version: frf-trajectory-v1
+subject: 898b85d1bc91e49aaf33cd1f65337b84f4259c5eda5076dff79a8dec57e7acae
+axis: exit
+coordinate_system: repeat_index
+repeat_count: 3
+observations:
+- repetition: 1
+  run: run-cli-malformed-input-4480f50a3cfd455af9c592b0914c393e74c3814a420dc54fe7a2a21c5029582c
+  observed: true
+  residual: cli-exit-0001
+- repetition: 2
+  run: run-cli-malformed-input-4480f50a3cfd455af9c592b0914c393e74c3814a420dc54fe7a2a21c5029582c
+  observed: true
+  residual: cli-exit-0001
+- repetition: 3
+  run: run-cli-malformed-input-4480f50a3cfd455af9c592b0914c393e74c3814a420dc54fe7a2a21c5029582c
+  observed: true
+  residual: cli-exit-0001
+derivation:
+  drift: persistent
+  slew: stable

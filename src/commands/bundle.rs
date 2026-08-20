@@ -184,6 +184,23 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     runs.push(resolution_run_id.clone());
                 }
             }
+            // A repeated-run court: the receipt's sign derives from the
+            // residual's trajectory, so the closure must carry it.
+            if cap.repeat_index.is_some() {
+                let record = store.load_residual(id)?;
+                let fp = crate::semantics::residual_fingerprint(&record)?;
+                let t_path = store.trajectory_path(&fp)?;
+                let bytes = read(&t_path, "trajectory")?;
+                let rel = format!("trajectories/{fp}.yaml");
+                entries.insert(
+                    rel.clone(),
+                    ClosureEntry {
+                        rel,
+                        sha256: host::sha256_bytes(&bytes),
+                        kind: "trajectory",
+                    },
+                );
+            }
         }
     }
 
