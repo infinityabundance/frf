@@ -24,6 +24,13 @@ fuzz_target!(|data: &[u8]| {
                 assert!(!reason.trim().is_empty());
                 assert!(!reason.contains('\n'));
             }
+            Disposition::Fixed {
+                reason,
+                resolution_run_id,
+            } => {
+                assert!(!reason.trim().is_empty() && !reason.contains('\n'));
+                assert!(!resolution_run_id.trim().is_empty());
+            }
         }
     }
 });
