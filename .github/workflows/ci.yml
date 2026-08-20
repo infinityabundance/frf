@@ -1,11 +1,13 @@
-# CI for the three frf-rs suites:
+# CI for the frf-rs suites:
 #
-#   regression  - cargo test (invariant bank + golden path) and the
-#                 deterministic in-repo fuzz harness at scale
+#   regression  - cargo test (invariant bank + golden path + the independent
+#                 verifier tests) and the deterministic in-repo fuzz harness
+#                 at scale
 #   verification- verify_tree re-derives the checked-in evidence tree with
 #                 the tool's own pure functions (freshness gate: if generated
 #                 artifacts drift from the code, this fails); the demo job
-#                 additionally regenerates the tree and verifies it
+#                 additionally regenerates the tree, verifies it, and runs
+#                 the independent Python verifier against the bundle + corpus
 #   fuzzing     - libFuzzer smoke runs of all three targets (yaml_types,
 #                 cli_args, store_ids) under nightly
 #
@@ -39,6 +41,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install PyYAML for the independent verifier
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml
       - name: Format
         run: cargo fmt --check
       - name: Clippy (deny warnings)
@@ -71,6 +75,12 @@ jobs:
         run: ./golden/demo.sh
       - name: Verify the regenerated tree is self-consistent
         run: cargo test --test verify_tree
+      - name: Install PyYAML for the independent verifier
+        run: sudo apt-get update && sudo apt-get install -y python3-yaml
+      - name: Independent verifier agrees on the regenerated bundle + corpus
+        run: |
+          python3 verifier/frf_verify.py bundle golden/work/portable.frf
+          python3 verifier/frf_verify.py corpus conformance
 
   fuzz:
     name: libFuzzer smoke

@@ -178,6 +178,31 @@ closures MUST be backed by a resolution run that reran the same question
 and closed the axis. Claim compilation accepts only a `ReceiptVerified` —
 parsing data cannot turn it into evidence.
 
+### 5.4 The independent verifier
+
+OpenReceipt is a protocol only if a SECOND implementation can take the same
+evidence and reach the same verdict. `verifier/frf_verify.py` is that
+implementation: a deliberately small Python verifier that does NO execution.
+It implements the RFC 8785 canonicalizer, the identity preimages, the
+structural + semantic conformance algorithms, and the evidentiary checks of
+§5.3 — and runs them against the same corpora and the same bundles as the
+reference engine:
+
+- **Corpus.** `frf_verify.py corpus conformance/` must pass every fixture the
+  Rust engine passes and refuse every fixture it refuses: canonical bytes and
+  pinned hashes (`valid/` + `canonical/` + `hashes/`), structural refusals
+  (`invalid/`), and semantic refusals (`invalid-semantic/`).
+- **Bundle.** `frf_verify.py bundle <bundle.frf/>` verifies a bundle against
+  itself — manifest hash proof, receipt content-addressing, run-identity
+  rederivation, side-file rehash, event-chain/sign/token rederivation,
+  resolution edges, closure completeness — and derives the admissible Claim
+  IR the claim compiler would license.
+
+CI runs both engines against both oracles (the Rust suite in
+`tests/conformance.rs` and `tests/independent.rs`, the verifier in the demo
+job). If the Rust reference engine and the independent verifier agree on the
+same bundle and the same corpus, FRF is a protocol, not a Rust file format.
+
 ## 6. The OpenReceipt bundle — a portable evidence root
 
 A bundle (`frf bundle export`) is a receipt plus the complete object closure

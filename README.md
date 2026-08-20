@@ -74,6 +74,7 @@ Three suites, mirroring the framework's own discipline:
 | verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. The tree is *self-authenticating*: every capture and receipt is consumed through the verified loaders, which rederive run identities and receipt ids from recorded fields and refuse any drift. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
 | fuzzing | `cargo test --test fuzz` (deterministic, seeded, runs in CI) · `cargo +nightly fuzz run yaml_types\|cli_args\|store_ids` (libFuzzer, corpus-guided) | the negative controls: YAML deserializers never panic and never produce a forbidden disposition state, the CLI parser never panics, and ids that pass validation can never escape the store root |
 | conformance | `cargo test --test conformance` | walks the OpenReceipt protocol corpus in `conformance/` at TWO levels: **structural** — every `valid/` fixture must parse, deserialize, canonicalize to the pinned bytes, and hash to the pinned digest; `invalid/` fixtures must be refused; the JSON Schema (`spec/openreceipt.schema.json`) is enforced, including the closed disposition set and the schema version — and **semantic** — every `invalid-semantic/` fixture (structurally valid, semantically broken) must fail `validate_semantics`: disposition cross-field rules, rederivable environment digest + court semantic identity, verdict consistency, replay target, κ-token rederivation, interpreter-chain consistency, argv/declared-argument correspondence |
+| independent | `cargo test --test independent` · `python3 verifier/frf_verify.py corpus conformance` · `python3 verifier/frf_verify.py bundle golden/work/portable.frf` | the protocol-separation milestone: a deliberately small SECOND implementation of FRF (Python, `verifier/frf_verify.py`, no execution, no frf binary) must agree with the Rust reference engine on the same corpus and the same bundle — canonical bytes, pinned hashes, structural + semantic refusals, rederived run/court/fingerprint/event identities, κ tokens, disposition-event chains, resolution edges, and the admissible Claim IR — and must refuse a tampered bundle. Two implementations agreeing on one bundle is the difference between a protocol and a Rust file format |
 
 `make test`, `make verify`, and `make fuzz-iters` wrap the same commands
 (`FRF_FUZZ_ITERS` scales the deterministic harness). The libFuzzer targets
@@ -92,6 +93,41 @@ frf/
   receipts/      OpenReceipts, canonical JSON (RFC 8785), content-addressed by full digest
   claims/        compiled claims, written only by `frf claim compile`
 ```
+
+`verifier/frf_verify.py` is the independent second implementation (Python, no
+execution): it verifies bundles and runs the conformance corpus without any
+frf installation, so a bundle's evidence graph can be authenticated on a
+machine that never built the reference engine.
+
+## Independent verifier
+
+FRF is a protocol, not a Rust file format, only if a second implementation can
+take the same evidence and reach the same verdict. `verifier/frf_verify.py` is
+that second implementation, deliberately small and deliberately boring:
+
+- **No execution.** It never spawns a court, a comparator, or a candidate. It
+  loads a bundle and rederives everything: the RFC 8785 canonical bytes and
+  pinned hashes of every receipt, the run identity from the capture's own
+  recorded fields, the court semantic identity, residual fingerprints, κ
+  tokens and `blocks_claims`, disposition-event chains (content-addressed,
+  parent-hashed), trajectory signs, resolution edges, and the admissible
+  Claim IR.
+- **Same corpus, same verdict.** The structural (`conformance/invalid/`) and
+  semantic (`conformance/invalid-semantic/`) corpora are the shared oracle:
+  the Rust engine and the Python verifier must both accept every `valid/`
+  fixture byte-for-byte (canonical form + digest) and refuse every `invalid*/`
+  fixture. `frf_verify.py corpus conformance` is that check.
+- **Same bundle, same claim set.** `frf_verify.py bundle <dir>` verifies a
+  portable bundle against itself — manifest hash proof, receipt
+  content-addressing, capture run-identity rederivation, side-file rehash,
+  event-chain/sign/token rederivation, resolution-edge verification, closure
+  completeness — and prints the Claim IR the Rust claim compiler would
+  license. A tampered bundle is refused with the corruption named.
+
+The integration suite (`tests/independent.rs`) runs all three properties in
+CI: the verifier accepts the golden bundle, passes the corpus, and refuses a
+tampered bundle. CI installs PyYAML so the suite always runs there; on a
+machine without it, the tests print a note and skip.
 
 ## Dogfood
 
@@ -149,8 +185,11 @@ says no more than that receipt licenses.
   checks (a `fixed` resolution edge actually closing, run existence) happen
   in the verified loader, not in `validate_semantics`; the corpus in
   `conformance/invalid-semantic/` therefore covers document-level rules
-  only. A second, independent verifier (Go/Python) that passes the same
-  corpus is the protocol-separation milestone.
+  only. The independent verifier (`verifier/frf_verify.py`) closes the gap:
+  it rederives the cross-store identities a document alone cannot — run
+  identity, residual fingerprints, disposition-event chains, resolution
+  edges — from the bundle, and the Rust engine and the verifier are both
+  run against the same corpus in CI.
 - **Minimization courts are not implemented**: `next_court` routes are
   recorded nominally, and claims scope to the executed court, not the routed one.
 - **`drift`/`slew` are executable evidence on the repeat axis only**: a
