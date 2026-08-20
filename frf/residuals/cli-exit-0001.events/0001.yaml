@@ -2,5 +2,5 @@ schema_version: frf-disposition-v1
 residual_id: cli-exit-0001
 disposition: fixed
 reason: candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)
-resolution_run_id: run-cli-malformed-input-4c46f1262e60b83b6dcea36c1cbff553dd6efe50c5db9cc40688d2b5f41479aa
+resolution_run_id: run-cli-malformed-input-53e41bfa86392ea402f396d4f757fc51055e23b5bda493870badb48ab8bd1ca6
 closure_predicate: 'fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality'

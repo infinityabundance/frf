@@ -1,0 +1,629 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
+  "title": "OpenReceipt",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v6). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, and the artifacts are copied from the capture at observation time, never reconstructed.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run",
+    "court",
+    "provenance",
+    "comparator_semantics",
+    "authority",
+    "candidate",
+    "environment",
+    "fixtures",
+    "observables",
+    "residuals",
+    "endoduction",
+    "claims",
+    "replay"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "frf-receipt-v6"
+    },
+    "run": {
+      "type": "string"
+    },
+    "court": {
+      "type": "object",
+      "required": [
+        "id",
+        "question",
+        "falsifier",
+        "admissibility_envelope",
+        "semantic_identity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "falsifier": {
+          "type": "string"
+        },
+        "semantic_identity": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "admissibility_envelope": {
+          "type": "object",
+          "required": [
+            "authority_versions",
+            "fixture_family",
+            "platforms",
+            "observables",
+            "normalizers",
+            "replay_scope"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "authority_versions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fixture_family": {
+              "type": "string"
+            },
+            "platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "observables": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "exit",
+                  "stderr",
+                  "stdout"
+                ]
+              }
+            },
+            "normalizers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "replay_scope": {
+              "const": "single-run"
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "runner",
+        "comparator_implementations"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "frf-provenance-v1"
+        },
+        "runner": {
+          "type": "object",
+          "required": [
+            "schema_version",
+            "frf_version",
+            "frf_executable_hash"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "const": "frf-runner-v1"
+            },
+            "frf_version": {
+              "type": "string"
+            },
+            "frf_executable_hash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "comparator_implementations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "implementation_hash",
+              "runner_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "implementation_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "runner_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "comparator_semantics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "relation_id",
+          "relation_version",
+          "specification_hash"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "relation_id": {
+            "type": "string"
+          },
+          "relation_version": {
+            "type": "string"
+          },
+          "specification_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "authority": {
+      "$ref": "#/definitions/authority_party"
+    },
+    "candidate": {
+      "$ref": "#/definitions/candidate_party"
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "os",
+        "architecture",
+        "kernel_release",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "frf-environment-v1"
+        },
+        "os": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "kernel_release": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "hash",
+          "arguments"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "arguments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "observables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "axis",
+          "raw_reference_hash",
+          "raw_candidate_hash",
+          "comparator",
+          "normalization_rules",
+          "verdict"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "axis": {
+            "enum": [
+              "exit",
+              "stderr",
+              "stdout"
+            ]
+          },
+          "raw_reference_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "raw_candidate_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "comparator": {
+            "type": "string"
+          },
+          "normalization_rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verdict": {
+            "enum": [
+              "pass",
+              "residual"
+            ]
+          }
+        }
+      }
+    },
+    "residuals": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/residual"
+      }
+    },
+    "endoduction": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tokens"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "frf-token-v1"
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "residual_id",
+              "token",
+              "next_court",
+              "blocks_claims"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "residual_id": {
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              },
+              "next_court": {
+                "type": "string"
+              },
+              "blocks_claims": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "positive",
+        "non_claims",
+        "blocked_by_open_residuals"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "positive": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "non_claims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "blocked_by_open_residuals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "replay": {
+      "type": "object",
+      "required": [
+        "program",
+        "evidence_root",
+        "argv",
+        "expected_run_identity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "program": {
+          "const": "frf"
+        },
+        "evidence_root": {
+          "type": "string"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expected_run_identity": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "interpreter": {
+      "type": "object",
+      "required": [
+        "kernel_interpreter",
+        "shebang_argument_bytes",
+        "downstream_interpreter"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kernel_interpreter": {
+          "$ref": "#/definitions/executable"
+        },
+        "shebang_argument_bytes": {
+          "type": "string"
+        },
+        "resolver": {
+          "type": "object",
+          "required": [
+            "kind",
+            "path",
+            "sha256",
+            "path_digest"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "env"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "path_digest": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "downstream_interpreter": {
+          "$ref": "#/definitions/executable"
+        }
+      }
+    },
+    "executable": {
+      "type": "object",
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "residual": {
+      "type": "object",
+      "required": [
+        "id",
+        "axis",
+        "kind",
+        "sign",
+        "grammar_state",
+        "raw_reference_hash",
+        "raw_candidate_hash",
+        "disposition",
+        "reproducer",
+        "invariant",
+        "residual_fingerprint"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "axis": {
+          "enum": [
+            "exit",
+            "stderr",
+            "stdout"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "exit",
+            "text"
+          ]
+        },
+        "sign": {
+          "type": "object",
+          "required": [
+            "norm",
+            "drift",
+            "slew"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "norm": {
+              "type": "string"
+            },
+            "drift": {
+              "type": "string"
+            },
+            "slew": {
+              "type": "string"
+            }
+          }
+        },
+        "grammar_state": {
+          "type": "string"
+        },
+        "raw_reference_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "raw_candidate_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "disposition": {
+          "enum": [
+            "open",
+            "fixed",
+            "intentional",
+            "environmental",
+            "oracle_version",
+            "harness",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "resolution_run_id": {
+          "type": "string"
+        },
+        "closure_predicate": {
+          "type": "string"
+        },
+        "reproducer": {
+          "type": "string"
+        },
+        "invariant": {
+          "type": "string"
+        },
+        "residual_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "authority_party": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "version",
+        "identity_hash",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "identity_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "provenance": {
+          "type": "string"
+        },
+        "interpreter": {
+          "$ref": "#/definitions/interpreter"
+        }
+      }
+    },
+    "candidate_party": {
+      "type": "object",
+      "required": [
+        "name",
+        "version_or_commit",
+        "build_profile",
+        "identity_hash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version_or_commit": {
+          "type": "string"
+        },
+        "build_profile": {
+          "type": "string"
+        },
+        "identity_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "interpreter": {
+          "$ref": "#/definitions/interpreter"
+        }
+      }
+    }
+  }
+}

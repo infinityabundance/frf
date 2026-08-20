@@ -15,6 +15,10 @@ regression:
 verify:
 	cargo test --test verify_tree
 
+# OpenReceipt conformance suite: the protocol corpus (valid/invalid/canonical/hashes)
+conformance:
+	cargo test --test conformance
+
 # Deterministic in-repo fuzz harness (no nightly needed); scale with
 # FRF_FUZZ_ITERS, e.g. make fuzz-iters FRF_FUZZ_ITERS=200000
 fuzz-iters:

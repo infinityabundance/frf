@@ -1,6 +1,6 @@
 [package]
 name = "frf"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
 description = "Minimal reference implementation of the Forensic Residual Framework kernel: authority -> court -> capture -> residual -> endoduction -> disposition -> receipt -> claim."
 license = "MIT OR Apache-2.0"
@@ -23,6 +23,9 @@ sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+jsonschema = "0.28"
 
 [profile.release]
 lto = true

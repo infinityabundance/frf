@@ -788,6 +788,9 @@ pub struct TokenRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Receipt {
+    /// The protocol version, enforced at deserialization: a receipt with any
+    /// other schema is refused, not silently interpreted.
+    #[serde(deserialize_with = "expect_receipt_schema")]
     pub schema_version: String,
     /// The run this receipt binds (the reproduction target).
     pub run: String,
@@ -806,6 +809,52 @@ pub struct Receipt {
     pub endoduction: ReceiptEndoduction,
     pub claims: ReceiptClaims,
     pub replay: ReceiptReplay,
+}
+
+/// Deserialize the receipt schema version, refusing anything but the
+/// current protocol version: an OpenReceipt from another version is not
+/// interpreted, it is rejected with a clear error.
+pub(crate) fn expect_receipt_schema<'de, D>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if s == SCHEMA_RECEIPT {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unsupported receipt schema '{s}' (this implementation speaks {SCHEMA_RECEIPT})"
+        )))
+    }
+}
+
+/// The closed set of dispositions a receipt entry may carry; anything else
+/// is refused at deserialization (protocol enforcement, not a lint).
+pub(crate) fn expect_disposition_str<'de, D>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    if matches!(
+        s.as_str(),
+        "open"
+            | "fixed"
+            | "intentional"
+            | "environmental"
+            | "oracle_version"
+            | "harness"
+            | "unknown"
+    ) {
+        Ok(s)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unknown disposition '{s}'"
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -899,6 +948,8 @@ pub struct ReceiptResidual {
     pub grammar_state: String,
     pub raw_reference_hash: String,
     pub raw_candidate_hash: String,
+    /// Protocol-enforced closed set.
+    #[serde(deserialize_with = "expect_disposition_str")]
     pub disposition: String,
     /// Mandatory reason for closed dispositions; absent while `open`.
     #[serde(skip_serializing_if = "Option::is_none")]
