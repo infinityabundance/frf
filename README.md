@@ -54,8 +54,8 @@ Allow five minutes; it takes about five seconds.
 | `frf court run MANIFEST.yaml` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed |
-| `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
-| `frf replay RUN_ID \| RECEIPT_ID` | re-executes the exact snapshotted artifacts + captured argv under a checked environment and requires the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). Writes nothing: replay is evidence verification, not re-observation |
+| `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim, and it accepts ONLY a *verified* receipt: the id must equal the SHA-256 of the canonical body, the document must pass OpenReceipt semantic conformance, and it must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). Claim dependency algebra: `harness` invalidates the run's evidence entirely; `open`/`unknown` residuals block only their axis; an axis this run observed diverging is never parity from this receipt, however its residuals are disposed (the refusal names the resolution run to compile from instead). Emits one conservative sentence scoped to the clean axes + the non-claim, attributed to the exact candidate artifact the run executed |
+| `frf replay RUN_ID \| RECEIPT_ID` | rederives the run identity from the capture's own recorded fields (the name is a claim until recomputed) and re-executes the exact snapshotted artifacts + captured argv under a checked environment, requiring the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). A receipt id additionally enforces its `expected_run_identity`. Writes nothing: replay is evidence verification, not re-observation |
 
 Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
@@ -69,9 +69,9 @@ Three suites, mirroring the framework's own discipline:
 | suite | command | what it does |
 |---|---|---|
 | regression | `cargo test` | the invariant bank: every verb, every rejection path, reason-gate, re-disposition, id/path-safety boundary, fail-closed envelope enforcement, object-store corruption refusal, timeout kill, and a zero-residual positive control |
-| verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
+| verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. The tree is *self-authenticating*: every capture and receipt is consumed through the verified loaders, which rederive run identities and receipt ids from recorded fields and refuse any drift. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
 | fuzzing | `cargo test --test fuzz` (deterministic, seeded, runs in CI) · `cargo +nightly fuzz run yaml_types\|cli_args\|store_ids` (libFuzzer, corpus-guided) | the negative controls: YAML deserializers never panic and never produce a forbidden disposition state, the CLI parser never panics, and ids that pass validation can never escape the store root |
-| conformance | `cargo test --test conformance` | walks the OpenReceipt protocol corpus in `conformance/`: every valid fixture must parse, deserialize, canonicalize to the pinned bytes, and hash to the pinned digest; invalid fixtures must be refused; the JSON Schema (`spec/openreceipt.schema.json`) is enforced, including the closed disposition set and the schema version |
+| conformance | `cargo test --test conformance` | walks the OpenReceipt protocol corpus in `conformance/` at TWO levels: **structural** — every `valid/` fixture must parse, deserialize, canonicalize to the pinned bytes, and hash to the pinned digest; `invalid/` fixtures must be refused; the JSON Schema (`spec/openreceipt.schema.json`) is enforced, including the closed disposition set and the schema version — and **semantic** — every `invalid-semantic/` fixture (structurally valid, semantically broken) must fail `validate_semantics`: disposition cross-field rules, rederivable environment digest + court semantic identity, verdict consistency, replay target, κ-token rederivation, interpreter-chain consistency, argv/declared-argument correspondence |
 
 `make test`, `make verify`, and `make fuzz-iters` wrap the same commands
 (`FRF_FUZZ_ITERS` scales the deterministic harness). The libFuzzer targets
@@ -115,6 +115,28 @@ says no more than that receipt licenses.
   declares the `stdout` axis**; the full stdout stream is captured and
   hashed but byte-identity is never claimed. The golden path deliberately
   stays on `exit` + `stderr` (Section 12's axes).
+- **Verified-on-read evidence (the evidentiary validity layer)**: a
+  content-addressed evidence object is never consumed semantically until its
+  identity AND derivation are verified. `claim compile` and `replay` accept
+  only `ReceiptVerified`/`CaptureVerified` (`src/verify.rs`): a receipt must
+  hash to its id, pass semantic conformance, derive from its verified
+  capture, evidence its dispositions against the append-only event history,
+  and re-verify `fixed` resolution edges. Parsing data cannot turn it into
+  evidence. The type distinction is structural — a `ReceiptVerified` cannot
+  be fabricated outside the verifier.
+- **The event chain is still flat**: disposition events are immutable but
+  carry no parent hash, and receipts bind disposition STATE rather than a
+  specific event id; parent-hashed event chaining, `disposition_event_id`
+  binding, and resolution-receipt edges are the evidence-graph milestone.
+- **The receipt is a root into the evidence graph, not the whole graph**:
+  trajectories, minimization attempts, witness statements, and bundle
+  portability are future protocol objects (`frf verify bundle` etc.).
+- **The semantic validator is document-level by design**: cross-store
+  checks (a `fixed` resolution edge actually closing, run existence) happen
+  in the verified loader, not in `validate_semantics`; the corpus in
+  `conformance/invalid-semantic/` therefore covers document-level rules
+  only. A second, independent verifier (Go/Python) that passes the same
+  corpus is the protocol-separation milestone.
 - **Minimization courts are not implemented**: `next_court` routes are
   recorded nominally, and claims scope to the executed court, not the routed one.
 - **`drift`/`slew` are `not-observed`** (sign block): v0 runs each court once;

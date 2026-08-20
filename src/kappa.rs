@@ -16,6 +16,48 @@
 
 use crate::model::*;
 
+/// One row of the κ classification table, keyed on the AXIS (the comparator
+/// identity, not the text/exit kind): the token surface, magnitude, and
+/// routing target. Exposed so the OpenReceipt semantic validator can rederive
+/// a receipt's tokens from its own fields — no implementation coupling.
+pub struct TokenShape {
+    pub surface: &'static str,
+    pub magnitude: &'static str,
+    pub next_court: &'static str,
+}
+
+/// The κ table: axis → (surface, magnitude, next_court).
+pub fn token_shape(axis: Axis) -> TokenShape {
+    match axis {
+        Axis::Exit => TokenShape {
+            surface: "exit-class",
+            magnitude: "class-change",
+            next_court: "cli-exit-minimize",
+        },
+        Axis::Stderr => TokenShape {
+            surface: "diagnostic-routing",
+            magnitude: "first-line-token-change",
+            next_court: "cli-diagnostic-minimize",
+        },
+        Axis::Stdout => TokenShape {
+            surface: "stdout-routing",
+            magnitude: "first-line-token-change",
+            next_court: "cli-stdout-minimize",
+        },
+    }
+}
+
+/// The claim phrases this axis's residual blocks (the token's `blocks_claims`
+/// field). The exit block names the fixture family: that is the scope the
+/// divergence threatens. Also exposed for the semantic validator.
+pub fn blocks_claims(axis: Axis, scope: &str) -> Vec<String> {
+    match axis {
+        Axis::Exit => vec![format!("{scope} exit parity")],
+        Axis::Stderr => vec!["byte-identical diagnostics".to_string()],
+        Axis::Stdout => vec!["byte-identical stdout".to_string()],
+    }
+}
+
 /// κ(r_raw, disposition) → (kind, surface, authority, magnitude, scope,
 /// disposition, next_court). Pure: the same residual record and disposition
 /// always yield the same token, so receipts and on-disk token files cannot
@@ -23,27 +65,7 @@ use crate::model::*;
 /// is immutable; the current disposition is the projection of the residual's
 /// event history.
 pub fn kappa(r: &ResidualRecord, disposition: &Disposition) -> TokenRecord {
-    // The table is keyed on the AXIS: the comparator identity, not the
-    // text/exit kind, decides the routing (stderr and stdout residuals are
-    // both text-family, but they minimize differently).
-    let (surface, magnitude, next_court) = match r.axis {
-        Axis::Exit => ("exit-class", "class-change", "cli-exit-minimize"),
-        Axis::Stderr => (
-            "diagnostic-routing",
-            "first-line-token-change",
-            "cli-diagnostic-minimize",
-        ),
-        Axis::Stdout => (
-            "stdout-routing",
-            "first-line-token-change",
-            "cli-stdout-minimize",
-        ),
-    };
-    let blocks = match r.axis {
-        Axis::Exit => format!("{} exit parity", r.scope),
-        Axis::Stderr => "byte-identical diagnostics".to_string(),
-        Axis::Stdout => "byte-identical stdout".to_string(),
-    };
+    let shape = token_shape(r.axis);
     let disposition = disposition.as_str().to_string();
     TokenRecord {
         schema_version: TOKEN_SCHEMA_VERSION.to_string(),
@@ -51,18 +73,18 @@ pub fn kappa(r: &ResidualRecord, disposition: &Disposition) -> TokenRecord {
         token: format!(
             "{}/{}/{}/{}",
             r.kind.as_str(),
-            surface,
-            magnitude,
+            shape.surface,
+            shape.magnitude,
             disposition
         ),
         kind: r.kind,
-        surface: surface.to_string(),
+        surface: shape.surface.to_string(),
         authority: r.authority.clone(),
-        magnitude: magnitude.to_string(),
+        magnitude: shape.magnitude.to_string(),
         scope: r.scope.clone(),
         disposition,
-        next_court: next_court.to_string(),
-        blocks_claims: vec![blocks],
+        next_court: shape.next_court.to_string(),
+        blocks_claims: blocks_claims(r.axis, &r.scope),
     }
 }
 

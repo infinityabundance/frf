@@ -30,11 +30,15 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v4";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
-/// The OpenReceipt schema. v6 carries the interpreter CHAIN (the executable
-/// the kernel directly invoked vs. the downstream interpreter) instead of a
-/// single flattened interpreter. The body is serialized as canonical JSON
-/// (RFC 8785) and its identity is the full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v6";
+/// The OpenReceipt schema. v6 carried the interpreter CHAIN (the executable
+/// the kernel directly invoked vs. the downstream interpreter). v7 adds the
+/// fixture's DECLARED arguments: the court semantic identity is computed over
+/// the declared arguments (the question), while `arguments` remains the
+/// resolved argv the side actually received (the execution) — a receipt must
+/// carry both to rederive its own semantic identity. The body is serialized
+/// as canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
+/// bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v7";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
@@ -908,7 +912,13 @@ pub struct ReceiptCandidate {
 pub struct ReceiptFixture {
     pub id: String,
     pub hash: String,
+    /// The resolved argv the side actually received (replay).
     pub arguments: Vec<String>,
+    /// The DECLARED fixture arguments — the input to the court semantic
+    /// identity (the question), as opposed to the resolved argv (the
+    /// execution). A receipt must carry both or it cannot rederive its own
+    /// semantic identity.
+    pub declared_arguments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

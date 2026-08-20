@@ -79,7 +79,10 @@ cat golden/work/original-refusal.txt
 
 echo "-- emit the resolution run's receipt and compile the bounded claim from it"
 RECEIPT_FINAL=$("$FRF_BIN" --root "$ROOT" receipt emit "$RESOLUTION_RUN")
-"$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL"
+if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL"; then
+  echo "FAIL: the bounded claim did not compile from the resolution run's receipt" >&2
+  exit 1
+fi
 
 step "6. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort

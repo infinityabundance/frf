@@ -280,6 +280,40 @@ fn invalid_fixtures_must_be_refused() {
 }
 
 #[test]
+fn semantic_invalid_fixtures_must_be_refused() {
+    // The second conformance level (spec/openreceipt.md): documents that are
+    // STRUCTURALLY valid — they parse as JSON and deserialize into the
+    // Receipt schema — but violate the cross-field, cross-object SEMANTIC
+    // invariants (disposition cross-field rules, rederivable identities,
+    // verdict consistency, replay target, token rederivation, interpreter
+    // consistency, …). The corpus is for every implementation: any
+    // independent verifier that accepts a document in here is not
+    // OpenReceipt-conformant.
+    let mut count = 0;
+    for entry in fs::read_dir(dir("conformance/invalid-semantic")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let source = fs::read_to_string(&path).unwrap();
+        // Structurally valid: must parse and deserialize.
+        let value: Value =
+            serde_json::from_str(&source).unwrap_or_else(|e| panic!("{name}: not valid JSON: {e}"));
+        let receipt: Receipt = serde_json::from_value(value).unwrap_or_else(|e| {
+            panic!("{name}: must deserialize as an OpenReceipt (structural conformance): {e}")
+        });
+        // Semantically invalid: must fail the document-level validator.
+        assert!(
+            receipt.validate_semantics().is_err(),
+            "{name}: must fail OpenReceipt semantic conformance"
+        );
+        count += 1;
+    }
+    assert!(
+        count >= 8,
+        "the semantic corpus must carry at least eight fixtures"
+    );
+}
+
+#[test]
 fn the_schema_rejects_forbidden_states() {
     // Negative controls for the schema itself: a receipt that structurally
     // deserializes (the corpus validator tolerates nothing) is one thing;
