@@ -6,10 +6,8 @@ axis: exit
 kind: exit
 authority: ref-cli-1.8.2
 scope: malformed-input
+candidate_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 raw_reference: "2"
 raw_candidate: "1"
 raw_reference_sha256: 0000000000000000000000000000000000000000000000000000000000000000
 raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111111111
-disposition: fixed
-reason: patched and re-observed
-resolution_run_id: run-cli-malformed-input-cafebabe

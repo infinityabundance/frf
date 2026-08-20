@@ -73,10 +73,15 @@ fn random_id_string(rng: &mut Rng, max_len: usize) -> String {
     (0..len).map(|_| rng.pick(ALPHABET) as char).collect()
 }
 
-fn assert_disposition_invariant(r: &ResidualRecord, origin: &str) {
-    match &r.disposition {
+/// The disposition reason invariant, checked on a parsed [`Disposition`]:
+/// `open` carries no reason, every closure carries a non-empty one-line
+/// reason, and `fixed` additionally carries its resolution run and the
+/// verified closure predicate. (Observations are [`ResidualRecord`]s with no
+/// disposition field at all — that state is structurally unrepresentable.)
+fn assert_disposition_invariant(d: &Disposition, origin: &str) {
+    match d {
         Disposition::Open => assert!(
-            r.disposition.reason().is_none(),
+            d.reason().is_none(),
             "{origin}: open disposition carried a reason"
         ),
         Disposition::Closed { reason, .. } => {
@@ -92,6 +97,7 @@ fn assert_disposition_invariant(r: &ResidualRecord, origin: &str) {
         Disposition::Fixed {
             reason,
             resolution_run_id,
+            closure_predicate,
         } => {
             assert!(
                 !reason.trim().is_empty() && !reason.contains('\n'),
@@ -100,6 +106,10 @@ fn assert_disposition_invariant(r: &ResidualRecord, origin: &str) {
             assert!(
                 !resolution_run_id.trim().is_empty(),
                 "{origin}: fixed disposition without a resolution_run_id"
+            );
+            assert!(
+                !closure_predicate.trim().is_empty(),
+                "{origin}: fixed disposition without a closure_predicate"
             );
         }
     }
@@ -118,8 +128,8 @@ fn yaml_parsers_never_panic_and_preserve_invariants() {
         let _ = serde_yaml::from_str::<TokenRecord>(&s);
         let _ = serde_yaml::from_str::<Receipt>(&s);
         let _ = serde_yaml::from_str::<ClaimRecord>(&s);
-        if let Ok(r) = serde_yaml::from_str::<ResidualRecord>(&s) {
-            assert_disposition_invariant(&r, &format!("random bytes iteration {i}"));
+        if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
+            assert_disposition_invariant(&d, &format!("random bytes iteration {i}"));
         }
     }
 }
@@ -131,6 +141,7 @@ fn mutated_valid_yaml_never_panics() {
         "disposition: open\n",
         "disposition: fixed\nreason: patched the candidate\n",
         "disposition: intentional\nreason: clearer wording\n",
+        "disposition: fixed\nreason: patched and re-observed\nresolution_run_id: run-cli-malformed-input-cafebabe\nclosure_predicate: \"fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality\"\n",
         r#"schema_version: frf-residual-v1
 id: cli-exit-0001
 court: cli-malformed-input
@@ -139,13 +150,11 @@ axis: exit
 kind: exit
 authority: ref-cli-1.8.2
 scope: malformed-input
+candidate_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 raw_reference: '2'
 raw_candidate: '1'
 raw_reference_sha256: 0000000000000000000000000000000000000000000000000000000000000000
 raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111111111
-disposition: fixed
-reason: patched and re-observed
-resolution_run_id: run-cli-malformed-input-cafebabe
 "#,
         r#"court:
   id: cli-malformed-input
@@ -179,8 +188,8 @@ resolution_run_id: run-cli-malformed-input-cafebabe
         let _ = serde_yaml::from_str::<CourtManifest>(&s);
         let _ = serde_yaml::from_str::<ResidualRecord>(&s);
         let _ = serde_yaml::from_str::<Disposition>(&s);
-        if let Ok(r) = serde_yaml::from_str::<ResidualRecord>(&s) {
-            assert_disposition_invariant(&r, &format!("mutation iteration {i}"));
+        if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
+            assert_disposition_invariant(&d, &format!("mutation iteration {i}"));
         }
     }
 }

@@ -11,8 +11,9 @@
 # token emitted for each, a positive claim refused while they are open, the
 # candidate patched and verified by a NEW court run (the closure evidence a
 # `fixed` disposition must point at), both residuals disposed (fixed +
-# intentional), a receipt emitted, and a bounded claim compiled with the
-# Section 12 non-claim printed next to it.
+# intentional), the original receipt kept forever as a failure record, and a
+# bounded claim compiled from the run that actually observed the pass, with
+# the Section 12 non-claim printed next to it.
 set -u
 
 cd "$(dirname "$0")/.."
@@ -67,8 +68,17 @@ echo "-- dispose the wording divergence as intentional (documented, never parity
 "$FRF_BIN" --root "$ROOT" residual dispose cli-text-0002 --disposition intentional \
   --reason "clearer diagnostic wording; documented divergence (re-observed by the resolution run)"
 
-step "5. emit the final receipt and compile the bounded claim"
-RECEIPT_FINAL=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")
+step "5. the original receipt stays what it was; the claim comes from the run that observed the pass"
+RECEIPT_ORIGINAL=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")
+echo "-- the original (failing) run's receipt can never yield a parity claim, however its residuals are disposed:"
+if "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_ORIGINAL" 2>golden/work/original-refusal.txt; then
+  echo "FAIL: the failing run's receipt compiled a parity claim" >&2
+  exit 1
+fi
+cat golden/work/original-refusal.txt
+
+echo "-- emit the resolution run's receipt and compile the bounded claim from it"
+RECEIPT_FINAL=$("$FRF_BIN" --root "$ROOT" receipt emit "$RESOLUTION_RUN")
 "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL"
 
 step "6. the evidence tree (Section 19.3 layout)"

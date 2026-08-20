@@ -157,15 +157,59 @@ impl Store {
             .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display())))
     }
 
-    /// Sanctioned mutation of a residual record: rewrites the record and its
-    /// derived token atomically enough for a CLI (record first, then token;
-    /// both are pure functions of the same state).
-    pub fn write_residual(&self, record: &ResidualRecord) -> Result<()> {
-        let yaml = self.to_yaml(record)?;
-        self.write_derived(&self.residual_path(&record.id)?, &yaml)?;
-        let token = crate::kappa::kappa(record);
-        let token_yaml = self.to_yaml(&token)?;
-        self.write_derived(&self.token_path(&record.id)?, &token_yaml)
+    /// Write the derived κ token for a residual under its current disposition.
+    pub fn write_token(&self, record: &ResidualRecord, disposition: &Disposition) -> Result<()> {
+        let token = crate::kappa::kappa(record, disposition);
+        let yaml = self.to_yaml(&token)?;
+        self.write_derived(&self.token_path(&record.id)?, &yaml)
+    }
+
+    // -- disposition events (append-only) ------------------------------------
+
+    /// `residuals/<id>.events/` — one immutable file per disposition event.
+    pub fn events_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_id("residual", id)?;
+        Ok(self.root.join("residuals").join(format!("{id}.events")))
+    }
+
+    /// All disposition events for a residual, in sequence order. Immutable;
+    /// the current disposition is the projection of the last one.
+    pub fn disposition_events(&self, id: &str) -> Result<Vec<DispositionEvent>> {
+        let dir = self.events_dir(id)?;
+        let mut events: Vec<(u32, DispositionEvent)> = Vec::new();
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let Ok(seq) = name.parse::<u32>() else {
+                    continue;
+                };
+                events.push((seq, self.parse_yaml(&path)?));
+            }
+        }
+        events.sort_by_key(|(seq, _)| *seq);
+        Ok(events.into_iter().map(|(_, e)| e).collect())
+    }
+
+    /// The projected current disposition: the last event, or `Open` when the
+    /// residual has no events yet.
+    pub fn current_disposition(&self, id: &str) -> Result<Disposition> {
+        Ok(self
+            .disposition_events(id)?
+            .pop()
+            .map(|e| e.disposition)
+            .unwrap_or(Disposition::Open))
+    }
+
+    /// Append one immutable disposition event (sequence = count + 1).
+    pub fn append_disposition_event(&self, event: &DispositionEvent) -> Result<()> {
+        let dir = self.events_dir(&event.residual_id)?;
+        fs::create_dir_all(&dir)
+            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
+        let seq = self.disposition_events(&event.residual_id)?.len() + 1;
+        let path = dir.join(format!("{seq:04}.yaml"));
+        let yaml = self.to_yaml(event)?;
+        self.write_once(&path, &yaml)
     }
 
     // -- reads ---------------------------------------------------------------
@@ -236,26 +280,107 @@ impl Store {
         Ok(max + 1)
     }
 
-    /// The explicit closure predicate behind a `fixed` disposition: does a run
-    /// exist, for the same court, whose captures show authority and candidate
-    /// agreeing on `axis`? A disposition is never evidence; the run is.
+    /// The resolution-comparability predicate behind a `fixed` disposition.
     ///
-    /// - missing run → error (`no such run`)
-    /// - run from a different court → error (wrong run picked)
-    /// - run from the same court but the axis still diverges → `Ok(false)`
-    pub fn run_closes_axis(&self, run: &str, court: &str, axis: Axis) -> Result<bool> {
-        let cap = self.load_capture(run)?;
-        if cap.court != court {
+    /// A resolution of residual R must rerun the SAME evidentiary question
+    /// under a compatible envelope, holding everything stable except the
+    /// candidate (the thing a fix is allowed to change), and show the axis
+    /// now agreeing. Every check fails with a specific message; `Ok(())`
+    /// means the run is valid resolution evidence for this residual.
+    ///
+    /// The candidate is deliberately NOT compared: it is the one entity a fix
+    /// court may change, and both runs record their candidate artifact hashes
+    /// so the evolution is explicit rather than silently crossed.
+    pub fn resolution_compatibility(
+        &self,
+        original_run: &str,
+        resolution_run: &str,
+        axis: Axis,
+    ) -> Result<()> {
+        if resolution_run == original_run {
             return Err(FrfError::new(format!(
-                "run '{run}' is for court '{}', not '{court}'",
-                cap.court
+                "resolution run must be a new court run, not '{original_run}' — the run that observed the residual"
+            )));
+        }
+        let original = self.load_capture(original_run)?;
+        let resolution = self.load_capture(resolution_run)?;
+
+        let check = |what: &str, a: &str, b: &str| -> Result<()> {
+            if a == b {
+                Ok(())
+            } else {
+                Err(FrfError::new(format!(
+                    "resolution run '{resolution_run}' is not comparable to '{original_run}': {what} differs ({a:?} != {b:?})"
+                )))
+            }
+        };
+
+        check("court", &original.court, &resolution.court)?;
+        check("authority", &original.authority, &resolution.authority)?;
+        check("fixture id", &original.fixture, &resolution.fixture)?;
+        check(
+            "fixture bytes (sha256)",
+            &original.fixture_sha256,
+            &resolution.fixture_sha256,
+        )?;
+        let orig_args = format!("{:?}", original.arguments);
+        let res_args = format!("{:?}", resolution.arguments);
+        check("fixture arguments", &orig_args, &res_args)?;
+        let orig_obs = original
+            .court_spec
+            .admissibility_envelope
+            .observables
+            .join(",");
+        let res_obs = resolution
+            .court_spec
+            .admissibility_envelope
+            .observables
+            .join(",");
+        check("observables", &orig_obs, &res_obs)?;
+        let orig_norm = original
+            .court_spec
+            .admissibility_envelope
+            .normalizers
+            .join(",");
+        let res_norm = resolution
+            .court_spec
+            .admissibility_envelope
+            .normalizers
+            .join(",");
+        check("normalizers", &orig_norm, &res_norm)?;
+        check(
+            "environment digest",
+            &original.environment_digest,
+            &resolution.environment_digest,
+        )?;
+
+        // The axis being resolved must be declared by the resolution run, and
+        // must now agree.
+        let declared = resolution
+            .court_spec
+            .admissibility_envelope
+            .observables
+            .iter()
+            .any(|o| o == axis.as_str());
+        if !declared {
+            return Err(FrfError::new(format!(
+                "resolution run '{resolution_run}' does not declare the {} axis",
+                axis.as_str()
             )));
         }
         let closes = match axis {
-            Axis::Exit => cap.reference.exit == cap.candidate.exit,
-            Axis::Stderr => cap.reference.stderr_first_line == cap.candidate.stderr_first_line,
+            Axis::Exit => resolution.reference.exit == resolution.candidate.exit,
+            Axis::Stderr => {
+                resolution.reference.stderr_first_line == resolution.candidate.stderr_first_line
+            }
         };
-        Ok(closes)
+        if !closes {
+            return Err(FrfError::new(format!(
+                "resolution run '{resolution_run}' does not close the residual: the {} axis still diverges in its captures (a fixed disposition must be backed by a run where the residual no longer reproduces)",
+                axis.as_str()
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -301,14 +426,60 @@ mod tests {
             surface: None,
             authority: "a".into(),
             scope: "s".into(),
+            candidate_sha256: "c".repeat(64),
             raw_reference: "2".into(),
             raw_candidate: "1".into(),
             raw_reference_sha256: "0".repeat(64),
             raw_candidate_sha256: "1".repeat(64),
-            disposition: Disposition::Open,
         };
-        store.write_residual(&rec).unwrap();
+        let yaml = store.to_yaml(&rec).unwrap();
+        store
+            .write_once(&store.residual_path("cli-exit-0001").unwrap(), &yaml)
+            .unwrap();
         assert_eq!(store.next_residual_seq(ResidualKind::Exit).unwrap(), 2);
         assert_eq!(store.next_residual_seq(ResidualKind::Text).unwrap(), 1);
+    }
+
+    #[test]
+    fn disposition_events_are_append_only() {
+        let store = temp_store();
+        store.ensure_tree().unwrap();
+        assert_eq!(
+            store.current_disposition("cli-exit-0001").unwrap(),
+            Disposition::Open
+        );
+        let e1 =
+            DispositionEvent::closed("cli-exit-0001", ClosureKind::Intentional, "wording".into())
+                .unwrap();
+        store.append_disposition_event(&e1).unwrap();
+        let e2 = DispositionEvent::closed("cli-exit-0001", ClosureKind::Harness, "runner".into())
+            .unwrap();
+        store.append_disposition_event(&e2).unwrap();
+        // Projection is the last event; both events survive in order.
+        assert_eq!(
+            store.current_disposition("cli-exit-0001").unwrap().as_str(),
+            "harness"
+        );
+        let events = store.disposition_events("cli-exit-0001").unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].disposition.as_str(), "intentional");
+        assert_eq!(events[1].disposition.as_str(), "harness");
+        // Re-disposing appends; it never rewrites event 0001.
+        let first =
+            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.yaml"))
+                .unwrap();
+        let e3 =
+            DispositionEvent::closed("cli-exit-0001", ClosureKind::Unknown, "reclassified".into())
+                .unwrap();
+        store.append_disposition_event(&e3).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.yaml"))
+                .unwrap(),
+            first
+        );
+        assert_eq!(
+            store.current_disposition("cli-exit-0001").unwrap().as_str(),
+            "unknown"
+        );
     }
 }

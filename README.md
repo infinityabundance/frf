@@ -41,8 +41,10 @@ prints each stage: admission, court run, raw capture, two `open` residuals,
 their endoduction tokens, the refused claim, the candidate patched and
 verified by a NEW court run, the exit residual disposed `fixed` only after
 that run closes it, the wording divergence disposed `intentional`, the
-receipt, and the compiled bounded claim with its non-claim printed next to
-it. Allow five minutes; it takes about five seconds.
+original receipt kept forever as a failure record, and the bounded claim
+compiled from the resolution run's receipt — the run that actually observed
+the passing candidate — with the Section 12 non-claim printed next to it.
+Allow five minutes; it takes about five seconds.
 
 ## The verbs
 
@@ -50,9 +52,9 @@ it. Allow five minutes; it takes about five seconds.
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
 | `frf court run MANIFEST.yaml` | executes authority and candidate against the fixture, captures raw stdout/stderr/exit, writes `open` residuals + endoduction tokens for each declared-axis disagreement |
-| `frf residual dispose ID --disposition D --reason "..."` | records `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — the court run whose captures show the residual no longer reproduces (a disposition is not evidence) |
+| `frf residual dispose ID --disposition D --reason "..."` | appends an immutable disposition event: `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). The observation file is never rewritten; the current disposition is the projection of the event list |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into a trimmed Appendix A receipt |
-| `frf claim compile RECEIPT_ID` | refuses while any residual is `open`/`unknown`/`harness`; otherwise emits one conservative sentence + the non-claim |
+| `frf claim compile RECEIPT_ID` | the only path that can emit a positive claim. Refuses while any residual is `open`/`unknown`/`harness`, and refuses a receipt whose run observed divergence — a failing run's receipt can never become parity, however its residuals are disposed; the refusal names the resolution run to compile from instead. Otherwise emits one conservative sentence + the non-claim, attributed to the exact candidate artifact the run executed |
 
 Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
@@ -81,7 +83,7 @@ frf/
   authorities/   admitted once, never rewritten
   courts/        hand-authored court declarations (question, envelope, fixture)
   captures/      raw observations, content-addressed, immutable
-  residuals/     residual records + derived token files
+  residuals/     immutable observations + derived tokens + <id>.events/ dispositions
   receipts/      bindings, content-addressed
   claims/        compiled claims, written only by `frf claim compile`
 ```
@@ -114,18 +116,36 @@ says no more than that receipt licenses.
   (a test hook used by the regression suite's kill-path test; not a public knob).
 - **`receipt.claims.positive` stays empty**: receipts are immutable, so the
   positive sentence is compiled into `claims/<receipt-id>.yaml` instead.
-- **Dispositions mutate the residual record in place** (receipts preserve the
-  history); an append-only residual event graph is future work. The `fixed`
-  closure already carries its `resolution_run_id`, and the claim compiler
-  re-verifies that run against the store before compiling — a disposition can
-  never substitute for new evidence.
+- **Dispositions are append-only events** under `residuals/<id>.events/`; the
+  observation record is byte-immutable and never carries a disposition, and
+  the current disposition is the projection of the last event — so a residual
+  trajectory (`open` → suspected `harness` → … → `fixed`) survives
+  re-disposition. The event chain is flat for now: parent-hash chaining and
+  resolution-receipt edges are future work.
+- **`fixed` never licenses parity from the run that observed the failure**:
+  the positive claim must be compiled from the resolution run's receipt, the
+  run that actually observed the passing candidate. This is enforced by the
+  claim compiler, not by convention.
+- **Receipt and run ids expose the first 8 hex digits (32 bits) of a SHA-256
+  digest as a display identity**; lookup is exact within a store, but a
+  canonical OpenReceipt (deterministic JSON, RFC 8785) with full-digest
+  addressing is future work.
+- **The environment digest covers os + architecture + kernel release only**;
+  environment admission (libc, locale, timezone data, dynamic dependencies,
+  container/Nix digests) is future work.
+- **The subprocess runner drains pipes concurrently and records signals by
+  number**, but the `ETXTBSY` spawn retry has no deadline of its own, and
+  descendant processes that inherit stdout/stderr are not reaped (process-
+  group / descendant policy is future work).
 - **`environmental` and `oracle_version` weaken the envelope**: they close the
   residual but never license parity on its axis (the claim compiler excludes
   the axis). Envelope refinement records are future work.
-- **The mandatory `reason` field, the `resolution_run_id` edge, residual
+- **The mandatory `reason` field, the `resolution_run_id` edge +
+  `closure_predicate`, candidate `identity_hash` binding, residual
   `axis`/`authority`/`scope`, and per-axis hashes are v0 traceability
   additions** to the paper's minimal snippets, required to bind the mandatory
-  disposition reason and scope the claim sentences.
+  disposition reason, attribute observations to the exact candidate artifact,
+  and scope the claim sentences.
 - **Residual ids are hardcoded to the `cli` domain** (`cli-exit-0001`), and
   `grammar_state` is derived from disposition via a fixed table.
 - **Receipt replay commands and paths are working-directory-relative**; run

@@ -8,13 +8,15 @@
 //! - Any residual with disposition `open`, `unknown`, or `harness` blocks the
 //!   claim. The compile prints the explicit non-claim boundary (one line per
 //!   blocking residual) plus the non-claim sentences, and exits non-zero.
-//! - Every `fixed` residual must carry a `resolution_run_id`, and that run
-//!   must actually close the residual (same court, axis now agrees). This is
-//!   re-verified here against the store — not just trusted from the receipt —
-//!   so a hand-edited receipt cannot promote a claim by changing a label.
+//! - A positive parity claim is compiled only from a receipt whose run
+//!   actually observed the axis passing. A receipt that observed divergence
+//!   can never become a parity receipt: if its residuals carry `fixed`
+//!   resolution edges, the refusal names the resolution run to compile from
+//!   instead — the claim belongs to the run that observed the pass.
 //! - Otherwise the compiler emits exactly one conservative sentence, scoped
-//!   to the receipt's authority, fixture family, environment, and executed
-//!   court — never more — and states the non-claim next to it.
+//!   to the receipt's authority, fixture family, environment, executed court,
+//!   and exact candidate artifact — never more — and states the non-claim
+//!   next to it.
 
 use crate::error::{FrfError, Result};
 use crate::model::*;
@@ -41,37 +43,30 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         )));
     }
 
-    // 2. Every `fixed` residual must be backed by a resolution run that
-    //    actually closes it. A disposition is not evidence; the run is.
-    for res in &receipt.residuals {
-        if res.disposition != "fixed" {
-            continue;
-        }
-        let Some(run) = &res.resolution_run_id else {
-            return Err(FrfError::new(format!(
-                "claim refused: residual {} is fixed without a resolution_run_id (a disposition is not evidence)",
-                res.id
-            )));
-        };
-        let axis = Axis::parse(&res.axis)
-            .map_err(|e| FrfError::new(format!("receipt residual {}: {e}", res.id)))?;
-        if !store.run_closes_axis(run, &receipt.court.id, axis)? {
-            return Err(FrfError::new(format!(
-                "claim refused: resolution run '{run}' does not close residual {} — the {} axis still diverges in its captures",
-                res.id,
-                res.axis
-            )));
-        }
-    }
-
-    // 2. Compose the single bounded sentence.
+    // 2. Compose the single bounded sentence from THIS receipt's run. The
+    //    axis rule lives in positive_claim: an axis this run observed
+    //    diverging is never claimable as parity from this receipt, whatever
+    //    its dispositions say.
     let Some(sentence) = sentences::positive_claim(&receipt) else {
         let non_claims = sentences::non_claims(&family);
         for nc in &non_claims {
             eprintln!("{nc}");
         }
+        // A receipt that observed divergence cannot become a parity receipt;
+        // if it carries resolution edges, point at the run that observed the
+        // passing candidate.
+        let hint = receipt
+            .residuals
+            .iter()
+            .find_map(|res| {
+                (res.disposition == "fixed")
+                    .then_some(res.resolution_run_id.as_deref())
+                    .flatten()
+            })
+            .map(|run| format!(" — compile the claim from the resolution run '{run}' instead (this receipt's run observed the divergence; a disposition never rewrites an observation)"))
+            .unwrap_or_default();
         return Err(FrfError::new(format!(
-            "claim refused: no declared observable axis for fixture family {family} is established as parity (every axis is a documented divergence or unmeasured)"
+            "claim refused: no declared observable axis for fixture family {family} is established as parity by this receipt's run{hint}"
         )));
     };
 
@@ -85,6 +80,11 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         schema_version: SCHEMA_CLAIM.to_string(),
         receipt: receipt_id.to_string(),
         authority: format!("{}-{}", receipt.authority.name, receipt.authority.version),
+        candidate: ClaimCandidate {
+            name: receipt.candidate.name.clone(),
+            version_or_commit: receipt.candidate.version_or_commit.clone(),
+            identity_hash: receipt.candidate.identity_hash.clone(),
+        },
         court: receipt.court.id.clone(),
         fixture_family: family.clone(),
         environment,

@@ -2,20 +2,26 @@
 //!
 //! Invariants stated before code:
 //! - Authority ids are `{name}-{version}`, safe path components, unique in a store.
-//! - A residual disposition is either `open` (no reason) or a closure with a
-//!   required one-line reason. A `fixed` closure additionally requires a
-//!   `resolution_run_id` — a court run whose captures show the residual no
-//!   longer reproduces — so "fixed" is evidence-bearing by construction: a
+//! - A residual observation record is immutable once written by the court: it
+//!   never changes epistemic meaning after observation. Dispositions are
+//!   append-only events under `residuals/<id>.events/`; the current
+//!   disposition is the projection of the last event, and `open` is the
+//!   projection of no events. Nothing is ever rewritten in place.
+//! - A `fixed` closure requires a `resolution_run_id` and the `closure_predicate`
+//!   that was verified against it — a court run, under an explicit comparability
+//!   predicate, whose captures show the residual no longer reproduces. A
 //!   disposition can never substitute for new evidence, and no representable
 //!   state lets a human promote a claim by changing a label.
-//! - Raw captures and receipts are written once and never rewritten; the residual
-//!   record is the only evidence object that mutates, and only through
-//!   [`ResidualRecord::dispose`].
+//! - A positive parity claim is compiled only from a receipt whose run actually
+//!   observed the axis passing; a receipt that observed divergence can never be
+//!   turned into a parity receipt, however its residuals are disposed.
+//! - Raw captures and receipts are written once and never rewritten.
 //!
 //! Field names and shapes follow Section 10, Section 12, and Appendix A of
 //! *The Forensic Residual Framework* (de Beer, 2026). v0 additions beyond the
 //! paper's minimal snippets (traceability fields such as `authority`, `scope`,
-//! per-axis hashes, and the mandatory `reason`) are documented in the README.
+//! per-axis hashes, the mandatory `reason`, and the candidate artifact hash)
+//! are documented in the README.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -23,6 +29,7 @@ use std::fmt;
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v1";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
+pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v1";
 pub const SCHEMA_RECEIPT: &str = "frf-receipt-v1";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
 
@@ -150,11 +157,17 @@ impl ClosureKind {
     }
 }
 
+/// The closure predicate a `fixed` disposition must have verified: the
+/// resolution run reran the same question under the same envelope, holding
+/// everything stable except the candidate, and the axis now agrees.
+pub const CLOSURE_PREDICATE_FIX_COURT: &str = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality";
+
 /// Residual disposition with the invariants enforced by construction:
 /// - `Open` carries no reason.
 /// - every `Closed` carries a non-empty one-line reason;
-/// - `Fixed` carries both a reason and the `resolution_run_id` of the court
-///   run whose captures show the residual no longer reproduces.
+/// - `Fixed` carries a reason, the `resolution_run_id` of the court run whose
+///   captures show the residual no longer reproduces, and the
+///   `closure_predicate` that was verified against that run.
 ///
 /// There is no representable "fixed without evidence" state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +180,7 @@ pub enum Disposition {
     Fixed {
         reason: String,
         resolution_run_id: String,
+        closure_predicate: String,
     },
 }
 
@@ -244,10 +258,12 @@ impl Serialize for Disposition {
             Disposition::Fixed {
                 reason,
                 resolution_run_id,
+                closure_predicate,
             } => {
                 map.serialize_entry("disposition", "fixed")?;
                 map.serialize_entry("reason", reason)?;
                 map.serialize_entry("resolution_run_id", resolution_run_id)?;
+                map.serialize_entry("closure_predicate", closure_predicate)?;
             }
         }
         map.end()
@@ -273,11 +289,13 @@ impl<'de> Deserialize<'de> for Disposition {
                 let mut status: Option<String> = None;
                 let mut reason: Option<String> = None;
                 let mut resolution_run_id: Option<String> = None;
+                let mut closure_predicate: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "disposition" => status = Some(map.next_value()?),
                         "reason" => reason = Some(map.next_value()?),
                         "resolution_run_id" => resolution_run_id = Some(map.next_value()?),
+                        "closure_predicate" => closure_predicate = Some(map.next_value()?),
                         // Unknown keys are ignored so the flattened map can be
                         // consumed in any field order.
                         _ => {
@@ -288,9 +306,12 @@ impl<'de> Deserialize<'de> for Disposition {
                 let status = status.ok_or_else(|| A::Error::missing_field("disposition"))?;
                 match status.as_str() {
                     "open" => {
-                        if reason.is_some() || resolution_run_id.is_some() {
+                        if reason.is_some()
+                            || resolution_run_id.is_some()
+                            || closure_predicate.is_some()
+                        {
                             return Err(A::Error::custom(
-                                "disposition 'open' cannot carry a reason or resolution_run_id",
+                                "disposition 'open' cannot carry a reason, resolution_run_id, or closure_predicate",
                             ));
                         }
                         Ok(Disposition::Open)
@@ -304,24 +325,31 @@ impl<'de> Deserialize<'de> for Disposition {
                                 "disposition 'fixed' requires a resolution_run_id (a disposition is not evidence)",
                             )
                         })?;
+                        let closure_predicate = closure_predicate.ok_or_else(|| {
+                            A::Error::custom("disposition 'fixed' requires a closure_predicate")
+                        })?;
                         if reason.trim().is_empty() {
                             return Err(A::Error::custom("reason must not be empty"));
                         }
                         if resolution_run_id.trim().is_empty() {
                             return Err(A::Error::custom("resolution_run_id must not be empty"));
                         }
+                        if closure_predicate.trim().is_empty() {
+                            return Err(A::Error::custom("closure_predicate must not be empty"));
+                        }
                         Ok(Disposition::Fixed {
                             reason,
                             resolution_run_id,
+                            closure_predicate,
                         })
                     }
                     other => {
                         let kind = ClosureKind::parse(other).ok_or_else(|| {
                             A::Error::custom(format!("unknown disposition '{other}'"))
                         })?;
-                        if resolution_run_id.is_some() {
+                        if resolution_run_id.is_some() || closure_predicate.is_some() {
                             return Err(A::Error::custom(format!(
-                                "only 'fixed' may carry a resolution_run_id, not '{other}'"
+                                "only 'fixed' may carry a resolution_run_id or closure_predicate, not '{other}'"
                             )));
                         }
                         let reason = reason.ok_or_else(|| {
@@ -431,6 +459,8 @@ pub struct CaptureManifest {
     pub arguments: Vec<String>,
     pub environment_digest: String,
     pub court_spec: CourtSpec,
+    /// SHA-256 of the exact candidate artifact bytes this run executed.
+    pub candidate_sha256: String,
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
@@ -449,14 +479,21 @@ pub struct SideCapture {
 }
 
 // ---------------------------------------------------------------------------
-// Residual
+// Residual observation + disposition events
 // ---------------------------------------------------------------------------
 
 /// A preserved disagreement (Section 12 record + traceability fields).
 ///
-/// Mutable only through [`ResidualRecord::dispose`]: `court run` writes the
-/// record with `Open` disposition, and no other command may touch it.
+/// IMMUTABLE: written once by `court run` with no disposition — the
+/// observation never changes epistemic meaning. Dispositions are append-only
+/// [`DispositionEvent`]s under `residuals/<id>.events/`; the current
+/// disposition is the projection of the last event (`open` = no events).
+///
+/// `deny_unknown_fields`: an observation file that carries a stray
+/// `disposition:` (or any other) key fails to load instead of silently
+/// ignoring it — the forbidden state is unrepresentable, not merely unread.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResidualRecord {
     pub schema_version: String,
     pub id: String,
@@ -471,46 +508,75 @@ pub struct ResidualRecord {
     pub authority: String,
     /// Fixture family the residual is scoped to (the token's `scope`).
     pub scope: String,
+    /// SHA-256 of the candidate artifact bytes that produced this observation
+    /// — the residual is bound to the exact candidate, not to a label.
+    pub candidate_sha256: String,
     pub raw_reference: String,
     pub raw_candidate: String,
     pub raw_reference_sha256: String,
     pub raw_candidate_sha256: String,
+}
+
+/// One immutable disposition event. Each `frf residual dispose` appends a new
+/// event; nothing is ever rewritten, so the residual trajectory survives
+/// re-disposition. Sequence numbers are the file names under
+/// `residuals/<id>.events/`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DispositionEvent {
+    pub schema_version: String,
+    pub residual_id: String,
     #[serde(flatten)]
     pub disposition: Disposition,
 }
 
-impl ResidualRecord {
-    /// The only sanctioned mutations: record a closure. Rejects a missing or
-    /// multi-line reason and refuses to move a residual back to `open`.
-    pub fn dispose(&mut self, kind: ClosureKind, reason: String) -> crate::error::Result<()> {
+impl DispositionEvent {
+    /// Build a non-fixed closure event.
+    pub fn closed(
+        residual_id: &str,
+        kind: ClosureKind,
+        reason: String,
+    ) -> crate::error::Result<Self> {
         validate_reason(&reason)?;
-        self.disposition = Disposition::Closed { kind, reason };
-        Ok(())
+        Ok(DispositionEvent {
+            schema_version: SCHEMA_DISPOSITION.to_string(),
+            residual_id: residual_id.to_string(),
+            disposition: Disposition::Closed { kind, reason },
+        })
     }
 
-    /// Record a `fixed` closure: the reason plus the resolution run whose
-    /// captures show the residual no longer reproduces. `fixed` cannot be
-    /// spelled without that run — a disposition is not evidence.
-    pub fn dispose_fixed(
-        &mut self,
+    /// Build a `fixed` closure event. `fixed` cannot be spelled without its
+    /// resolution run and the predicate that was verified against it — a
+    /// disposition is not evidence.
+    pub fn fixed(
+        residual_id: &str,
         reason: String,
         resolution_run_id: String,
-    ) -> crate::error::Result<()> {
+        closure_predicate: String,
+    ) -> crate::error::Result<Self> {
         validate_reason(&reason)?;
         if resolution_run_id.trim().is_empty() {
             return Err(crate::error::FrfError::new(
                 "a fixed disposition requires a resolution_run_id",
             ));
         }
-        self.disposition = Disposition::Fixed {
-            reason,
-            resolution_run_id,
-        };
-        Ok(())
+        if closure_predicate.trim().is_empty() {
+            return Err(crate::error::FrfError::new(
+                "a fixed disposition requires a closure_predicate",
+            ));
+        }
+        Ok(DispositionEvent {
+            schema_version: SCHEMA_DISPOSITION.to_string(),
+            residual_id: residual_id.to_string(),
+            disposition: Disposition::Fixed {
+                reason,
+                resolution_run_id,
+                closure_predicate,
+            },
+        })
     }
 }
 
-fn validate_reason(reason: &str) -> crate::error::Result<()> {
+pub(crate) fn validate_reason(reason: &str) -> crate::error::Result<()> {
     if reason.trim().is_empty() {
         return Err(crate::error::FrfError::new(
             "disposition requires a non-empty one-line reason",
@@ -599,6 +665,9 @@ pub struct ReceiptCandidate {
     pub name: String,
     pub version_or_commit: String,
     pub build_profile: String,
+    /// SHA-256 of the exact candidate artifact bytes this receipt's run
+    /// executed — labels are distrustful; bytes are not.
+    pub identity_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -661,6 +730,9 @@ pub struct ReceiptResidual {
     /// evidence edge a disposition must never substitute for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution_run_id: Option<String>,
+    /// The comparability predicate verified against the resolution run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closure_predicate: Option<String>,
     pub reproducer: String,
     pub invariant: String,
     pub residual_fingerprint: String,
@@ -704,11 +776,20 @@ pub struct ClaimRecord {
     pub schema_version: String,
     pub receipt: String,
     pub authority: String,
+    pub candidate: ClaimCandidate,
     pub court: String,
     pub fixture_family: String,
     pub environment: String,
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
+}
+
+/// The exact candidate artifact a compiled claim is attributed to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimCandidate {
+    pub name: String,
+    pub version_or_commit: String,
+    pub identity_hash: String,
 }
 
 #[cfg(test)]
@@ -737,21 +818,24 @@ mod tests {
         assert!(yaml.contains("disposition: intentional"));
         assert!(yaml.contains("reason: clearer wording"));
 
-        // fixed: reason AND resolution_run_id are required — a disposition
-        // is not evidence.
-        let fixed: Disposition =
-            serde_yaml::from_str("disposition: fixed\nreason: patched\nresolution_run_id: run-x\n")
-                .unwrap();
+        // fixed: reason, resolution_run_id, AND closure_predicate are
+        // required — a disposition is not evidence.
+        let fixed: Disposition = serde_yaml::from_str(
+            "disposition: fixed\nreason: patched\nresolution_run_id: run-x\nclosure_predicate: \"fix-court: same question\"\n",
+        )
+        .unwrap();
         assert_eq!(
             fixed,
             Disposition::Fixed {
                 reason: "patched".into(),
-                resolution_run_id: "run-x".into()
+                resolution_run_id: "run-x".into(),
+                closure_predicate: "fix-court: same question".into()
             }
         );
         let yaml = serde_yaml::to_string(&fixed).unwrap();
         assert!(yaml.contains("disposition: fixed"));
         assert!(yaml.contains("resolution_run_id: run-x"));
+        assert!(yaml.contains("closure_predicate"));
     }
 
     #[test]
@@ -764,6 +848,11 @@ mod tests {
         assert!(
             serde_yaml::from_str::<Disposition>("disposition: fixed\nreason: patched\n").is_err()
         );
+        // fixed without a closure predicate
+        assert!(serde_yaml::from_str::<Disposition>(
+            "disposition: fixed\nreason: patched\nresolution_run_id: run-x\n"
+        )
+        .is_err());
         // non-fixed closure carrying a resolution run
         assert!(serde_yaml::from_str::<Disposition>(
             "disposition: intentional\nreason: x\nresolution_run_id: run-y\n"
@@ -785,58 +874,50 @@ mod tests {
             surface: None,
             authority: "ref-cli-1.8.2".into(),
             scope: "malformed-input".into(),
+            candidate_sha256: "c".repeat(64),
             raw_reference: "2".into(),
             raw_candidate: "1".into(),
             raw_reference_sha256: "a".repeat(64),
             raw_candidate_sha256: "b".repeat(64),
-            disposition: Disposition::Open,
         };
         let yaml = serde_yaml::to_string(&record).unwrap();
+        assert!(
+            !yaml.contains("disposition"),
+            "the immutable observation must not carry a disposition"
+        );
         let back: ResidualRecord = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(back.disposition, Disposition::Open);
         assert_eq!(back.raw_reference, "2");
+        assert_eq!(back.candidate_sha256, "c".repeat(64));
     }
 
     #[test]
-    fn dispose_rejects_missing_or_multiline_reason() {
-        let mut record = ResidualRecord {
-            schema_version: SCHEMA_RESIDUAL.into(),
-            id: "cli-exit-0001".into(),
-            court: "c".into(),
-            run: "r".into(),
-            axis: Axis::Exit,
-            kind: ResidualKind::Exit,
-            surface: None,
-            authority: "a".into(),
-            scope: "s".into(),
-            raw_reference: "2".into(),
-            raw_candidate: "1".into(),
-            raw_reference_sha256: "a".repeat(64),
-            raw_candidate_sha256: "b".repeat(64),
-            disposition: Disposition::Open,
-        };
-        assert!(record
-            .dispose(ClosureKind::Intentional, "   ".into())
-            .is_err());
-        assert!(record
-            .dispose(ClosureKind::Intentional, "line one\nline two".into())
-            .is_err());
-        record
-            .dispose(ClosureKind::Intentional, "one line".into())
-            .unwrap();
-        assert_eq!(record.disposition.as_str(), "intentional");
+    fn disposition_events_carry_the_closures() {
+        let closed = DispositionEvent::closed(
+            "cli-exit-0001",
+            ClosureKind::Intentional,
+            "clearer wording".into(),
+        )
+        .unwrap();
+        assert_eq!(closed.disposition.as_str(), "intentional");
+        let yaml = serde_yaml::to_string(&closed).unwrap();
+        assert!(yaml.contains("disposition: intentional"));
+        let back: DispositionEvent = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.disposition, closed.disposition);
 
-        // fixed goes through dispose_fixed and carries its resolution run.
-        assert!(record
-            .dispose_fixed("patched".into(), "   ".into())
-            .is_err());
-        record
-            .dispose_fixed("patched".into(), "run-cli-malformed-input-x".into())
-            .unwrap();
-        assert_eq!(record.disposition.as_str(), "fixed");
+        let fixed = DispositionEvent::fixed(
+            "cli-exit-0001",
+            "patched".into(),
+            "run-cli-malformed-input-x".into(),
+            CLOSURE_PREDICATE_FIX_COURT.into(),
+        )
+        .unwrap();
+        assert_eq!(fixed.disposition.as_str(), "fixed");
         assert_eq!(
-            record.disposition.resolution_run_id(),
+            fixed.disposition.resolution_run_id(),
             Some("run-cli-malformed-input-x")
         );
+        // Events can never be `open`.
+        assert!(DispositionEvent::closed("r", ClosureKind::Intentional, "   ".into()).is_err());
+        assert!(DispositionEvent::fixed("r", "x".into(), "   ".into(), "p".into()).is_err());
     }
 }

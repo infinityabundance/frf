@@ -1,0 +1,4 @@
+schema_version: frf-disposition-v1
+residual_id: cli-text-0001
+disposition: intentional
+reason: clearer diagnostic wording; documented divergence
