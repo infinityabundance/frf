@@ -49,6 +49,10 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                     capture.reference.stderr_first_line_sha256.clone(),
                     capture.candidate.stderr_first_line_sha256.clone(),
                 ),
+                Axis::Stdout => (
+                    capture.reference.stdout_first_line_sha256.clone(),
+                    capture.candidate.stdout_first_line_sha256.clone(),
+                ),
             };
             let has_residual = residuals.iter().any(|r| r.axis == axis);
             ReceiptObservable {

@@ -43,13 +43,15 @@ pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 // Observable axes
 // ---------------------------------------------------------------------------
 
-/// Observable axis. v0 supports exactly two; adding an axis means writing a
-/// new comparator in the court command, not restructuring the core.
+/// Observable axis. Adding an axis means writing a new comparator in the
+/// court command, not restructuring the core. v0.1.6: `exit`, `stderr`, and
+/// `stdout` (stdout compared on its first line only — see README).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Axis {
     Exit,
     Stderr,
+    Stdout,
 }
 
 impl Axis {
@@ -57,6 +59,7 @@ impl Axis {
         match self {
             Axis::Exit => "exit",
             Axis::Stderr => "stderr",
+            Axis::Stdout => "stdout",
         }
     }
 
@@ -64,23 +67,28 @@ impl Axis {
         match s {
             "exit" => Ok(Axis::Exit),
             "stderr" => Ok(Axis::Stderr),
+            "stdout" => Ok(Axis::Stdout),
             other => Err(format!(
-                "unsupported observable axis '{other}': v0 supports 'exit' and 'stderr' only"
+                "unsupported observable axis '{other}': v0.1.6 supports 'exit', 'stderr', and 'stdout' only"
             )),
         }
     }
 
-    /// The declared comparison relation for this axis (Section 10, Δ_a).
+    /// The declared comparison relation for this axis (Section 10, Δ_a). The
+    /// comparator identity is recorded in every receipt's observable block,
+    /// so the evidence says exactly which relation was applied.
     pub fn comparator(self) -> &'static str {
         match self {
             Axis::Exit => "eq(exit-code)",
             Axis::Stderr => "eq(stderr-first-line)",
+            Axis::Stdout => "eq(stdout-first-line)",
         }
     }
 }
 
-/// Residual kind. v0 court comparators produce exactly these two kinds
-/// (Section 12: `exit` and `text`); the enum has no catch-all so an
+/// Residual kind. v0.1.6 court comparators produce exactly these two kinds
+/// (Section 12: `exit` and `text`; `stdout` residuals are text-family, with
+/// the axis recorded separately); the enum has no catch-all so an
 /// unclassifiable residual is unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +108,7 @@ impl ResidualKind {
     pub fn from_axis(axis: Axis) -> Self {
         match axis {
             Axis::Exit => ResidualKind::Exit,
-            Axis::Stderr => ResidualKind::Text,
+            Axis::Stderr | Axis::Stdout => ResidualKind::Text,
         }
     }
 
@@ -471,12 +479,15 @@ pub struct CaptureManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SideCapture {
-    /// Exit code as a string, or `signal` if terminated by a signal.
+    /// Exit code as a string, or `signal(<n>)` if terminated by a signal.
     pub exit: String,
     pub exit_sha256: String,
     /// First stderr line (the stderr axis compares exactly this).
     pub stderr_first_line: String,
     pub stderr_first_line_sha256: String,
+    /// First stdout line (the stdout axis compares exactly this).
+    pub stdout_first_line: String,
+    pub stdout_first_line_sha256: String,
     pub stdout_sha256: String,
     pub stderr_sha256: String,
 }

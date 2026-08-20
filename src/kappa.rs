@@ -3,10 +3,11 @@
 //! This is the entire inference machinery of v0 — a lookup/classification
 //! table, not a model. The table is auditable in one pass:
 //!
-//! | residual kind | token surface      | magnitude               | next_court              | blocks                              |
-//! |---------------|--------------------|-------------------------|-------------------------|-------------------------------------|
-//! | exit          | exit-class         | class-change            | cli-exit-minimize       | `{scope} exit parity`               |
-//! | text          | diagnostic-routing | first-line-token-change | cli-diagnostic-minimize | byte-identical diagnostics          |
+//! | axis   | token surface      | magnitude               | next_court              | blocks                              |
+//! |--------|--------------------|-------------------------|-------------------------|-------------------------------------|
+//! | exit   | exit-class         | class-change            | cli-exit-minimize       | `{scope} exit parity`               |
+//! | stderr | diagnostic-routing  | first-line-token-change | cli-diagnostic-minimize | byte-identical diagnostics          |
+//! | stdout | stdout-routing      | first-line-token-change | cli-stdout-minimize     | byte-identical stdout               |
 //!
 //! Values follow Section 6 (token grammar example) and Section 12 (routing
 //! targets and blocked-claim phrases) of the paper. κ is pure: the same
@@ -22,17 +23,26 @@ use crate::model::*;
 /// is immutable; the current disposition is the projection of the residual's
 /// event history.
 pub fn kappa(r: &ResidualRecord, disposition: &Disposition) -> TokenRecord {
-    let (surface, magnitude, next_court) = match r.kind {
-        ResidualKind::Exit => ("exit-class", "class-change", "cli-exit-minimize"),
-        ResidualKind::Text => (
+    // The table is keyed on the AXIS: the comparator identity, not the
+    // text/exit kind, decides the routing (stderr and stdout residuals are
+    // both text-family, but they minimize differently).
+    let (surface, magnitude, next_court) = match r.axis {
+        Axis::Exit => ("exit-class", "class-change", "cli-exit-minimize"),
+        Axis::Stderr => (
             "diagnostic-routing",
             "first-line-token-change",
             "cli-diagnostic-minimize",
         ),
+        Axis::Stdout => (
+            "stdout-routing",
+            "first-line-token-change",
+            "cli-stdout-minimize",
+        ),
     };
-    let blocks = match r.kind {
-        ResidualKind::Exit => format!("{} exit parity", r.scope),
-        ResidualKind::Text => "byte-identical diagnostics".to_string(),
+    let blocks = match r.axis {
+        Axis::Exit => format!("{} exit parity", r.scope),
+        Axis::Stderr => "byte-identical diagnostics".to_string(),
+        Axis::Stdout => "byte-identical stdout".to_string(),
     };
     let disposition = disposition.as_str().to_string();
     TokenRecord {
@@ -145,6 +155,18 @@ mod tests {
         );
         assert_eq!(t.next_court, "cli-diagnostic-minimize");
         assert_eq!(t.blocks_claims, vec!["byte-identical diagnostics"]);
+    }
+
+    #[test]
+    fn kappa_stdout_maps_to_stdout_minimize() {
+        // A stdout residual is text-family but routes to its own minimizer:
+        // the token table is keyed on the axis, not the text/exit kind.
+        let mut r = residual(ResidualKind::Text, "malformed-input");
+        r.axis = Axis::Stdout;
+        let t = kappa(&r, &Disposition::Open);
+        assert_eq!(t.token, "text/stdout-routing/first-line-token-change/open");
+        assert_eq!(t.next_court, "cli-stdout-minimize");
+        assert_eq!(t.blocks_claims, vec!["byte-identical stdout"]);
     }
 
     #[test]
