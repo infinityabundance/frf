@@ -80,7 +80,8 @@ pub enum CourtCmd {
 
 #[derive(Subcommand)]
 pub enum ResidualCmd {
-    /// Set a residual's disposition (requires --reason)
+    /// Set a residual's disposition (requires --reason; `fixed` also requires
+    /// --resolution-run — a disposition is not evidence)
     Dispose {
         /// Residual id (e.g. cli-exit-0001)
         id: String,
@@ -89,6 +90,10 @@ pub enum ResidualCmd {
         /// One-line reason; mandatory, never silently defaulted
         #[arg(long)]
         reason: String,
+        /// Required for `--disposition fixed`: a court run whose captures
+        /// show the residual no longer reproduces
+        #[arg(long, value_name = "RUN_ID")]
+        resolution_run: Option<String>,
     },
 }
 
@@ -129,14 +134,16 @@ pub enum ClosureArg {
 }
 
 impl ClosureArg {
-    pub fn kind(self) -> ClosureKind {
+    /// The [`ClosureKind`] for non-fixed dispositions. `fixed` is not a bare
+    /// kind: it is handled as [`Disposition::Fixed`] with a resolution run.
+    pub fn closure_kind(self) -> Option<ClosureKind> {
         match self {
-            ClosureArg::Fixed => ClosureKind::Fixed,
-            ClosureArg::Intentional => ClosureKind::Intentional,
-            ClosureArg::Environmental => ClosureKind::Environmental,
-            ClosureArg::OracleVersion => ClosureKind::OracleVersion,
-            ClosureArg::Harness => ClosureKind::Harness,
-            ClosureArg::Unknown => ClosureKind::Unknown,
+            ClosureArg::Fixed => None,
+            ClosureArg::Intentional => Some(ClosureKind::Intentional),
+            ClosureArg::Environmental => Some(ClosureKind::Environmental),
+            ClosureArg::OracleVersion => Some(ClosureKind::OracleVersion),
+            ClosureArg::Harness => Some(ClosureKind::Harness),
+            ClosureArg::Unknown => Some(ClosureKind::Unknown),
         }
     }
 }

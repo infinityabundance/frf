@@ -37,7 +37,8 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 id,
                 disposition,
                 reason,
-            } => dispose::run(store, &id, disposition.kind(), &reason),
+                resolution_run,
+            } => dispose::run(store, &id, disposition, &reason, resolution_run),
         },
         Command::Receipt { sub } => match sub {
             ReceiptCmd::Emit { run } => {

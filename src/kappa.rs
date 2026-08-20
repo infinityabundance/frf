@@ -65,8 +65,8 @@ pub fn kappa(r: &ResidualRecord) -> TokenRecord {
 pub fn grammar_state(disposition: &Disposition) -> &'static str {
     match disposition {
         Disposition::Open => "violation",
+        Disposition::Fixed { .. } => "recovery",
         Disposition::Closed { kind, .. } => match kind {
-            ClosureKind::Fixed => "recovery",
             ClosureKind::Intentional => "intentional_divergence",
             ClosureKind::Environmental => "boundary",
             ClosureKind::OracleVersion => "boundary",
@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn kappa_reflects_disposition() {
         let mut r = residual(ResidualKind::Exit, "malformed-input", Disposition::Open);
-        r.dispose(ClosureKind::Fixed, "candidate patched".to_string())
+        r.dispose_fixed("candidate patched".into(), "run-x".into())
             .unwrap();
         assert_eq!(kappa(&r).token, "exit/exit-class/class-change/fixed");
         assert_eq!(kappa(&r).disposition, "fixed");
@@ -146,11 +146,17 @@ mod tests {
     #[test]
     fn grammar_state_table() {
         assert_eq!(grammar_state(&Disposition::Open), "violation");
+        assert_eq!(
+            grammar_state(&Disposition::Fixed {
+                reason: "r".into(),
+                resolution_run_id: "run-x".into()
+            }),
+            "recovery"
+        );
         let closed = |k| Disposition::Closed {
             kind: k,
             reason: "r".into(),
         };
-        assert_eq!(grammar_state(&closed(ClosureKind::Fixed)), "recovery");
         assert_eq!(
             grammar_state(&closed(ClosureKind::Intentional)),
             "intentional_divergence"

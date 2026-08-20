@@ -38,9 +38,11 @@ cargo install --path .
 
 Runs the full loop against the repo's own reference/candidate pair and
 prints each stage: admission, court run, raw capture, two `open` residuals,
-their endoduction tokens, the refused claim, both dispositions, the receipt,
-and the compiled bounded claim with its non-claim printed next to it.
-Allow five minutes; it takes about five seconds.
+their endoduction tokens, the refused claim, the candidate patched and
+verified by a NEW court run, the exit residual disposed `fixed` only after
+that run closes it, the wording divergence disposed `intentional`, the
+receipt, and the compiled bounded claim with its non-claim printed next to
+it. Allow five minutes; it takes about five seconds.
 
 ## The verbs
 
@@ -48,7 +50,7 @@ Allow five minutes; it takes about five seconds.
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
 | `frf court run MANIFEST.yaml` | executes authority and candidate against the fixture, captures raw stdout/stderr/exit, writes `open` residuals + endoduction tokens for each declared-axis disagreement |
-| `frf residual dispose ID --disposition D --reason "..."` | records `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable |
+| `frf residual dispose ID --disposition D --reason "..."` | records `fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`; a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — the court run whose captures show the residual no longer reproduces (a disposition is not evidence) |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into a trimmed Appendix A receipt |
 | `frf claim compile RECEIPT_ID` | refuses while any residual is `open`/`unknown`/`harness`; otherwise emits one conservative sentence + the non-claim |
 
@@ -112,9 +114,18 @@ says no more than that receipt licenses.
   (a test hook used by the regression suite's kill-path test; not a public knob).
 - **`receipt.claims.positive` stays empty**: receipts are immutable, so the
   positive sentence is compiled into `claims/<receipt-id>.yaml` instead.
-- **The mandatory `reason` field, residual `axis`/`authority`/`scope`, and per-axis
-  hashes are v0 traceability additions** to the paper's minimal snippets,
-  required to bind the mandatory disposition reason and scope the claim sentences.
+- **Dispositions mutate the residual record in place** (receipts preserve the
+  history); an append-only residual event graph is future work. The `fixed`
+  closure already carries its `resolution_run_id`, and the claim compiler
+  re-verifies that run against the store before compiling — a disposition can
+  never substitute for new evidence.
+- **`environmental` and `oracle_version` weaken the envelope**: they close the
+  residual but never license parity on its axis (the claim compiler excludes
+  the axis). Envelope refinement records are future work.
+- **The mandatory `reason` field, the `resolution_run_id` edge, residual
+  `axis`/`authority`/`scope`, and per-axis hashes are v0 traceability
+  additions** to the paper's minimal snippets, required to bind the mandatory
+  disposition reason and scope the claim sentences.
 - **Residual ids are hardcoded to the `cli` domain** (`cli-exit-0001`), and
   `grammar_state` is derived from disposition via a fixed table.
 - **Receipt replay commands and paths are working-directory-relative**; run

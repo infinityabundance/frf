@@ -5,9 +5,12 @@
 //!
 //! Positive-claim rule (Section 12 + the semantic non-bypass rule):
 //! - A declared axis is *claimable* when it has no residual, or when every
-//!   residual on it is closed as `fixed`, `environmental`, or `oracle_version`.
-//! - An axis with an `intentional` residual is a documented divergence, never
-//!   a parity claim; it is excluded from the positive sentence.
+//!   residual on it is `fixed` with a `resolution_run_id` — the court run
+//!   whose captures show the residual no longer reproduces. A disposition is
+//!   never evidence; the run is. `fixed` without that edge is not claimable.
+//! - No other closure licenses parity: `intentional` is a documented
+//!   divergence, `environmental` and `oracle_version` weaken the envelope
+//!   rather than claim it, and `harness`/`unknown`/`open` block entirely.
 //! - The compiled sentence is scoped to the executed court, the admitted
 //!   authority id, the fixture family, and the environment digest — never
 //!   beyond the receipt's surface.
@@ -29,8 +32,9 @@ fn environment_label(env: &ReceiptEnvironment) -> String {
 /// The single conservative positive sentence, or `None` when a positive claim
 /// is not licensed: any blocking residual (open/unknown/harness) refuses the
 /// whole claim, and an axis is only claimable when it matched or was closed
-/// as fixed/environmental/oracle_version. Intentional axes are documented
-/// divergences, never parity claims.
+/// as `fixed` **with a resolution run**. `intentional` axes are documented
+/// divergences, `environmental`/`oracle_version` weaken the envelope — none
+/// of them licenses parity.
 pub fn positive_claim(r: &Receipt) -> Option<String> {
     let family = &r.court.admissibility_envelope.fixture_family;
     // Blocking dispositions refuse the entire claim, not just their axis.
@@ -42,17 +46,14 @@ pub fn positive_claim(r: &Receipt) -> Option<String> {
     }
     let mut clauses: Vec<String> = Vec::new();
     for obs in &r.observables {
+        // An axis is claimable only when every residual on it is fixed and
+        // points at its resolution run. The run itself is verified by the
+        // caller (claim compile / verify); here the edge must exist.
         let claimable = r
             .residuals
             .iter()
             .filter(|res| res.axis == obs.axis)
-            .all(|res| {
-                !res.is_intentional()
-                    && matches!(
-                        res.disposition.as_str(),
-                        "fixed" | "environmental" | "oracle_version"
-                    )
-            });
+            .all(|res| res.disposition == "fixed" && res.resolution_run_id.is_some());
         if !claimable {
             continue;
         }
@@ -117,16 +118,6 @@ pub fn refusal_lines_from_residuals(
 pub fn refusal_lines(r: &Receipt) -> Vec<String> {
     let family = &r.court.admissibility_envelope.fixture_family;
     refusal_lines_from_residuals(&r.residuals, family)
-}
-
-// ---------------------------------------------------------------------------
-// ReceiptResidual helpers (used by positive_claim and refusal_lines)
-// ---------------------------------------------------------------------------
-
-impl ReceiptResidual {
-    fn is_intentional(&self) -> bool {
-        self.disposition == "intentional"
-    }
 }
 
 #[cfg(test)]
@@ -231,17 +222,31 @@ mod tests {
             raw_candidate_hash: "1".repeat(64),
             disposition: disposition.into(),
             reason: None,
+            resolution_run_id: None,
             reproducer: "replay".into(),
             invariant: String::new(),
             residual_fingerprint: "0".repeat(64),
         }
     }
 
+    /// A `fixed` receipt residual carrying its resolution run.
+    fn res_fixed(id: &str, axis: &str, run: &str) -> ReceiptResidual {
+        let mut r = res(id, axis, "fixed");
+        r.reason = Some("candidate patched".into());
+        r.resolution_run_id = Some(run.into());
+        r
+    }
+
     #[test]
     fn golden_claim_sentence_shape() {
-        // exit fixed, stderr intentional → positive claim covers exit only.
+        // exit fixed (with its resolution run), stderr intentional → the
+        // claim covers exit only.
         let mut r = receipt_base();
-        r.residuals.push(res("cli-exit-0001", "exit", "fixed"));
+        r.residuals.push(res_fixed(
+            "cli-exit-0001",
+            "exit",
+            "run-cli-malformed-input-verify",
+        ));
         r.residuals
             .push(res("cli-text-0001", "stderr", "intentional"));
         let sentence = positive_claim(&r).unwrap();
@@ -251,6 +256,31 @@ mod tests {
         );
         assert!(!sentence.contains("stderr"));
         assert!(!sentence.contains("drop-in"));
+    }
+
+    #[test]
+    fn fixed_without_a_resolution_run_is_not_claimable() {
+        // The hole this tool closes: a bare `fixed` label licenses nothing.
+        let mut r = receipt_base();
+        r.residuals.push(res("cli-exit-0001", "exit", "fixed"));
+        r.residuals
+            .push(res("cli-text-0001", "stderr", "intentional"));
+        assert_eq!(positive_claim(&r), None);
+    }
+
+    #[test]
+    fn environmental_and_oracle_version_weaken_the_envelope_not_parity() {
+        for disposition in ["environmental", "oracle_version"] {
+            let mut r = receipt_base();
+            r.residuals.push(res("cli-exit-0001", "exit", disposition));
+            r.residuals
+                .push(res("cli-text-0001", "stderr", "intentional"));
+            assert_eq!(
+                positive_claim(&r),
+                None,
+                "{disposition} must not license parity"
+            );
+        }
     }
 
     #[test]

@@ -89,6 +89,19 @@ fn assert_disposition_invariant(r: &ResidualRecord, origin: &str) {
                 "{origin}: closed disposition with a multi-line reason"
             );
         }
+        Disposition::Fixed {
+            reason,
+            resolution_run_id,
+        } => {
+            assert!(
+                !reason.trim().is_empty() && !reason.contains('\n'),
+                "{origin}: fixed disposition with an invalid reason"
+            );
+            assert!(
+                !resolution_run_id.trim().is_empty(),
+                "{origin}: fixed disposition without a resolution_run_id"
+            );
+        }
     }
 }
 
@@ -130,7 +143,9 @@ raw_reference: '2'
 raw_candidate: '1'
 raw_reference_sha256: 0000000000000000000000000000000000000000000000000000000000000000
 raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111111111
-disposition: open
+disposition: fixed
+reason: patched and re-observed
+resolution_run_id: run-cli-malformed-input-cafebabe
 "#,
         r#"court:
   id: cli-malformed-input

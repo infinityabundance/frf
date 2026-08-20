@@ -8,6 +8,10 @@
 //! - Any residual with disposition `open`, `unknown`, or `harness` blocks the
 //!   claim. The compile prints the explicit non-claim boundary (one line per
 //!   blocking residual) plus the non-claim sentences, and exits non-zero.
+//! - Every `fixed` residual must carry a `resolution_run_id`, and that run
+//!   must actually close the residual (same court, axis now agrees). This is
+//!   re-verified here against the store — not just trusted from the receipt —
+//!   so a hand-edited receipt cannot promote a claim by changing a label.
 //! - Otherwise the compiler emits exactly one conservative sentence, scoped
 //!   to the receipt's authority, fixture family, environment, and executed
 //!   court — never more — and states the non-claim next to it.
@@ -35,6 +39,29 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
             "claim refused: {} blocking residual(s) — no positive claim emitted",
             blockers.len()
         )));
+    }
+
+    // 2. Every `fixed` residual must be backed by a resolution run that
+    //    actually closes it. A disposition is not evidence; the run is.
+    for res in &receipt.residuals {
+        if res.disposition != "fixed" {
+            continue;
+        }
+        let Some(run) = &res.resolution_run_id else {
+            return Err(FrfError::new(format!(
+                "claim refused: residual {} is fixed without a resolution_run_id (a disposition is not evidence)",
+                res.id
+            )));
+        };
+        let axis = Axis::parse(&res.axis)
+            .map_err(|e| FrfError::new(format!("receipt residual {}: {e}", res.id)))?;
+        if !store.run_closes_axis(run, &receipt.court.id, axis)? {
+            return Err(FrfError::new(format!(
+                "claim refused: resolution run '{run}' does not close residual {} — the {} axis still diverges in its captures",
+                res.id,
+                res.axis
+            )));
+        }
     }
 
     // 2. Compose the single bounded sentence.

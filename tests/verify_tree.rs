@@ -46,21 +46,48 @@ fn repo_path(rel: &str) -> PathBuf {
 }
 
 fn disposition_from_receipt(res: &ReceiptResidual) -> Disposition {
-    if res.disposition == "open" {
-        assert!(
-            res.reason.is_none(),
-            "open residual {} carries a reason",
-            res.id
-        );
-        Disposition::Open
-    } else {
-        let kind = ClosureKind::parse(&res.disposition)
-            .unwrap_or_else(|| panic!("unknown disposition '{}' on {}", res.disposition, res.id));
-        let reason = res
-            .reason
-            .clone()
-            .unwrap_or_else(|| panic!("closed residual {} without reason", res.id));
-        Disposition::Closed { kind, reason }
+    match res.disposition.as_str() {
+        "open" => {
+            assert!(
+                res.reason.is_none(),
+                "open residual {} carries a reason",
+                res.id
+            );
+            assert!(
+                res.resolution_run_id.is_none(),
+                "open residual {} carries a resolution_run_id",
+                res.id
+            );
+            Disposition::Open
+        }
+        "fixed" => {
+            let reason = res
+                .reason
+                .clone()
+                .unwrap_or_else(|| panic!("fixed residual {} without reason", res.id));
+            let resolution_run_id = res
+                .resolution_run_id
+                .clone()
+                .unwrap_or_else(|| panic!("fixed residual {} without a resolution_run_id", res.id));
+            Disposition::Fixed {
+                reason,
+                resolution_run_id,
+            }
+        }
+        other => {
+            let kind = ClosureKind::parse(other)
+                .unwrap_or_else(|| panic!("unknown disposition '{other}' on {}", res.id));
+            assert!(
+                res.resolution_run_id.is_none(),
+                "non-fixed residual {} carries a resolution_run_id",
+                res.id
+            );
+            let reason = res
+                .reason
+                .clone()
+                .unwrap_or_else(|| panic!("closed residual {} without reason", res.id));
+            Disposition::Closed { kind, reason }
+        }
     }
 }
 
@@ -236,6 +263,31 @@ fn residuals_and_tokens_are_self_consistent() {
                     r.id
                 );
             }
+            Disposition::Fixed {
+                reason,
+                resolution_run_id,
+            } => {
+                assert!(
+                    !reason.trim().is_empty() && !reason.contains('\n'),
+                    "fixed residual {} has an invalid reason",
+                    r.id
+                );
+                assert!(
+                    !resolution_run_id.is_empty(),
+                    "fixed residual {} lacks a resolution run",
+                    r.id
+                );
+                // The resolution run must exist and must actually close the
+                // residual: same court, axis now agreeing. A disposition is
+                // not evidence; the run is.
+                assert!(
+                    store
+                        .run_closes_axis(resolution_run_id, &r.court, r.axis)
+                        .expect("resolution run must load and match court"),
+                    "resolution run {resolution_run_id} does not close residual {}",
+                    r.id
+                );
+            }
         }
         // The token file must be exactly κ(residual).
         let token: TokenRecord = load(&store.token_path(&r.id).unwrap());
@@ -354,6 +406,23 @@ fn receipts_are_self_consistent() {
             assert_eq!(res.sign.slew, "not-observed");
             assert_eq!(res.reproducer, rec.replay.command);
             assert!(res.invariant.is_empty(), "v0 has no invariants");
+            if res.disposition == "fixed" {
+                // Receipts are snapshots: the resolution edge is bound only
+                // for entries that were fixed at emit time, and it must match
+                // the residual file's.
+                assert_eq!(
+                    res.resolution_run_id,
+                    record.disposition.resolution_run_id().map(str::to_string),
+                    "resolution edge for {} drifted",
+                    res.id
+                );
+            } else {
+                assert!(
+                    res.resolution_run_id.is_none(),
+                    "non-fixed entry {} carries a resolution_run_id",
+                    res.id
+                );
+            }
         }
 
         // Endoduction tokens re-derive from κ over the residual *as this

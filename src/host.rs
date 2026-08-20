@@ -66,66 +66,107 @@ pub struct ProcessOutcome {
 }
 
 /// Execute `program` with `args`, capturing stdout/stderr without a shell.
+///
+/// `ETXTBSY` (`ExecutableFileBusy`) is retried briefly: it is the transient
+/// writeback race of exec'ing a file another process just finished writing
+/// (or is still writing), which happens in parallel CI and generated-script
+/// workflows. Everything else fails immediately.
 pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            FrfError::new(format!(
-                "failed to execute {}: {e} (does it exist and have its executable bit set?)",
-                program.display()
-            ))
-        })?;
-
-    let start = Instant::now();
-    let timeout = exec_timeout();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(FrfError::new(format!(
-                        "{} exceeded the execution timeout ({} ms)",
-                        program.display(),
-                        timeout.as_millis()
-                    )));
-                }
-                std::thread::sleep(Duration::from_millis(20));
+    let mut child = loop {
+        match Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => break child,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(Duration::from_millis(10));
+                continue;
             }
             Err(e) => {
                 return Err(FrfError::new(format!(
-                    "failed to wait on {}: {e}",
+                    "failed to execute {}: {e} (does it exist and have its executable bit set?)",
                     program.display()
                 )))
             }
         }
     };
 
+    // Drain both pipes *concurrently* with the wait loop, then join before
+    // returning. Reading after the child exits is a deadlock: a child that
+    // fills a 64 KiB pipe blocks on write while the parent blocks on
+    // try_wait, and the run fails with a false timeout.
+    let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    if let Some(pipe) = child.stdout.take() {
-        let mut pipe = pipe;
-        let _ = pipe.read_to_end(&mut stdout);
-    }
-    if let Some(pipe) = child.stderr.take() {
-        let mut pipe = pipe;
-        let _ = pipe.read_to_end(&mut stderr);
-    }
+    let timeout = exec_timeout();
+    let start = Instant::now();
 
-    let exit = match status.code() {
-        Some(code) => code.to_string(),
-        None => "signal".to_string(),
-    };
+    let status = std::thread::scope(|s| {
+        let _drain_out = s.spawn(|| {
+            let _ = stdout_pipe.read_to_end(&mut stdout);
+        });
+        let _drain_err = s.spawn(|| {
+            let _ = stderr_pipe.read_to_end(&mut stderr);
+        });
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        // Kill, reap, and let the drain threads finish once
+                        // the pipes close.
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(FrfError::new(format!(
+                            "{} exceeded the execution timeout ({} ms)",
+                            program.display(),
+                            timeout.as_millis()
+                        )));
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => {
+                    break Err(FrfError::new(format!(
+                        "failed to wait on {}: {e}",
+                        program.display()
+                    )))
+                }
+            }
+        }
+        // `scope` joins both drain threads here, so the buffers are complete
+        // before the caller sees them.
+    })?;
+
+    let exit = exit_string(&status);
     Ok(ProcessOutcome {
         stdout,
         stderr,
         exit,
     })
+}
+
+/// Exit code as a string, or `signal(<n>)` when the process was terminated
+/// by a signal — the raw number is recorded, not a vague "signal".
+fn exit_string(status: &std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return code.to_string();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status
+            .signal()
+            .map(|s| format!("signal({s})"))
+            .unwrap_or_else(|| "signal".into())
+    }
+    #[cfg(not(unix))]
+    {
+        "signal".into()
+    }
 }
 
 /// Environment digest: a content hash of the host strata a court run depends
@@ -159,6 +200,18 @@ pub fn kernel_release() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// Unique per-invocation temp script path: pid + monotonic nanos, so
+    /// parallel test threads and recycled pids can never collide and panicked
+    /// runs never poison a later one.
+    fn temp_script(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("frf-{tag}-{}-{nanos}.sh", std::process::id()))
+    }
 
     #[test]
     fn sha256_is_hex_and_stable() {
@@ -170,7 +223,7 @@ mod tests {
 
     #[test]
     fn runs_a_script_and_captures_exit_code() {
-        let script = std::env::temp_dir().join(format!("frf-host-test-{}.sh", std::process::id()));
+        let script = temp_script("host");
         std::fs::write(&script, "#!/bin/sh\necho out\necho err >&2\nexit 7\n").unwrap();
         #[cfg(unix)]
         {
@@ -188,5 +241,45 @@ mod tests {
     fn missing_program_is_a_clear_error() {
         let err = run_process(Path::new("/nonexistent/frf-nope"), &[]).unwrap_err();
         assert!(err.0.contains("failed to execute"));
+    }
+
+    #[test]
+    fn drains_large_output_without_deadlock() {
+        // ~820 KiB of stdout: far beyond the 64 KiB pipe buffer. The old
+        // read-after-exit runner would block on try_wait forever and false-
+        // timeout; the concurrent drain must return the full stream.
+        let script = temp_script("drain");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nawk 'BEGIN{for(i=0;i<20000;i++) print \"0123456789abcdefghijklmnopqrstuvwxyz0123456789\"}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = run_process(&script, &[]).unwrap();
+        assert_eq!(out.exit, "0");
+        let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
+        assert_eq!(
+            out.stdout.len(),
+            (line.len() + 1) * 20_000,
+            "full stream must be drained"
+        );
+        assert!(out.stderr.is_empty());
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn records_the_signal_number() {
+        let script = temp_script("signal");
+        std::fs::write(&script, "#!/bin/sh\nkill -TERM $$\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = run_process(&script, &[]).unwrap();
+        assert_eq!(out.exit, "signal(15)");
+        let _ = std::fs::remove_file(&script);
     }
 }

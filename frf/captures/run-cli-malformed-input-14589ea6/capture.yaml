@@ -1,0 +1,52 @@
+schema_version: frf-capture-v1
+run: run-cli-malformed-input-14589ea6
+court: cli-malformed-input
+authority: ref-cli-1.8.2
+manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
+fixture: malformed-path.conf
+fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+arguments:
+- --strict
+- frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+environment_digest: 02a5c0979cc141f7bfe659612cab23869d6ecb18ee59a03ec0a3105895da0f8d
+court_spec:
+  id: cli-malformed-input
+  question: For malformed input in fixture family malformed-input, does the candidate preserve the admitted reference's exit class and first diagnostic line?
+  falsifier: The candidate's exit class or first diagnostic line diverges from the admitted reference on a fixture in family malformed-input.
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: 0.1.0-fixed
+    build_profile: debug
+    path: golden/work/candidate-fixed.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments:
+    - --strict
+    - '{fixture}'
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms:
+    - x86_64-linux
+    observables:
+    - exit
+    - stderr
+    normalizers: []
+    replay_scope: single-run
+reference:
+  exit: '2'
+  exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+  stderr_first_line: 'tool: frf/courts/cli-malformed-input/fixtures/malformed-path.conf:4: unknown directive ''servre'''
+  stderr_first_line_sha256: 8ee3d9f0cbdee73d35f79fca0eff3702a462f6865540d1aaed9c6749cc8aa05a
+  stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
+  stderr_sha256: 442031b8691d77f4a3ef553fd051898ff9d7c426daf9543732070080a208ccd6
+candidate:
+  exit: '2'
+  exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+  stderr_first_line: 'error: unknown directive servre at line 4'
+  stderr_first_line_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
+  stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
+  stderr_sha256: ee8bcc603017deafa72e8702594478bb9747916e3ca1adecfd251525a2b317f2
+residuals:
+- cli-text-0002

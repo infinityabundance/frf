@@ -239,21 +239,41 @@ fn fixture_not_referenced_warns_but_runs() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn all_six_dispositions_and_re_disposition() {
-    let work = Workdir::new("dispose-six");
+fn closure_kinds_round_trip_and_claim_semantics() {
+    let work = Workdir::new("dispose-kinds");
     work.copy_canonical_tree();
     admit_reference(&work);
     let run = run_court(&work);
 
-    // Every closure kind round-trips through the file, in sequence, on the
-    // same residual (re-disposition is allowed; `open` is not).
-    for (kind, expect_block) in [
-        ("environmental", false),
-        ("oracle_version", false),
-        ("harness", true),
-        ("unknown", true),
-        ("fixed", false),
-        ("intentional", true), // intentional on a parity axis ⇒ unclaimable
+    // Close the text residual first so the claim semantics below are decided
+    // by the exit residual alone.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-text-0001",
+            "--disposition",
+            "intentional",
+            "--reason",
+            "clearer wording",
+        ],
+    );
+    assert_success(&out, "dispose text");
+
+    // Every non-fixed closure round-trips through the file, in sequence, on
+    // the same residual (re-disposition is allowed; `open` is not). `fixed`
+    // is exercised separately: it needs a resolution run.
+    for (kind, expect_refusal) in [
+        // These weaken the envelope: no parity claim is licensed.
+        ("environmental", "no declared observable axis"),
+        ("oracle_version", "no declared observable axis"),
+        ("intentional", "no declared observable axis"),
+        // These block outright.
+        ("harness", "harness"),
+        ("unknown", "unknown"),
     ] {
         let out = frf(
             &work,
@@ -273,6 +293,10 @@ fn all_six_dispositions_and_re_disposition() {
         let rec = raw_residual(&work, "cli-exit-0001");
         assert_eq!(rec["disposition"], kind);
         assert_eq!(rec["reason"], format!("regression: {kind}"));
+        assert!(
+            rec.get("resolution_run_id").is_none(),
+            "{kind} must not carry a resolution_run_id"
+        );
         // The token follows.
         let tok: serde_yaml::Value = serde_yaml::from_str(
             &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
@@ -280,45 +304,20 @@ fn all_six_dispositions_and_re_disposition() {
         .unwrap();
         assert_eq!(tok["token"], format!("exit/exit-class/class-change/{kind}"));
 
-        // Claim semantics per closure kind (text residual still open):
+        // Claim semantics per closure kind.
         let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
         assert_success(&out, "receipt emit");
         let receipt = stdout(&out);
         let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
-        if expect_block {
-            assert!(!out.status.success(), "disposition {kind} must block");
-        } else {
-            // Blocked anyway by the still-open text residual.
-            assert!(!out.status.success(), "text residual still open must block");
-            assert!(stderr(&out).contains("cli-text-0001 (text) is open"));
-        }
+        assert!(!out.status.success(), "{kind} must not license a claim");
+        assert!(
+            stderr(&out).contains(expect_refusal),
+            "{kind}: expected '{expect_refusal}' in: {}",
+            stderr(&out)
+        );
     }
 
-    // Close the text residual; `unknown` on it still blocks.
-    let out = frf(
-        &work,
-        &[
-            "--root",
-            ROOT,
-            "residual",
-            "dispose",
-            "cli-text-0001",
-            "--disposition",
-            "intentional",
-            "--reason",
-            "clearer wording",
-        ],
-    );
-    assert_success(&out, "dispose text");
-    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
-    assert_success(&out, "receipt emit");
-    let receipt = stdout(&out);
-    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
-    // exit is intentional at this point ⇒ no claimable axis.
-    assert!(!out.status.success());
-    assert!(stderr(&out).contains("no declared observable axis"));
-
-    // Re-dispose exit to fixed ⇒ claim compiles.
+    // `fixed` without a resolution run is refused at dispose time.
     let out = frf(
         &work,
         &[
@@ -333,12 +332,130 @@ fn all_six_dispositions_and_re_disposition() {
             "candidate patched",
         ],
     );
-    assert_success(&out, "dispose exit fixed");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("--resolution-run"));
+
+    // `fixed` backed by a real resolution run licenses the claim.
+    let resolution_run = run_resolution_court(&work);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &resolution_run,
+            "--reason",
+            "candidate patched",
+        ],
+    );
+    assert_success(&out, "dispose exit fixed with closure evidence");
+    let rec = raw_residual(&work, "cli-exit-0001");
+    assert_eq!(rec["disposition"], "fixed");
+    assert_eq!(rec["resolution_run_id"], resolution_run);
+
     let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
     assert_success(&out, "receipt emit");
     let receipt = stdout(&out);
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
-    assert_success(&out, "claim compile after fix");
+    assert_success(&out, "claim compile after evidenced fix");
+    let text = stdout(&out);
+    assert!(text.contains("malformed-input exit class"));
+}
+
+#[test]
+fn fixed_requires_resolution_run_that_closes_the_residual() {
+    let work = Workdir::new("fixed-evidence");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let run = run_court(&work);
+
+    // The resolution run must exist.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            "run-nope",
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no such run"));
+
+    // It must be a new run, not the one that observed the residual.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &run,
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("new court run"));
+
+    // A resolution run whose captures still diverge on the axis must be
+    // refused: re-run the ORIGINAL (unfixed) candidate under a fresh
+    // candidate name so the run id differs, then point `fixed` at it.
+    let variant = work.path("frf/courts/variant.yaml");
+    let text = fs::read_to_string(work.path(MANIFEST)).unwrap();
+    let text = text.replace("    name: cand-cli", "    name: cand-cli-unfixed");
+    fs::write(&variant, text).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "frf/courts/variant.yaml"],
+    );
+    assert_success(&out, "court run (unfixed candidate, fresh identity)");
+    let unfixed_run = stdout(&out);
+    assert_ne!(
+        unfixed_run, run,
+        "fresh candidate identity must yield a new run"
+    );
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &unfixed_run,
+            "--reason",
+            "patched",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("does not close residual"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // And the residual is still open after all refusals.
+    assert_eq!(raw_residual(&work, "cli-exit-0001")["disposition"], "open");
 }
 
 #[test]
@@ -358,7 +475,7 @@ fn disposition_reason_gate() {
             "dispose",
             "cli-exit-0001",
             "--disposition",
-            "fixed",
+            "intentional",
         ],
     );
     assert!(!out.status.success());
@@ -375,7 +492,7 @@ fn disposition_reason_gate() {
                 "dispose",
                 "cli-exit-0001",
                 "--disposition",
-                "fixed",
+                "intentional",
                 "--reason",
                 reason,
             ],
@@ -394,7 +511,7 @@ fn disposition_reason_gate() {
             "dispose",
             "cli-exit-0001",
             "--disposition",
-            "fixed",
+            "intentional",
             "--reason",
             "line one\nline two",
         ],

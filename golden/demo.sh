@@ -8,9 +8,11 @@
 #
 # You will watch, end to end: an authority admitted, a court run, raw output
 # captured, two residuals preserved with open disposition, an endoduction
-# token emitted for each, a positive claim refused while they are open, both
-# residuals disposed (fixed + intentional), a receipt emitted, and a bounded
-# claim compiled with the Section 12 non-claim printed next to it.
+# token emitted for each, a positive claim refused while they are open, the
+# candidate patched and verified by a NEW court run (the closure evidence a
+# `fixed` disposition must point at), both residuals disposed (fixed +
+# intentional), a receipt emitted, and a bounded claim compiled with the
+# Section 12 non-claim printed next to it.
 set -u
 
 cd "$(dirname "$0")/.."
@@ -46,16 +48,24 @@ if "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_OPEN" 2>golden/work/refusal
 fi
 cat golden/work/refusal.txt
 
-step "4. resolve: patch the candidate's exit class, then dispose both residuals"
+step "4. resolve: patch the candidate's exit class, verify with a NEW court run, then dispose"
 sed -e 's/exit 1$/exit 2/' \
     -e "s/(1 instead of the reference's 2)/(2, matching the reference)/" \
     -e 's/This divergence is the whole point of the court./The remaining divergence is the diagnostic wording./' \
     golden/candidate.sh > golden/work/candidate-fixed.sh
 chmod +x golden/work/candidate-fixed.sh
+echo "-- re-run the court against the patched candidate (the exit axis must close; the wording divergence is re-observed)"
+RESOLUTION_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml)
+echo "resolution run: $RESOLUTION_RUN"
+echo "-- dispose cli-exit-0001 as fixed, backed by that run (a disposition is not evidence)"
 "$FRF_BIN" --root "$ROOT" residual dispose cli-exit-0001 --disposition fixed \
+  --resolution-run "$RESOLUTION_RUN" \
   --reason "candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)"
+echo "-- dispose the wording divergence as intentional (documented, never parity)"
 "$FRF_BIN" --root "$ROOT" residual dispose cli-text-0001 --disposition intentional \
   --reason "clearer diagnostic wording; documented divergence"
+"$FRF_BIN" --root "$ROOT" residual dispose cli-text-0002 --disposition intentional \
+  --reason "clearer diagnostic wording; documented divergence (re-observed by the resolution run)"
 
 step "5. emit the final receipt and compile the bounded claim"
 RECEIPT_FINAL=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")
