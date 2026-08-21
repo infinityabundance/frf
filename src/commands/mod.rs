@@ -158,6 +158,24 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 println!("{id}");
                 Ok(())
             }
+            WitnessCmd::Independence {
+                statement_id,
+                relation,
+                relation_version,
+                basis,
+                detail,
+            } => {
+                let id = witness::declare_independence(
+                    store,
+                    &statement_id,
+                    &relation,
+                    &relation_version,
+                    &basis,
+                    detail.as_deref(),
+                )?;
+                println!("{id}");
+                Ok(())
+            }
         },
     }
 }

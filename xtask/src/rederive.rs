@@ -62,6 +62,70 @@ pub fn comparator_spec_hash(
     )
 }
 
+/// FRF/WITNESS-IDENTITY/v1 over {specification_hash, implementation_hash,
+/// interpreter} — the stable WHO behind an attestation.
+pub fn witness_identity(semantic: &Value, implementation: &Value) -> String {
+    let interpreter = implementation["artifact"]
+        .get("interpreter")
+        .cloned()
+        .filter(|v| !v.is_null());
+    preimage(
+        "FRF/WITNESS-IDENTITY/v1",
+        &json!({
+            "specification_hash": s(&semantic["specification_hash"]),
+            "implementation_hash": s(&implementation["implementation_hash"]),
+            "interpreter": interpreter,
+        }),
+    )
+}
+
+/// FRF/WITNESS-STATEMENT/v1 over the statement's own fields (v3: the witness
+/// identity and the declared authority enter the preimage).
+pub fn witness_statement_identity(stmt: &Value) -> String {
+    preimage(
+        "FRF/WITNESS-STATEMENT/v1",
+        &json!({
+            "subject": stmt["subject"],
+            "witness_semantic": stmt["witness_semantic"],
+            "witness_implementation": stmt["witness_implementation"],
+            "witness_identity": s(&stmt["witness_identity"]),
+            "authority": stmt["authority"],
+            "statement": s(&stmt["statement"]),
+            "attestation": stmt["attestation"],
+            "request_cid": s(&stmt["request_cid"]),
+            "response_cid": s(&stmt["response_cid"]),
+        }),
+    )
+}
+
+/// FRF/INDEPENDENCE-SPEC/v1 over {relation, relation_version} — the semantic
+/// identity of a declared independence relation.
+pub fn independence_spec_hash(relation: &str, relation_version: &str) -> String {
+    preimage(
+        "FRF/INDEPENDENCE-SPEC/v1",
+        &json!({ "relation": relation, "relation_version": relation_version }),
+    )
+}
+
+/// FRF/INDEPENDENCE/v1 over the record's own fields — the content address of
+/// a declared independence claim.
+pub fn independence_identity(record: &Value) -> String {
+    preimage(
+        "FRF/INDEPENDENCE/v1",
+        &json!({
+            "subject": record["subject"],
+            "witness_statement": s(&record["witness_statement"]),
+            "witness_identity": s(&record["witness_identity"]),
+            "relation": s(&record["relation"]),
+            "relation_version": s(&record["relation_version"]),
+            "specification_hash": s(&record["specification_hash"]),
+            "basis": s(&record["basis"]),
+            "detail": record["detail"],
+            "evidence_refs": record["evidence_refs"],
+        }),
+    )
+}
+
 /// FRF/NORMALIZER-SPEC/v2 over {id, relation, applies_to, relation_version}.
 pub fn normalizer_spec_hash(
     id: &str,

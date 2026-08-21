@@ -1,7 +1,7 @@
 # The witness extension protocol
 
-*Version: `frf-witness-request-v1` / `frf-witness-response-v2`
-(`frf-witness-statement-v2` for the recorded attestation).*
+*Version: `frf-witness-request-v1` / `frf-witness-response-v3`
+(`frf-witness-statement-v3` for the recorded attestation).*
 
 A witness is a *protocol participant*, not Rust code: any program that
 speaks this protocol can attest to a content-addressed evidence subject — a
@@ -67,7 +67,7 @@ proved its own identity and derivation.
 
 ```json
 {
-  "schema_version": "frf-witness-response-v2",
+  "schema_version": "frf-witness-response-v3",
   "request_id": "<SHA-256 of the exact request bytes received>",
   "indeterminate": false,
   "failure": null,
@@ -113,3 +113,48 @@ on read: the statement's identity rederives from its own fields, the
 preserved documents hash to their cids, the response names its request, and
 the attestation names exactly the statement recorded. A hand-edited or
 misattributed statement refuses, never silently consumes.
+
+Since v3 the statement also carries two separate identities:
+
+- **`witness_identity`** — the stable WHO: `FRF/WITNESS-IDENTITY/v1` over
+  `{specification_hash, implementation_hash, interpreter}`. Two attestations
+  with the same identity were made by the same instrument; a different
+  identity is a different instrument — and NOTHING more. Identity
+  distinctness is never independence.
+- **`authority`** — the declared authority the witness says it acts for
+  (`{id, kind, detail?}`; `kind` is `person | organization | automated |
+  other`), recorded verbatim from the response. The declaration is the
+  witness's, never FRF's interpretation.
+
+## 6. The independence relation
+
+Independence is a DECLARED relation, never derived:
+
+```sh
+frf witness independence WITNESS_STATEMENT_ID \
+  --relation separate-party \
+  --basis "the attestation was made by an unaffiliated reviewer against the exported bundle"
+```
+
+The closed relations:
+
+| relation | the declarant claims |
+|---|---|
+| `different-implementation` | the witness program is a different implementation of the relation than the evidence-producing tooling |
+| `separate-party` | the witness acted for a party separate from the evidence producer |
+| `unaffiliated-channel` | the witness observed through an unaffiliated channel |
+| `adversarial-review` | the witness reviewed the evidence adversarially |
+
+Each record (`independence/<id>.json`, `frf-independence-v1`) is
+content-addressed over `{subject, witness_statement, witness_identity,
+relation, relation_version, specification_hash, basis, detail,
+evidence_refs}` and carries a mandatory **basis** — WHY the relation is
+claimed. FRF verifies the evidence STRUCTURE: the bound statement verifies
+(identity + preserved documents), the witness identity and subject match
+the statement, the relation is closed, and the spec hash rederives. It
+never verifies the social truth of independence — a different executable
+hash is never by itself evidence of independent observation; the
+DECLARATION is the evidence. A claim compiled under a witness-requiring
+policy carries the independence records bound to its attestations
+(`independence_evidence`, claim v7), so the declared independence claims
+are as portable as the attestations they qualify.

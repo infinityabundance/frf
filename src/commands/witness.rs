@@ -173,6 +173,22 @@ pub fn attest(
     if let Some(f) = &response.failure {
         return Err(FrfError::new(format!("witness {id} reported failure: {f}")));
     }
+    // The declared authority (v3): a closed kind, recorded verbatim — the
+    // witness's own declaration, never FRF's interpretation.
+    if let Some(authority) = &response.authority {
+        if !WitnessAuthority::KINDS.contains(&authority.kind.as_str()) {
+            return Err(FrfError::new(format!(
+                "witness {id} declared authority kind {:?}; the protocol admits {}",
+                authority.kind,
+                WitnessAuthority::KINDS.join(", ")
+            )));
+        }
+        if authority.id.trim().is_empty() {
+            return Err(FrfError::new(format!(
+                "witness {id} declared an authority without an id"
+            )));
+        }
+    }
     let attestation = response.attestation.ok_or_else(|| {
         FrfError::new(format!(
             "witness {id} declined to attest (no attestation in the response); an attestation is the only admissible outcome"
@@ -198,12 +214,20 @@ pub fn attest(
     }
 
     // -- the content-addressed statement record ------------------------------
+    // The witness IDENTITY (the stable WHO): content-addressed over the
+    // relation's specification and the program's exact bytes + interpreter
+    // chain. A different identity is a different instrument — never, by
+    // itself, evidence of independent observation (independence is the
+    // DECLARED relation of §6).
+    let witness_identity = crate::semantics::witness_identity(&semantic, &implementation)?;
     let stmt = WitnessStatement {
         schema_version: SCHEMA_WITNESS_STATEMENT.to_string(),
         id: String::new(), // filled below
         subject: subject.clone(),
         witness_semantic: semantic,
         witness_implementation: implementation,
+        witness_identity,
+        authority: response.authority,
         statement: statement.to_string(),
         attestation,
         request_cid: request_cid.clone(),
@@ -215,6 +239,8 @@ pub fn attest(
             subject: &stmt.subject,
             witness_semantic: &stmt.witness_semantic,
             witness_implementation: &stmt.witness_implementation,
+            witness_identity: &stmt.witness_identity,
+            authority: &stmt.authority,
             statement: &stmt.statement,
             attestation: &stmt.attestation,
             request_cid: &stmt.request_cid,
@@ -264,4 +290,100 @@ pub fn attest(
         stmt.attestation.detail
     );
     Ok(stmt.id)
+}
+
+/// `frf witness independence STATEMENT_ID --relation REL --basis TEXT`: the
+/// DECLARED independence relation (spec/witness.md §6). An operator records
+/// an independence CLAIM about a verified witness statement — which
+/// independence relation is claimed and the basis it rests on. FRF verifies
+/// the evidence structure (the statement verifies, the witness identity
+/// rederives, the relation is closed, the typed evidence refs rederive); it
+/// never verifies the social truth of independence, and a different
+/// executable hash is never by itself evidence of independent observation —
+/// the declaration is the evidence, recorded as a content-addressed
+/// [`IndependenceEvidence`] record (`independence/<id>.json`).
+pub fn declare_independence(
+    store: &Store,
+    statement_id: &str,
+    relation: &str,
+    relation_version: &str,
+    basis: &str,
+    detail: Option<&str>,
+) -> Result<String> {
+    if !INDEPENDENCE_RELATIONS.contains(&relation) {
+        return Err(FrfError::new(format!(
+            "unknown independence relation {relation:?}: the protocol admits {}",
+            INDEPENDENCE_RELATIONS.join(", ")
+        )));
+    }
+    if basis.trim().is_empty() {
+        return Err(FrfError::new(
+            "an independence claim needs a basis: WHY the relation is claimed (the evidence it rests on)",
+        ));
+    }
+    // The statement verifies on read (identity rederives, the preserved
+    // documents bind it); an independence claim can only bind real evidence.
+    let stmt = store.load_witness_statement(statement_id)?;
+
+    let specification_hash =
+        crate::semantics::independence_specification_hash(relation, relation_version)?;
+    let runner = RunnerIdentity {
+        schema_version: SCHEMA_RUNNER.to_string(),
+        frf_version: env!("CARGO_PKG_VERSION").to_string(),
+        frf_executable_hash: host::current_exe_hash()?,
+    };
+    // The typed evidence refs: the statement record and the witness program
+    // artifact the independence claim rests on (both rederived, never read
+    // from the caller).
+    let mut evidence_refs: Vec<EvidenceRef> = Vec::new();
+    evidence_refs.push(EvidenceRef {
+        role: "witness-statement".to_string(),
+        object_kind: "witness".to_string(),
+        cid: stmt.id.clone(),
+    });
+    if let Some(artifact) = &stmt.witness_implementation.artifact {
+        evidence_refs.push(EvidenceRef {
+            role: "witness-implementation".to_string(),
+            object_kind: "object".to_string(),
+            cid: artifact.sha256.clone(),
+        });
+    }
+    let detail_owned = detail.map(|d| d.to_string());
+    let record = IndependenceEvidence {
+        schema_version: SCHEMA_INDEPENDENCE.to_string(),
+        id: String::new(), // filled below
+        subject: stmt.subject.clone(),
+        witness_statement: stmt.id.clone(),
+        witness_identity: stmt.witness_identity.clone(),
+        relation: relation.to_string(),
+        relation_version: relation_version.to_string(),
+        specification_hash,
+        basis: basis.to_string(),
+        detail: detail_owned,
+        evidence_refs,
+        created_by: runner,
+    };
+    let identity =
+        crate::semantics::independence_identity(&crate::semantics::IndependenceContent {
+            subject: &record.subject,
+            witness_statement: &record.witness_statement,
+            witness_identity: &record.witness_identity,
+            relation: &record.relation,
+            relation_version: &record.relation_version,
+            specification_hash: &record.specification_hash,
+            basis: &record.basis,
+            detail: &record.detail,
+            evidence_refs: &record.evidence_refs,
+        })?;
+    let mut record = record;
+    record.id = identity;
+    store.write_independence(&record)?;
+    eprintln!(
+        "independence {}: witness statement {} -> relation={} ({})",
+        &record.id[..16],
+        &record.witness_statement[..16],
+        record.relation,
+        record.basis
+    );
+    Ok(record.id)
 }

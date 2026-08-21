@@ -112,7 +112,12 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v14";
 /// containment `K ⊆ P₁ ∪ … ∪ Pₙ` over the region cells: every point of K
 /// lies in SOME premise cell, and a blocking residual blocks exactly the
 /// claims whose surface intersects ANY cell.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v6";
+/// v7: the claim CARRIES the independence evidence bound to its witness
+/// statements (`independence_evidence`) — the declared independence
+/// relations (spec/witness.md §6) that attest the premises, so an
+/// independently-witnessed claim documents WHICH independence claims were
+/// made, never conflating them with FRF's own verification.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v7";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -368,8 +373,25 @@ pub const SCHEMA_CAPTURE_ADAPTER_RESULT: &str = "frf-capture-result-v1";
 /// [`WitnessStatement`] with the canonical request/response preserved as
 /// evidence.
 pub const SCHEMA_WITNESS_REQUEST: &str = "frf-witness-request-v1";
-pub const SCHEMA_WITNESS_RESPONSE: &str = "frf-witness-response-v2";
-pub const SCHEMA_WITNESS_STATEMENT: &str = "frf-witness-statement-v2";
+pub const SCHEMA_WITNESS_RESPONSE: &str = "frf-witness-response-v3";
+pub const SCHEMA_WITNESS_STATEMENT: &str = "frf-witness-statement-v3";
+/// The witness INDEPENDENCE relation: the declared independence claim about a
+/// witness statement, with its evidence (spec/witness.md §6). One statement
+/// may carry several independence records (different relations, declarants,
+/// bases).
+pub const SCHEMA_INDEPENDENCE: &str = "frf-independence-v1";
+
+/// The closed set of independence RELATIONS a declarant may claim about a
+/// witness statement. Every relation is a DECLARED claim with a mandatory
+/// basis — FRF verifies the evidence structure, never the social truth of
+/// independence, and a different executable hash is never by itself
+/// evidence of independent observation.
+pub const INDEPENDENCE_RELATIONS: &[&str] = &[
+    "different-implementation",
+    "separate-party",
+    "unaffiliated-channel",
+    "adversarial-review",
+];
 
 /// Versions of the extension RELATION lines. Bump whenever a relation's
 /// semantics change; implementation changes alone never do (the program
@@ -768,6 +790,31 @@ pub struct WitnessResponse {
     pub attestation: Option<WitnessAttestation>,
     pub indeterminate: bool,
     pub failure: Option<String>,
+    /// The authority the witness declares it acts for (v3, optional): a
+    /// declared identity, recorded verbatim — FRF verifies the response is
+    /// canonical and names its request; it never interprets who the
+    /// authority is or whether the declaration is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<WitnessAuthority>,
+}
+
+/// The declared authority a witness acts for (the witness's own
+/// declaration, recorded verbatim). `kind` is a closed set the host
+/// enforces: the protocol distinguishes WHO claims to have attested, and
+/// that claim is the witness's, never FRF's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessAuthority {
+    /// The authority's declared id (e.g. a name or handle).
+    pub id: String,
+    /// `person` | `organization` | `automated` | `other`.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+impl WitnessAuthority {
+    pub const KINDS: [&'static str; 4] = ["person", "organization", "automated", "other"];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -779,16 +826,36 @@ pub struct WitnessAttestation {
     /// This is the witness's claim about the world — NOT FRF's verification.
     /// FRF's verification of the evidence object's integrity is the
     /// content-address + the loader's rehash; the two predicates are never
-    /// conflated. A different executable hash is not evidence of independent
-    /// observation either — independence is a future explicit relation.
+    /// conflated. Independence is a separate, DECLARED relation
+    /// ([`IndependenceEvidence`]) — a different executable hash is never by
+    /// itself evidence of independent observation.
     pub outcome: String,
     pub detail: String,
 }
 
-/// The content-addressed [`WitnessStatement`] record: an independent
-/// attestation bound to a content-addressed subject, with the canonical
-/// request/response preserved as evidence. Identity: SHA-256 of
-/// `FRF/WITNESS-STATEMENT/v1` over the record's fields.
+/// The WITNESS IDENTITY: the stable WHO behind an attestation, content-
+/// addressed over the relation's specification and the program's exact
+/// bytes + interpreter chain (`FRF/WITNESS-IDENTITY/v1`). Two attestations
+/// with the same identity were made by the same instrument; a different
+/// identity is a different instrument — and nothing more (identity
+/// distinctness is never independence).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessIdentity {
+    /// The relation's specification hash (what the attestation relation is).
+    pub specification_hash: String,
+    /// The program bytes (what implemented the attestation).
+    pub implementation_hash: String,
+    /// The interpreter chain, when the program is a script.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<InterpreterIdentity>,
+}
+
+/// The content-addressed [`WitnessStatement`] record: an attestation bound
+/// to a content-addressed subject, with the canonical request/response
+/// preserved as evidence. Identity: SHA-256 of `FRF/WITNESS-STATEMENT/v1`
+/// over the record's fields. v3 adds the witness IDENTITY (the stable WHO)
+/// and the declared AUTHORITY.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WitnessStatement {
@@ -797,10 +864,51 @@ pub struct WitnessStatement {
     pub subject: WitnessSubject,
     pub witness_semantic: WitnessSemantic,
     pub witness_implementation: WitnessImplementation,
+    /// The content-addressed witness identity (v3): the stable WHO.
+    pub witness_identity: String,
+    /// The declared authority (v3), when the witness declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authority: Option<WitnessAuthority>,
     pub statement: String,
     pub attestation: WitnessAttestation,
     pub request_cid: String,
     pub response_cid: String,
+    pub created_by: RunnerIdentity,
+}
+
+/// The INDEPENDENCE EVIDENCE record (spec/witness.md §6): a DECLARED
+/// independence claim about one witness statement, with the evidence that
+/// supports it. The declarant (an operator) states the relation and its
+/// basis; FRF verifies the evidence structure — the statement verifies, the
+/// identity rederives, the relation is closed, the typed evidence refs
+/// rederive — never the social truth of independence. Claims that require
+/// an independent witness may carry these records, and the compiled claim
+/// names them so the independence claim is as portable as the attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndependenceEvidence {
+    pub schema_version: String,
+    /// Content address: `FRF/INDEPENDENCE/v1` over the record's fields.
+    pub id: String,
+    /// What was attested (copied from the statement; verified to match).
+    pub subject: WitnessSubject,
+    /// The attested statement this independence claim binds.
+    pub witness_statement: String,
+    /// The witness identity of the statement (the stable WHO).
+    pub witness_identity: String,
+    /// One of [`INDEPENDENCE_RELATIONS`].
+    pub relation: String,
+    pub relation_version: String,
+    /// `FRF/INDEPENDENCE-SPEC/v1` over `{relation, relation_version}`.
+    pub specification_hash: String,
+    /// The declarant's stated basis (prose, mandatory): WHY the relation is
+    /// claimed — the evidence the independence claim rests on.
+    pub basis: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Typed content references: the witness statement and the witness
+    /// program artifact the claim rests on.
+    pub evidence_refs: Vec<EvidenceRef>,
     pub created_by: RunnerIdentity,
 }
 
@@ -2196,11 +2304,13 @@ pub enum TrajectoryDrift {
     /// A single contiguous band touching exactly one axis bound (the
     /// paper's boundary-localized): a cessation (present only at the start)
     /// or an onset (present only at the end).
+    #[serde(rename = "boundary-localized")]
     BoundaryLocalized,
     /// Two or more distinct observed bands along an ORDERED stratification
     /// axis (an authority-version or candidate-revision ladder): the
     /// divergence is stratified across versions — it recurs in non-adjacent
     /// version bands.
+    #[serde(rename = "version-stratified")]
     VersionStratified,
 }
 
@@ -3658,6 +3768,14 @@ pub struct ClaimRecord {
     /// (`outcome: affirm`); required from `independently-witnessed` up.
     #[serde(default)]
     pub witness_statements: Vec<String>,
+    /// Claim IR (v7) — the declared independence evidence bound to the
+    /// claim's witness statements (spec/witness.md §6): the content-
+    /// addressed [`IndependenceEvidence`] records the claim's attestations
+    /// carry, so an independently-witnessed claim documents WHICH
+    /// independence relations were declared (never conflated with FRF's own
+    /// verification of the attestations). Empty when none were declared.
+    #[serde(default)]
+    pub independence_evidence: Vec<String>,
     /// Claim IR — the replay contract the claim's evidence was observed
     /// under (the receipt's execution profile; `high-assurance` requires the
     /// reference profile and the reference capture bounds).

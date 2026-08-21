@@ -48,7 +48,7 @@ raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 req = json.loads(raw.decode(\"utf-8\"))\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\

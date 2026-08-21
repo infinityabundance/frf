@@ -462,7 +462,8 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             }
         }
         // The witness evidence an independently-witnessed claim names: each
-        // verified statement + its preserved request/response.
+        // verified statement + its preserved request/response + the witness
+        // program object the attestation's implementation bound.
         if let Some(witnesses) = claim["witness_statements"].as_array() {
             for wid in witnesses {
                 let wid = as_str(wid).to_string();
@@ -470,6 +471,17 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 for f in ["request.json", "response.json"] {
                     needed.insert(format!("witnesses/{wid}/{f}"));
                 }
+                let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
+                if let Some(artifact) = stmt["witness_implementation"]["artifact"].as_object() {
+                    needed.insert(format!("objects/sha256/{}", as_str(&artifact["sha256"])));
+                }
+            }
+        }
+        // The declared independence evidence a claim carries: each record
+        // binds one of the claim's witness statements.
+        if let Some(independence) = claim["independence_evidence"].as_array() {
+            for iid in independence {
+                needed.insert(format!("independence/{}.json", as_str(iid)));
             }
         }
         // The v2 universe commits every other member as (kind, id, cid)
@@ -701,6 +713,20 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
                 {
                     continue;
                 }
+                // The statement's identity rederives from its own fields
+                // (the witness IDENTITY — the stable WHO — included), and
+                // the identity itself rederives from the semantic +
+                // implementation.
+                if rederive::witness_statement_identity(&stmt) != wid {
+                    panic!("claim {receipt_id}: witness {wid} is not content-addressed");
+                }
+                if rederive::witness_identity(
+                    &stmt["witness_semantic"],
+                    &stmt["witness_implementation"],
+                ) != as_str(&stmt["witness_identity"])
+                {
+                    panic!("claim {receipt_id}: witness {wid} identity does not rederive");
+                }
                 // The preserved documents hash to their cids (the attestation
                 // is bound to the exact request/response evidence).
                 for f in ["request.json", "response.json"] {
@@ -722,6 +748,46 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             }
             if !affirmed_this {
                 panic!("claim {receipt_id}: no named witness affirms premise receipt {prem_id}");
+            }
+        }
+        // The declared INDEPENDENCE evidence the claim carries: every record
+        // verifies (identity rederives, the relation is closed, the spec hash
+        // rederives) and binds one of the claim's own witness statements —
+        // the independence claim is as portable as the attestation, and a
+        // record about a statement the claim does not carry is refused.
+        if let Some(independence) = claim["independence_evidence"].as_array() {
+            for iid in independence {
+                let iid = as_str(iid).to_string();
+                let rec = load_evidence(&safe_rel(bundle, &format!("independence/{iid}.json")));
+                if rederive::independence_identity(&rec) != iid {
+                    panic!(
+                        "claim {receipt_id}: independence record {iid} is not content-addressed"
+                    );
+                }
+                let relation = as_str(&rec["relation"]);
+                if ![
+                    "different-implementation",
+                    "separate-party",
+                    "unaffiliated-channel",
+                    "adversarial-review",
+                ]
+                .contains(&relation)
+                {
+                    panic!("claim {receipt_id}: independence record {iid} names unknown relation {relation:?}");
+                }
+                if rederive::independence_spec_hash(relation, as_str(&rec["relation_version"]))
+                    != as_str(&rec["specification_hash"])
+                {
+                    panic!(
+                        "claim {receipt_id}: independence record {iid} spec hash does not rederive"
+                    );
+                }
+                if !witnesses
+                    .iter()
+                    .any(|w| w == as_str(&rec["witness_statement"]))
+                {
+                    panic!("claim {receipt_id}: independence record {iid} binds a witness statement the claim does not carry");
+                }
             }
         }
     }

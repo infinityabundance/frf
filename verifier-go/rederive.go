@@ -45,6 +45,55 @@ func recordContentIdentity(record jcs.Value) (string, error) {
 	return jcs.Sha256Hex([]byte(json)), nil
 }
 
+// witnessIdentity: FRF/WITNESS-IDENTITY/v1 over {specification_hash,
+// implementation_hash, interpreter} — the stable WHO behind an attestation.
+func witnessIdentity(semantic, implementation *jcs.Object) (string, error) {
+	artifact := obj(recVal(implementation, "artifact"))
+	var interpreter jcs.Value
+	if artifact != nil {
+		if iv, ok := recVal(artifact, "interpreter").(*jcs.Object); ok {
+			interpreter = iv
+		}
+	}
+	doc := &jcs.Object{
+		Keys:   []string{"specification_hash", "implementation_hash", "interpreter"},
+		Values: []jcs.Value{str(semantic, "specification_hash"), str(implementation, "implementation_hash"), interpreter},
+	}
+	return hashPreimage("FRF/WITNESS-IDENTITY/v1", doc)
+}
+
+// witnessStatementIdentity: FRF/WITNESS-STATEMENT/v1 over the statement's own
+// fields (v3: the witness identity and the declared authority enter the
+// preimage).
+func witnessStatementIdentity(stmt *jcs.Object) (string, error) {
+	doc := &jcs.Object{
+		Keys:   []string{"subject", "witness_semantic", "witness_implementation", "witness_identity", "authority", "statement", "attestation", "request_cid", "response_cid"},
+		Values: []jcs.Value{recVal(stmt, "subject"), recVal(stmt, "witness_semantic"), recVal(stmt, "witness_implementation"), str(stmt, "witness_identity"), recVal(stmt, "authority"), str(stmt, "statement"), recVal(stmt, "attestation"), str(stmt, "request_cid"), str(stmt, "response_cid")},
+	}
+	return hashPreimage("FRF/WITNESS-STATEMENT/v1", doc)
+}
+
+// independenceSpecHash: FRF/INDEPENDENCE-SPEC/v1 over {relation,
+// relation_version} — the semantic identity of a declared independence
+// relation.
+func independenceSpecHash(relation, relationVersion string) (string, error) {
+	doc := &jcs.Object{
+		Keys:   []string{"relation", "relation_version"},
+		Values: []jcs.Value{relation, relationVersion},
+	}
+	return hashPreimage("FRF/INDEPENDENCE-SPEC/v1", doc)
+}
+
+// independenceIdentity: FRF/INDEPENDENCE/v1 over the record's own fields —
+// the content address of a declared independence claim.
+func independenceIdentity(record *jcs.Object) (string, error) {
+	doc := &jcs.Object{
+		Keys:   []string{"subject", "witness_statement", "witness_identity", "relation", "relation_version", "specification_hash", "basis", "detail", "evidence_refs"},
+		Values: []jcs.Value{recVal(record, "subject"), str(record, "witness_statement"), str(record, "witness_identity"), str(record, "relation"), str(record, "relation_version"), str(record, "specification_hash"), str(record, "basis"), recVal(record, "detail"), recVal(record, "evidence_refs")},
+	}
+	return hashPreimage("FRF/INDEPENDENCE/v1", doc)
+}
+
 func envDigest(os, arch, kernel, locale, timezone, umask string) string {
 	return jcs.Sha256Hex([]byte(fmt.Sprintf(
 		"os=%s\narch=%s\nkernel=%s\nlocale=%s\ntimezone=%s\numask=%s",

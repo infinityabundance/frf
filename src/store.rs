@@ -105,6 +105,7 @@ impl Store {
             "receipts",
             "claims",
             "witnesses",
+            "independence",
         ] {
             fs::create_dir_all(self.root.join(dir)).map_err(|e| {
                 FrfError::new(format!(
@@ -910,6 +911,8 @@ impl Store {
                 subject: &stmt.subject,
                 witness_semantic: &stmt.witness_semantic,
                 witness_implementation: &stmt.witness_implementation,
+                witness_identity: &stmt.witness_identity,
+                authority: &stmt.authority,
                 statement: &stmt.statement,
                 attestation: &stmt.attestation,
                 request_cid: &stmt.request_cid,
@@ -966,6 +969,8 @@ impl Store {
                 subject: &stmt.subject,
                 witness_semantic: &stmt.witness_semantic,
                 witness_implementation: &stmt.witness_implementation,
+                witness_identity: &stmt.witness_identity,
+                authority: &stmt.authority,
                 statement: &stmt.statement,
                 attestation: &stmt.attestation,
                 request_cid: &stmt.request_cid,
@@ -1022,6 +1027,106 @@ impl Store {
             }
         }
         Ok(stmt)
+    }
+
+    /// The evidence-record path for one independence record
+    /// (`independence/<id>.json`). The id is the content address.
+    pub fn independence_path(&self, id: &str) -> Result<PathBuf> {
+        crate::store::validate_id("independence", id)?;
+        Ok(self.root.join("independence").join(format!("{id}.json")))
+    }
+
+    /// Write a content-addressed independence record: if the object already
+    /// exists, load + verify it IS this object (canonical document, identity
+    /// rederives, the bound statement verifies) before declaring success —
+    /// "exists" is never "assume okay".
+    pub fn write_independence(&self, record: &IndependenceEvidence) -> Result<()> {
+        let path = self.independence_path(&record.id)?;
+        if path.exists() {
+            let existing = self.load_independence(&record.id)?;
+            if existing != *record {
+                return Err(FrfError::new(format!(
+                    "independence record {} already exists with different content; refusing to overwrite evidence",
+                    record.id
+                )));
+            }
+            return Ok(());
+        }
+        let json = crate::canon::canonical(record)?;
+        self.write_once(&path, &json)
+    }
+
+    /// Load + verify an independence record: the id rederives from the
+    /// record's own fields, and the bound witness statement verifies on read
+    /// (identity + preserved documents) — an independence claim can only
+    /// bind real evidence.
+    pub fn load_independence(&self, id: &str) -> Result<IndependenceEvidence> {
+        let path = self.independence_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no independence record {id} (missing {})",
+                path.display()
+            )));
+        }
+        let record: IndependenceEvidence = self.parse_evidence(&path)?;
+        if record.id != id {
+            return Err(FrfError::new(format!(
+                "independence {id}: the id inside the record is {} — the name is a claim",
+                record.id
+            )));
+        }
+        let expected =
+            crate::semantics::independence_identity(&crate::semantics::IndependenceContent {
+                subject: &record.subject,
+                witness_statement: &record.witness_statement,
+                witness_identity: &record.witness_identity,
+                relation: &record.relation,
+                relation_version: &record.relation_version,
+                specification_hash: &record.specification_hash,
+                basis: &record.basis,
+                detail: &record.detail,
+                evidence_refs: &record.evidence_refs,
+            })?;
+        if expected != id {
+            return Err(FrfError::new(format!(
+                "independence record {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited record"
+            )));
+        }
+        // The bound statement must verify (identity + preserved documents),
+        // and the recorded witness identity + subject must match it.
+        let stmt = self.load_witness_statement(&record.witness_statement)?;
+        if stmt.witness_identity != record.witness_identity {
+            return Err(FrfError::new(format!(
+                "independence record {id}: the recorded witness identity does not match the bound statement"
+            )));
+        }
+        if stmt.subject != record.subject {
+            return Err(FrfError::new(format!(
+                "independence record {id}: the recorded subject does not match the bound statement"
+            )));
+        }
+        Ok(record)
+    }
+
+    /// The independence record ids present in the store (sorted).
+    pub fn independence_ids(&self) -> Result<Vec<String>> {
+        let dir = self.root.join("independence");
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut ids: Vec<String> = std::fs::read_dir(&dir)
+            .map_err(|e| FrfError::new(format!("cannot read independence directory: {e}")))?
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .map(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .trim_end_matches(".json")
+                    .to_string()
+            })
+            .collect();
+        ids.sort();
+        Ok(ids)
     }
 
     /// Load a challenge record by its content address: the id must rederive

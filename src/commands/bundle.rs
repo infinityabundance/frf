@@ -382,7 +382,9 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         }
         // The witness evidence an independently-witnessed claim was compiled
         // under: each verified statement (identity rederives, request +
-        // response hash to their cids) and its preserved documents.
+        // response hash to their cids), its preserved documents, and the
+        // witness PROGRAM object the attestation's implementation bound (the
+        // independence evidence's typed refs point at it).
         for wid in &parsed.witness_statements {
             let stmt = store.load_witness_statement(wid)?; // verified on read
             let bytes = read(&store.witness_path(wid)?, "witness statement")?;
@@ -395,6 +397,18 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     kind: "witness",
                 },
             );
+            if let Some(artifact) = &stmt.witness_implementation.artifact {
+                store.verified_object_bytes(&artifact.sha256)?;
+                let rel = format!("objects/sha256/{}", artifact.sha256);
+                entries.insert(
+                    rel.clone(),
+                    ClosureEntry {
+                        rel,
+                        sha256: artifact.sha256.clone(),
+                        kind: "object",
+                    },
+                );
+            }
             for f in ["request.json", "response.json"] {
                 let path = store.witness_dir(&stmt.id)?.join(f);
                 let bytes = read(&path, "witness evidence")?;
@@ -408,6 +422,22 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     },
                 );
             }
+        }
+        // The declared INDEPENDENCE evidence (v7): every verified
+        // IndependenceEvidence record the claim carries (bound to its
+        // witness statements).
+        for iid in &parsed.independence_evidence {
+            let _rec = store.load_independence(iid)?; // verified: content-addressed
+            let bytes = read(&store.independence_path(iid)?, "independence evidence")?;
+            let rel = format!("independence/{iid}.json");
+            entries.insert(
+                rel.clone(),
+                ClosureEntry {
+                    rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "independence",
+                },
+            );
         }
         for head in &parsed.knowledge_snapshot.residual_heads {
             let record = store.load_residual(&head.id)?;

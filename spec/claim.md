@@ -6,7 +6,7 @@ by `frf claim compile` from one or more verified premise receipts
 sentence — and written to `claims/<first-premise-receipt-id>.json` (or
 rendered canonically with `--json`).
 
-The claim schema is `frf-claim-v6`. The core of the protocol is the paper's
+The claim schema is `frf-claim-v7`. The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of knowledge:
 
 ```text
@@ -43,7 +43,7 @@ the admission from the claim alone (the independent verifiers do).
 
 ```text
 ClaimRecord {
-    schema_version     frf-claim-v6
+    schema_version     frf-claim-v7
     receipt            the FIRST premise receipt (the claim file's name)
     authority          prose id of the admitted reference (all premises bind
                        the SAME authority and the SAME candidate artifact —
@@ -80,7 +80,7 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v6
+    schema_version     frf-claim-v7
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

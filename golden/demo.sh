@@ -241,10 +241,25 @@ WIT_RECEIPT_ID=$("$FRF_BIN" --root "$ROOT" witness attest receipt "$RECEIPT_FINA
   --program golden/witnesses/attest.py \
   --statement "the resolution receipt binds a verified observation of the passing candidate (independent review)")
 echo "receipt witness statement: $WIT_RECEIPT_ID"
+step "9d. the declared independence relation — the witness's own claim, never FRF's"
+# Independence is a DECLARED relation (spec/witness.md §6): the operator
+# records which independence claim the attestation rests on and its basis.
+# FRF verifies the evidence structure (the statement verifies, the witness
+# identity rederives, the relation is closed) — never the social truth of
+# independence; a different executable hash is never by itself evidence of
+# independent observation.
+IND_ID=$("$FRF_BIN" --root "$ROOT" witness independence "$WIT_RECEIPT_ID" \
+  --relation separate-party \
+  --basis "the attestation was made by an unaffiliated reviewer against the exported bundle, not the producing installation")
+echo "independence evidence: $IND_ID"
+echo "-- the independence record is content-addressed and binds the statement:"
+grep -o '"relation":"[^"]*"' "$ROOT"/independence/"$IND_ID".json
 if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL" --policy high-assurance; then
   echo "FAIL: the high-assurance claim did not compile" >&2
   exit 1
 fi
+echo "-- the claim carries the independence evidence:"
+grep -o '"independence_evidence":\[[^]]*\]' "$ROOT"/claims/"$RECEIPT_FINAL".json
 echo "-- the claim's capability evidence (carried in the IR):"
 grep -o '"capability":\[[^]]*\]' "$ROOT"/claims/"$RECEIPT_FINAL".json
 BUNDLE=golden/work/portable.frf
