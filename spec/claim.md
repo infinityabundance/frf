@@ -5,7 +5,7 @@ by `frf claim compile` from a verified receipt (`ReceiptVerified`) — the only
 code path that can emit a positive claim sentence — and written to
 `claims/<receipt-id>.json` (or rendered canonically with `--json`).
 
-The claim schema is `frf-claim-v4`. The core of the protocol is the paper's
+The claim schema is `frf-claim-v5`. The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of knowledge:
 
 ```text
@@ -19,11 +19,27 @@ intersects K's scope. The absence of blockers is established by a scan over
 U, the EVIDENCE UNIVERSE committed at compile time, and the compiled claim
 CARRIES U: the negative search is as portable as the premises.
 
+## 0. Admission policies — the assurance grades
+
+The claim is compiled under a declared POLICY (`--policy`), and the compiled
+claim carries the capability evidence that satisfied it:
+
+| policy | requires | carried in the claim |
+|---|---|---|
+| `baseline` | observation evidence only (the verified receipt + the absence scan over U) | — |
+| `sensitivity-backed` | EVERY claimed observable axis has CHALLENGE coverage: a content-addressed challenge record for the same court semantic identity, wrapping the same reference artifact, targeting exactly that axis, with `saw_defect` and `specificity_clean` RECOMPUTED from the mutant run | `capability` (per-axis challenge ids) |
+| `independently-witnessed` | sensitivity coverage PLUS a verified witness statement attesting THIS receipt (`subject kind=receipt`, `outcome: affirm` — the statement's identity, preserved request/response, and request binding all verify on read) | `witness_statements` |
+| `high-assurance` | independently witnessed PLUS the observation was made under the reference execution profile (`frf-exec-linux-v1`) with the reference capture bounds (the exact-replay contract) | `replay_profile` |
+
+The tiers are strict supersets: the evidence is named by content address in
+the claim, never reduced to a boolean, so any implementation can re-derive
+the admission from the claim alone (the independent verifiers do).
+
 ## 1. The Claim IR
 
 ```text
 ClaimRecord {
-    schema_version     frf-claim-v4
+    schema_version     frf-claim-v5
     receipt            the premise receipt (v0: exactly one premise)
     authority          prose id of the admitted reference
     candidate          { name, version_or_commit, identity_hash } — the
@@ -40,12 +56,20 @@ ClaimRecord {
     excluded_evidence  observed divergences outside K's surface
     requires           premise receipt ids
     knowledge_snapshot U — the evidence universe the absence search ran over
+    policy             the admission policy (Section 0)
+    capability         per-claimed-axis challenge evidence: { axis,
+                       challenge_ids } — the content-addressed challenges
+                       that demonstrated sensitivity on that axis
+    witness_statements the verified witness statements attesting the receipt
+                       (independently-witnessed and above)
+    replay_profile     the execution contract the evidence was observed under
+                       (high-assurance requires the reference profile)
     positive           prose renderer output
     non_claims         the non-claim renderer output
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v4
+    schema_version     frf-claim-v5
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

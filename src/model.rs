@@ -99,9 +99,42 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v14";
 /// REFERENCE — every residual head commits its record content address and
 /// fingerprint, and the universe is a list of typed objects (kind, id, cid),
 /// so the negative search's dependency set is itself content-addressed.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v4";
+/// v5: the claim is compiled under a declared ADMISSION POLICY (baseline /
+/// sensitivity-backed / independently-witnessed / high-assurance), and the
+/// claim carries the capability evidence that satisfied the tier — per-axis
+/// challenge coverage (the court demonstrated it can SEE the claimed
+/// surface's defect classes), the witness statements that attested the
+/// receipt, and the replay contract the observation was made under.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v5";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
+
+/// Claim admission policies — the assurance grade a claim is compiled under.
+/// Each tier is a SUPERSET of the previous: the evidence that satisfies it
+/// is carried in the compiled claim, so admission re-derives in any
+/// implementation from the claim alone.
+///
+/// - [`CLAIM_POLICY_BASELINE`]: observation evidence only (the receipt's
+///   verified run, the absence scan over the committed universe).
+/// - [`CLAIM_POLICY_SENSITIVITY_BACKED`]: every claimed observable axis must
+///   have CHALLENGE coverage — the court demonstrated it can SEE that
+///   surface's defect class (same court semantic identity, same reference
+///   artifact, a mutation on exactly that axis observed and nothing else).
+/// - [`CLAIM_POLICY_INDEPENDENTLY_WITNESSED`]: sensitivity coverage PLUS a
+///   verified witness attestation of the receipt (`outcome: affirm`).
+/// - [`CLAIM_POLICY_HIGH_ASSURANCE`]: independently witnessed PLUS the
+///   observation was made under the reference execution profile with the
+///   reference capture bounds (the exact-replay contract).
+pub const CLAIM_POLICY_BASELINE: &str = "baseline";
+pub const CLAIM_POLICY_SENSITIVITY_BACKED: &str = "sensitivity-backed";
+pub const CLAIM_POLICY_INDEPENDENTLY_WITNESSED: &str = "independently-witnessed";
+pub const CLAIM_POLICY_HIGH_ASSURANCE: &str = "high-assurance";
+pub const CLAIM_POLICIES: &[&str] = &[
+    CLAIM_POLICY_BASELINE,
+    CLAIM_POLICY_SENSITIVITY_BACKED,
+    CLAIM_POLICY_INDEPENDENTLY_WITNESSED,
+    CLAIM_POLICY_HIGH_ASSURANCE,
+];
 /// Environment identity block recorded in every capture at court time. v2
 /// expands the strata the digest covers: os, architecture, kernel release,
 /// effective locale, timezone, and umask (the dimensions that actually move
@@ -3232,6 +3265,22 @@ pub struct ClaimCandidate {
     pub identity_hash: String,
 }
 
+/// Claim IR — the demonstrated sensitivity of the court on ONE claimed
+/// observable axis: the content-addressed challenge records that proved it.
+/// Admission requires every claimed axis to have at least one such record;
+/// the claim carries the exact ids so the coverage re-derives from the
+/// evidence, never from a boolean.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimCapability {
+    /// The claimed observable axis this capability covers.
+    pub axis: String,
+    /// The challenge records that demonstrated sensitivity on `axis`
+    /// (content-addressed; a verifier recomputes `saw_defect` and
+    /// `specificity_clean` from each mutant run).
+    pub challenge_ids: Vec<String>,
+}
+
 /// A compiled claim (written ONLY by `frf claim compile`, from a verified
 /// receipt). The IR is the full scope algebra:
 ///
@@ -3286,6 +3335,24 @@ pub struct ClaimRecord {
     /// The evidence universe the blocker search ran over (the negative
     /// search is as portable as the premises).
     pub knowledge_snapshot: KnowledgeSnapshot,
+    /// Claim IR — the admission policy the claim was compiled under
+    /// (see [`CLAIM_POLICY_BASELINE`] and friends).
+    pub policy: String,
+    /// Claim IR — the capability evidence that satisfied the policy tier,
+    /// per claimed observable axis: the content-addressed challenge records
+    /// (same court semantic identity, same reference artifact, targeted axis,
+    /// recomputed `saw_defect` and `specificity_clean`) that demonstrated
+    /// the court can SEE the claimed surface. Empty under `baseline`.
+    #[serde(default)]
+    pub capability: Vec<ClaimCapability>,
+    /// Claim IR — the verified witness statements that attested this receipt
+    /// (`outcome: affirm`); required from `independently-witnessed` up.
+    #[serde(default)]
+    pub witness_statements: Vec<String>,
+    /// Claim IR — the replay contract the claim's evidence was observed
+    /// under (the receipt's execution profile; `high-assurance` requires the
+    /// reference profile and the reference capture bounds).
+    pub replay_profile: String,
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
 }
