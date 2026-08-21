@@ -66,6 +66,16 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 println!("{id}");
                 Ok(())
             }
+            CourtCmd::Challenge {
+                manifest,
+                operators,
+            } => {
+                let ids = court::challenge(store, &manifest, operators.as_deref())?;
+                for id in &ids {
+                    println!("{id}");
+                }
+                Ok(())
+            }
         },
         Command::Residual { sub } => match sub {
             ResidualCmd::Dispose {

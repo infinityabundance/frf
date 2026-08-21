@@ -1,14 +1,14 @@
 schema_version: frf-residual-v1
 id: cli-text-0002
 court: cli-malformed-input
-run: run-cli-malformed-input-b2b5108c7fea1d1aa19fb46448d28f651f64137fa22ab7d1f0b921bbbfb5a81a
+run: run-cli-malformed-input-296f89203edfab022eff8cef3b51506755ed5ed12064f2d2f6f41b951ad0efba
 axis: stderr
 kind: text
 surface: first-diagnostic-line
 authority: ref-cli-1.8.2
 scope: malformed-input
-candidate_sha256: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+candidate_sha256: fa1fdb59f4080911e695b4c3b5ff8e0b90907da074af19e23224f836c1b8d971
 raw_reference: 'tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
-raw_candidate: 'error: unknown directive servre at line 4'
+raw_candidate: 'FRF-MUTANT:stderr-first-line:tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
 raw_reference_sha256: 3427a3b361b3110471c09cfbbcad867ed1356fc11d74ee638b558b452fc9f1b0
-raw_candidate_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
+raw_candidate_sha256: ec05df084e1a3589bcc5cf74773dab1c8dfe2310b12bd11d1c6223dd2e865c37

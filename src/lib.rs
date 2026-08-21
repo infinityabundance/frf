@@ -14,6 +14,7 @@ pub mod error;
 pub mod host;
 pub mod kappa;
 pub mod model;
+pub mod mutation;
 pub mod scope;
 pub mod semantics;
 pub mod sentences;

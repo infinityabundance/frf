@@ -96,6 +96,19 @@ pub const EXECUTION_PROFILE_LINUX: &str = "frf-exec-linux-v1";
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 
+/// Court-challenge schema: the negative-control evidence object. A court
+/// run that yields a pass proves nothing unless the court has demonstrated
+/// it can SEE the defect classes it declares: the challenge seeds a mutant
+/// candidate (a deterministic wrapper of the admitted reference artifact
+/// that alters exactly one observable dimension) and records whether the
+/// court observed a divergence on the targeted axis and only on it. The
+/// identity covers the DECLARED evidence (court, operator, targeted axis,
+/// the reference artifact, the mutant artifact, the mutant run); the
+/// verdicts (`saw_defect`, `specificity_clean`, `observed_residuals`) are
+/// DERIVED from the run and recomputed by verification, never trusted from
+/// the file.
+pub const SCHEMA_CHALLENGE: &str = "frf-challenge-v1";
+
 /// The capture bounds that actually applied to a court's executions — the
 /// execution profile's parameters as enforced (the profile's defaults, or
 /// the test hooks' overrides). Recorded at observation time so a receipt
@@ -1609,6 +1622,51 @@ pub struct ReductionRecord {
     /// Every reduction attempt, in order.
     pub attempts: Vec<ReductionAttempt>,
     pub derivation: ReductionDerivation,
+}
+
+// ---------------------------------------------------------------------------
+// Court challenge — the negative-control evidence object (spec/challenge.md)
+// ---------------------------------------------------------------------------
+
+/// One court challenge: the court run against a MUTANT candidate — a
+/// deterministic wrapper of the admitted reference artifact that alters
+/// exactly one observable dimension — proving the court can SEE the defect
+/// class it declares. Content-addressed (`FRF/CHALLENGE/v1`); the verdicts
+/// are derived from the run and recomputed by verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CourtChallenge {
+    pub schema_version: String,
+    /// Content address: `FRF/CHALLENGE/v1` over the declared evidence
+    /// (court, operator, targeted axis, reference artifact, mutant artifact,
+    /// mutant run).
+    pub id: String,
+    /// The court id the challenge exercises.
+    pub court: String,
+    /// The mutation operator applied (e.g. `exit-class`).
+    pub operator: String,
+    /// The observable axis the mutation targeted (`exit`, `stderr`, …).
+    pub target_axis: String,
+    /// The admitted reference artifact the mutant wraps.
+    pub reference_sha256: String,
+    /// The mutant candidate artifact: SHA-256 of the deterministic wrapper
+    /// generated from (operator, reference_sha256) — rederivable by any
+    /// verifier, so a forged mutant hash is caught.
+    pub mutant_candidate_sha256: String,
+    /// The court run against the mutant (a normal, content-addressed run).
+    pub run: String,
+    // -- derived verdicts (recomputed by verification, not part of the id) --
+    /// The residuals the mutant run observed (their ids).
+    pub observed_residuals: Vec<String>,
+    /// Declared observables other than the targeted axis.
+    pub unaffected_axes: Vec<String>,
+    /// The court observed a divergence on the targeted axis (sensitivity).
+    pub saw_defect: bool,
+    /// No divergence appeared on the unaffected axes (the mutant moved only
+    /// the targeted dimension, and the court did not conflate it with
+    /// others).
+    pub specificity_clean: bool,
+    pub created_by: RunnerIdentity,
 }
 
 // ---------------------------------------------------------------------------

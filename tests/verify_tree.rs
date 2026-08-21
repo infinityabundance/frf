@@ -1107,6 +1107,94 @@ fn reductions_are_self_consistent() {
 }
 
 // ---------------------------------------------------------------------------
+// challenges/ — the negative-control evidence (courts that prove they can see)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn challenges_are_self_consistent() {
+    let store = store();
+    let mut found = 0;
+    for entry in fs::read_dir(store.root.join("challenges")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let id = name.trim_end_matches(".yaml").to_string();
+        // The verified loader: the content address must rederive from the
+        // record's own declared fields (a hand-edited challenge is refused).
+        let r: CourtChallenge = store.load_challenge(&id).unwrap();
+        assert_eq!(r.schema_version, SCHEMA_CHALLENGE, "challenge {name}");
+        assert_eq!(r.id, id, "the filename must be the content address");
+
+        // The mutant artifact rederives: regenerate the deterministic wrapper
+        // from (operator, reference hash) and prove the recorded hash.
+        let operator = frf::mutation::MutationOperator::parse(&r.operator).unwrap();
+        assert_eq!(operator.target_axis(), r.target_axis);
+        let wrapper = operator.wrapper(&r.reference_sha256);
+        assert_eq!(
+            host::sha256_bytes(wrapper.as_bytes()),
+            r.mutant_candidate_sha256,
+            "challenge {id}: the mutant artifact must be the deterministic wrapper of the reference"
+        );
+        // The reference object exists (content-addressed) and the mutant
+        // object exists in the store.
+        assert!(store.object_path(&r.reference_sha256).unwrap().is_file());
+        assert!(store
+            .object_path(&r.mutant_candidate_sha256)
+            .unwrap()
+            .is_file());
+
+        // The mutant run exists and its residuals are EXACTLY the recorded
+        // ones; the derived verdicts recompute from the run — never trusted
+        // from the file.
+        let capture = store.load_capture(&r.run).unwrap();
+        assert_eq!(
+            capture.residuals, r.observed_residuals,
+            "challenge {id}: the run's residuals must match the record"
+        );
+        let mut on_target = false;
+        let mut on_unaffected: Vec<String> = Vec::new();
+        for rid in &r.observed_residuals {
+            let record = store.load_residual(rid).unwrap();
+            if record.axis.as_str() == r.target_axis {
+                on_target = true;
+            } else {
+                on_unaffected.push(record.axis.as_str().to_string());
+            }
+        }
+        assert_eq!(
+            on_target, r.saw_defect,
+            "challenge {id}: saw_defect must rederive from the run's residuals"
+        );
+        assert_eq!(
+            on_unaffected.is_empty(),
+            r.specificity_clean,
+            "challenge {id}: specificity_clean must rederive from the run's residuals"
+        );
+        // The unaffected axes are the declared observables minus the target.
+        let declared: Vec<String> = capture
+            .court_spec
+            .admissibility_envelope
+            .observables
+            .iter()
+            .filter(|o| *o != &r.target_axis)
+            .cloned()
+            .collect();
+        assert_eq!(r.unaffected_axes, declared);
+
+        // A challenge record must prove its court can see: the verdicts are
+        // the point of the object.
+        assert!(
+            r.saw_defect && r.specificity_clean,
+            "challenge {id}: the checked-in golden path must not contain a blind court"
+        );
+        found += 1;
+    }
+    assert!(
+        found >= 1,
+        "the golden path must leave at least one court challenge"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // claims/
 // ---------------------------------------------------------------------------
 

@@ -1,0 +1,12 @@
+#!/bin/sh
+# FRF court-challenge mutant: exit-class of objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
+ref="$self_dir/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17"
+out=$(mktemp) || exit 2
+err=$(mktemp) || exit 2
+"$ref" "$@" >"$out" 2>"$err"
+rc=$?
+cat "$out"
+cat "$err" >&2
+rm -f "$out" "$err"
+exit $(( (rc + 1) % 256 ))
