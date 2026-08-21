@@ -85,8 +85,8 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
         Command::Claim { sub } => match sub {
             ClaimCmd::Compile { receipt, json } => claim::run(store, &receipt, json),
         },
-        Command::Replay { id } => {
-            replay::run(store, &id)?;
+        Command::Replay { id, policy } => {
+            replay::run(store, &id, &policy)?;
             Ok(())
         }
         Command::Bundle { sub } => match sub {

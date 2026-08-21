@@ -49,10 +49,19 @@ pub enum Command {
         #[command(subcommand)]
         sub: ClaimCmd,
     },
-    /// Replay a captured run (or receipt): re-execute the exact snapshotted artifacts under a checked environment and require the observation to reproduce
+    /// Replay a captured run (or receipt): re-execute the exact snapshotted
+    /// artifacts under a checked environment and require the observation to
+    /// reproduce. `--policy exact` (default) additionally requires the same
+    /// execution profile + capture bounds, environment, and interpreter
+    /// provenance; `--policy semantic` admits provenance differences and
+    /// reports them.
     Replay {
         /// Run id or receipt id (printed by `frf court run` / `frf receipt emit`)
         id: String,
+        /// Reproduction policy: `exact` (same execution provenance, default)
+        /// or `semantic` (same bounded observation, provenance drift reported)
+        #[arg(long, value_name = "exact|semantic", default_value = "exact")]
+        policy: String,
     },
     /// Export or verify a portable OpenReceipt bundle: the receipt + its complete object closure
     Bundle {

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
   "title": "OpenReceipt",
-  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v10). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict.",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v11). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict.",
   "type": "object",
   "required": [
     "schema_version",
@@ -10,6 +10,8 @@
     "court",
     "provenance",
     "comparator_semantics",
+    "execution_profile",
+    "capture_bounds",
     "authority",
     "candidate",
     "environment",
@@ -23,7 +25,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v10"
+      "const": "frf-receipt-v11"
     },
     "run": {
       "type": "string"
@@ -214,6 +216,37 @@
         }
       }
     },
+    "execution_profile": {
+      "type": "string"
+    },
+    "capture_bounds": {
+      "type": "object",
+      "required": [
+        "timeout_ms",
+        "max_stream_bytes",
+        "rlimit_as_mb",
+        "rlimit_cpu_s",
+        "rlimit_nofile"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "timeout_ms": {
+          "type": "string"
+        },
+        "max_stream_bytes": {
+          "type": "string"
+        },
+        "rlimit_as_mb": {
+          "type": "string"
+        },
+        "rlimit_cpu_s": {
+          "type": "string"
+        },
+        "rlimit_nofile": {
+          "type": "string"
+        }
+      }
+    },
     "authority": {
       "$ref": "#/definitions/authority_party"
     },
@@ -227,12 +260,16 @@
         "os",
         "architecture",
         "kernel_release",
+        "locale",
+        "timezone",
+        "umask",
+        "cwd",
         "digest"
       ],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "frf-environment-v1"
+          "const": "frf-environment-v2"
         },
         "os": {
           "type": "string"
@@ -241,6 +278,18 @@
           "type": "string"
         },
         "kernel_release": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "umask": {
+          "type": "string"
+        },
+        "cwd": {
           "type": "string"
         },
         "digest": {

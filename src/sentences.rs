@@ -161,6 +161,10 @@ mod tests {
             os: "linux".into(),
             architecture: "x86_64".into(),
             kernel_release: "6.1".into(),
+            locale: "C".into(),
+            timezone: "Etc/UTC".into(),
+            umask: "0022".into(),
+            cwd: "frf".into(),
             digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".into(),
         }
     }
@@ -197,6 +201,14 @@ mod tests {
             },
             provenance: provenance(),
             comparator_semantics: vec![],
+            execution_profile: EXECUTION_PROFILE_LINUX.into(),
+            capture_bounds: CaptureBounds {
+                timeout_ms: "60000".into(),
+                max_stream_bytes: "16777216".into(),
+                rlimit_as_mb: "2048".into(),
+                rlimit_cpu_s: "30".into(),
+                rlimit_nofile: "1024".into(),
+            },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
                 kind: "executable_reference".into(),

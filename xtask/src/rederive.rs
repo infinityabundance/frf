@@ -53,9 +53,22 @@ pub fn comparator_spec_hash(id: &str, relation: &str, extractor: &str, classifie
     )
 }
 
-/// Environment digest: sha256("os={os}\narch={arch}\nkernel={kernel}").
-pub fn env_digest(os: &str, arch: &str, kernel: &str) -> String {
-    sha256_bytes(format!("os={os}\narch={arch}\nkernel={kernel}").as_bytes())
+/// Environment digest: sha256("os={os}\narch={arch}\nkernel={kernel}\n
+/// locale={locale}\ntimezone={timezone}\numask={umask}").
+pub fn env_digest(
+    os: &str,
+    arch: &str,
+    kernel: &str,
+    locale: &str,
+    timezone: &str,
+    umask: &str,
+) -> String {
+    sha256_bytes(
+        format!(
+            "os={os}\narch={arch}\nkernel={kernel}\nlocale={locale}\ntimezone={timezone}\numask={umask}"
+        )
+        .as_bytes(),
+    )
 }
 
 pub fn interpreter_hash(artifact: &Value) -> Option<String> {

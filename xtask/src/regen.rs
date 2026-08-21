@@ -23,7 +23,18 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_V10: &str = "frf-receipt-v10";
+const RECEIPT_V11: &str = "frf-receipt-v11";
+
+/// The corpus's fixed environment strata (deterministic values; the digest is
+/// recomputed from them by [`bump`]).
+const CORPUS_LOCALE: &str = "C";
+const CORPUS_TIMEZONE: &str = "Etc/UTC";
+const CORPUS_UMASK: &str = "0022";
+const CORPUS_CWD: &str = "frf";
+
+/// The corpus's fixed execution profile + capture bounds (the reference
+/// profile's defaults).
+const CORPUS_PROFILE: &str = "frf-exec-linux-v1";
 
 /// The built-in specification table used to complete fixtures that predate
 /// the residual classifier (axis → (extractor, residual_classifier)).
@@ -59,15 +70,45 @@ fn bump_semantic(c: &mut Value) {
 }
 
 /// Bring a document to the current protocol version: schema version, the
-/// comparator semantic fields, and — when `fix_semantic_identity` — a
-/// recomputed court semantic identity (so the fixture's ONLY semantic
-/// violation is the one its name claims).
-fn bump(doc: &mut Value, fix_semantic_identity: bool) {
-    doc["schema_version"] = json!(RECEIPT_V10);
+/// comparator semantic fields, the execution profile + capture bounds, the
+/// expanded environment strata — and, when the corresponding fix flag is
+/// set, the recomputed derived hashes (the environment digest, and the court
+/// semantic identity). A fixture whose NAME says a hash is the violation
+/// keeps its wrong hash so the corpus isolates exactly one rule per
+/// document.
+fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
+    doc["schema_version"] = json!(RECEIPT_V11);
     if let Some(sems) = doc["comparator_semantics"].as_array_mut() {
         for c in sems.iter_mut() {
             bump_semantic(c);
         }
+    }
+    // The execution profile + applied capture bounds (v11).
+    doc["execution_profile"] = json!(CORPUS_PROFILE);
+    doc["capture_bounds"] = json!({
+        "timeout_ms": "60000",
+        "max_stream_bytes": "16777216",
+        "rlimit_as_mb": "2048",
+        "rlimit_cpu_s": "30",
+        "rlimit_nofile": "1024",
+    });
+    // The expanded environment strata; recompute the digest from them unless
+    // the fixture's violation IS the digest.
+    let env = &mut doc["environment"];
+    env["schema_version"] = json!("frf-environment-v2");
+    env["locale"] = json!(CORPUS_LOCALE);
+    env["timezone"] = json!(CORPUS_TIMEZONE);
+    env["umask"] = json!(CORPUS_UMASK);
+    env["cwd"] = json!(CORPUS_CWD);
+    if fix_env_digest {
+        env["digest"] = json!(crate::rederive::env_digest(
+            env["os"].as_str().unwrap_or_default(),
+            env["architecture"].as_str().unwrap_or_default(),
+            env["kernel_release"].as_str().unwrap_or_default(),
+            CORPUS_LOCALE,
+            CORPUS_TIMEZONE,
+            CORPUS_UMASK,
+        ));
     }
     if fix_semantic_identity {
         doc["court"]["semantic_identity"] = json!(court_semantic_identity_from_receipt(doc));
@@ -156,7 +197,7 @@ pub fn regen_corpus(dir: &Path) {
     let mut valid_names: Vec<String> = sorted_names(&dir.join("valid"));
     for name in &valid_names {
         let mut doc = load_json(&dir.join("valid").join(name));
-        bump(&mut doc, true);
+        bump(&mut doc, true, true);
         let canonical = canonical(&doc);
         write(dir, &format!("valid/{name}"), &canonical);
         write(dir, &format!("canonical/{name}"), &canonical);
@@ -190,8 +231,14 @@ pub fn regen_corpus(dir: &Path) {
     //    its one intended violation.
     for name in sorted_names(&dir.join("invalid-semantic")) {
         let fix_identity = name != "10-bad-semantic-identity.json";
+        let fix_env_digest = name != "09-bad-environment-digest.json";
         let mut doc = load_json(&dir.join("invalid-semantic").join(&name));
-        bump(&mut doc, fix_identity);
+        bump(&mut doc, fix_identity, fix_env_digest);
+        if name == "09-bad-environment-digest.json" {
+            // The fixture's violation IS the digest: keep it wrong so the
+            // corpus isolates exactly one rule per document.
+            doc["environment"]["digest"] = json!("0".repeat(64));
+        }
         write(dir, &format!("invalid-semantic/{name}"), &canonical(&doc));
         eprintln!("regen invalid-semantic/{name}");
     }
@@ -224,7 +271,7 @@ pub fn regen_corpus(dir: &Path) {
     ];
     for (name, mutate) in new_fixtures {
         let mut doc = base.clone();
-        bump(&mut doc, true);
+        bump(&mut doc, true, true);
         mutate(&mut doc);
         write(dir, &format!("invalid-semantic/{name}"), &canonical(&doc));
         eprintln!("regen invalid-semantic/{name} (new)");
@@ -246,7 +293,7 @@ pub fn regen_corpus(dir: &Path) {
         }
         let fix_schema_version = name != "01-bad-schema-version.json";
         let mut doc = load_json(&dir.join("invalid").join(&name));
-        bump(&mut doc, false);
+        bump(&mut doc, false, false);
         if !fix_schema_version {
             // The fixture's violation is the schema version itself.
             doc["schema_version"] = json!("frf-receipt-v7");

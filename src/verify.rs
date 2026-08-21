@@ -497,6 +497,12 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
             "receipt {id}: provenance or comparator semantics do not match the capture (both are bound at observation time, never reconstructed)"
         )));
     }
+    if body.execution_profile != cap.execution_profile || body.capture_bounds != cap.capture_bounds
+    {
+        return Err(FrfError::new(format!(
+            "receipt {id}: the execution profile or capture bounds do not match the capture (the harness contract is bound at observation time)"
+        )));
+    }
     for obs in &body.observables {
         ObservableId::parse(&obs.axis)?;
         // The comparator that served this axis decides what the raw hashes
@@ -1209,12 +1215,32 @@ impl Receipt {
             &self.environment.os,
             &self.environment.architecture,
             &self.environment.kernel_release,
+            &self.environment.locale,
+            &self.environment.timezone,
+            &self.environment.umask,
         );
         if env_expected != self.environment.digest {
             fail(
                 &mut violations,
-                "the environment digest does not rederive from os/architecture/kernel_release",
+                "the environment digest does not rederive from os/architecture/kernel_release/locale/timezone/umask",
             );
+        }
+
+        // The execution profile is a valid protocol identifier, and the
+        // capture bounds are positive integers within the protocol's maxima
+        // (an observation is read against the harness contract it was made
+        // under; the contract itself must be bounded and well-formed).
+        if ObservableId::parse(&self.execution_profile).is_err() {
+            fail(
+                &mut violations,
+                format!(
+                    "invalid execution_profile identifier {:?}",
+                    self.execution_profile
+                ),
+            );
+        }
+        if let Err(e) = crate::model::validate_capture_bounds(&self.capture_bounds) {
+            fail(&mut violations, e.0);
         }
 
         // The court semantic identity rederives from the document.
@@ -1388,7 +1414,7 @@ mod tests {
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
         let kernel = host::kernel_release();
-        let env_digest = host::environment_digest(os, arch, &kernel);
+        let env_digest = host::environment_digest(os, arch, &kernel, "C", "Etc/UTC", "0022");
         let authority_hash = "a".repeat(64);
         let fixture_hash = "b".repeat(64);
         let candidate_hash = "c".repeat(64);
@@ -1431,6 +1457,10 @@ mod tests {
             os: os.into(),
             architecture: arch.into(),
             kernel_release: kernel,
+            locale: "C".into(),
+            timezone: "Etc/UTC".into(),
+            umask: "0022".into(),
+            cwd: "frf".into(),
             digest: env_digest,
         };
         let comparator = crate::comparators::semantic("exit").unwrap();
@@ -1466,6 +1496,14 @@ mod tests {
                 .remove(0)],
             },
             comparator_semantics: vec![comparator],
+            execution_profile: crate::model::EXECUTION_PROFILE_LINUX.into(),
+            capture_bounds: CaptureBounds {
+                timeout_ms: "60000".into(),
+                max_stream_bytes: "16777216".into(),
+                rlimit_as_mb: "2048".into(),
+                rlimit_cpu_s: "30".into(),
+                rlimit_nofile: "1024".into(),
+            },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
                 kind: "executable_reference".into(),
