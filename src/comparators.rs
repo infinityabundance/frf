@@ -438,9 +438,14 @@ impl BuiltinKind {
                             cand_sha.clone(),
                         ));
                     }
-                    if ref_exec != cand_exec && ref_sha == cand_sha {
-                        // A mode divergence (same bytes, different flag): its
-                        // own surface, raw values the flags themselves.
+                    if ref_exec != cand_exec {
+                        // A mode divergence: its own surface, raw values the
+                        // flags themselves. EMITTED EVEN when the bytes also
+                        // differ — a file with different contents AND a
+                        // different executable state is two observable facts,
+                        // and two residuals. Trajectories must be able to
+                        // watch a content divergence vanish while a mode
+                        // divergence persists.
                         out.push((
                             Some(format!("path:{path}#executable")),
                             ref_exec.to_string(),
