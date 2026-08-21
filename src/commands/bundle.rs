@@ -126,6 +126,21 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             );
         }
 
+        // The admitted authority record: the receipt cites the authority by
+        // id, so the admission evidence is part of the closure (authorities
+        // are never rewritten; the bundle carries the exact admission).
+        let authority_path = store.authority_path(&cap.authority)?;
+        let bytes = read(&authority_path, "authority")?;
+        let rel = format!("authorities/{}.yaml", cap.authority);
+        entries.insert(
+            rel.clone(),
+            ClosureEntry {
+                rel,
+                sha256: host::sha256_bytes(&bytes),
+                kind: "authority",
+            },
+        );
+
         // Content-addressed execution snapshots.
         for h in [
             &cap.authority_artifact.sha256,

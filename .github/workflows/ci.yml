@@ -1,4 +1,4 @@
-# CI for the frf-rs suites:
+# CI for the frf suites:
 #
 #   regression  - cargo test (invariant bank + golden path + the independent
 #                 verifier tests) and the deterministic in-repo fuzz harness
@@ -7,7 +7,7 @@
 #                 the tool's own pure functions (freshness gate: if generated
 #                 artifacts drift from the code, this fails); the demo job
 #                 additionally regenerates the tree, verifies it, and runs
-#                 the independent Python verifier against the bundle + corpus
+#                 the independent xtask verifier against the bundle + corpus
 #   fuzzing     - libFuzzer smoke runs of all three targets (yaml_types,
 #                 cli_args, store_ids) under nightly
 #
@@ -41,12 +41,14 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Install PyYAML for the independent verifier
-        run: sudo apt-get update && sudo apt-get install -y python3-yaml
       - name: Format
         run: cargo fmt --check
+      - name: Format (xtask)
+        run: cargo fmt --manifest-path xtask/Cargo.toml --check
       - name: Clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (xtask, deny warnings)
+        run: cargo clippy --manifest-path xtask/Cargo.toml --all-targets -- -D warnings
       - name: Regression + golden path + verification + deterministic fuzz
         run: cargo test
       - name: Deterministic fuzz harness at scale
@@ -63,6 +65,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check on the declared MSRV
         run: cargo check --all-targets
+      - name: MSRV for the independent verifier
+        run: cargo check --manifest-path xtask/Cargo.toml --all-targets
 
   demo:
     name: Golden path + regenerated-tree verification
@@ -75,12 +79,10 @@ jobs:
         run: ./golden/demo.sh
       - name: Verify the regenerated tree is self-consistent
         run: cargo test --test verify_tree
-      - name: Install PyYAML for the independent verifier
-        run: sudo apt-get update && sudo apt-get install -y python3-yaml
       - name: Independent verifier agrees on the regenerated bundle + corpus
         run: |
-          python3 verifier/frf_verify.py bundle golden/work/portable.frf
-          python3 verifier/frf_verify.py corpus conformance
+          cargo xtask verify bundle golden/work/portable.frf
+          cargo xtask verify corpus conformance
 
   fuzz:
     name: libFuzzer smoke

@@ -1065,7 +1065,142 @@ fn open_residual_blocks_only_its_own_axis() {
     )
     .unwrap();
     assert_eq!(claim_yaml["observable_scope"][0], "exit");
-    assert_eq!(claim_yaml["excluded_residuals"][0], "cli-text-0001");
+    assert_eq!(claim_yaml["excluded_evidence"][0], "cli-text-0001");
+    // The full scope algebra: the claim's scope carries the executed
+    // surface, and the open text residual does NOT block it (different
+    // axis — intersection is empty), while it IS recorded as evidence the
+    // claim excludes.
+    assert_eq!(claim_yaml["scope"]["observables"][0], "exit");
+    assert_eq!(claim_yaml["requires"][0], receipt);
+    assert_eq!(claim_yaml["blockers"].as_sequence().unwrap().len(), 0);
+}
+
+#[test]
+fn open_residual_on_the_same_surface_blocks_a_later_claim() {
+    // The cross-run half of the scope algebra: a claim compiled from a
+    // passing run is refused when an OPEN residual about the SAME surface
+    // (same candidate artifact, axis, fixture, environment) was recorded by
+    // an earlier run — an unexplained divergence about the claimed surface
+    // blocks wherever it was recorded. A claim about a DIFFERENT surface is
+    // not blocked.
+    let work = Workdir::new("surface-block");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    // Run 1: a nondeterministic candidate — first execution diverges on
+    // exit (open residual on candidate H), second execution matches the
+    // reference's exit class. (stderr always diverges: the reference emits a
+    // diagnostic, this candidate emits none — that residual is on a
+    // different axis and must NOT block the exit claim.)
+    work.write_candidate(
+        "#!/bin/sh\n# flip: exit 1 on the first execution, 2 (the reference class) afterwards\nif [ ! -f frf/captures/.flip ]; then mkdir -p frf/captures && touch frf/captures/.flip; exit 1; fi\nexit 2\n",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "court run 1 (diverges)");
+    let run1 = stdout(&out);
+    let mut residuals: Vec<String> = fs::read_dir(work.path("frf/residuals"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+        .collect();
+    residuals.sort();
+    assert_eq!(
+        residuals,
+        vec!["cli-exit-0001.yaml", "cli-text-0001.yaml"],
+        "run 1 diverges on exit AND stderr"
+    );
+
+    // Run 2: same candidate, same fixture, same environment — now passes.
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "court run 2 (passes)");
+    let run2 = stdout(&out);
+    assert_ne!(run1, run2, "the two runs are distinct observations");
+
+    // The passing run's receipt would have a clean exit axis, but the OPEN
+    // residual from run 1 lies on the SAME surface (same candidate hash,
+    // same fixture, same environment, same axis) — the claim must be
+    // refused, and the refusal must name the blocking residual.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run2]);
+    assert_success(&out, "receipt emit (passing run)");
+    let receipt2 = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt2]);
+    assert!(
+        !out.status.success(),
+        "an open residual on the claimed surface must block the claim"
+    );
+    assert!(
+        stderr(&out).contains("cli-exit-0001")
+            && stderr(&out).contains("intersect this claim's scope"),
+        "the refusal must name the blocking residual: {}",
+        stderr(&out)
+    );
+    // No claim file is written while blocked.
+    assert!(
+        fs::read_dir(work.path("frf/claims"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "blocked compile must not write a claim"
+    );
+
+    // Disposing the residual fixed with a REAL resolution run closes it —
+    // then the same claim compiles (the disposition is evidence-backed, and
+    // the closure edge re-verifies).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &run2,
+            "--reason",
+            "nondeterministic first-execution divergence; re-observed passing",
+        ],
+    );
+    assert_success(&out, "dispose fixed (evidence-backed)");
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt2]);
+    assert_success(&out, "claim compiles after the closure is evidenced");
+}
+
+#[test]
+fn claim_json_renderer_emits_the_ir_canonically() {
+    // Prose is one renderer; --json emits the same Claim IR as canonical
+    // JSON (RFC 8785), deterministically.
+    let work = Workdir::new("claim-json");
+    work.copy_canonical_tree();
+    // Same exit class as the reference, no stderr: only the text axis
+    // diverges, so exit parity is claimable (the open text residual blocks
+    // only its own axis).
+    work.write_candidate("#!/bin/sh\n# same exit class, no stderr\nexit 2\n");
+    admit_reference(&work);
+    let run = run_court(&work);
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+
+    let out = frf(
+        &work,
+        &["--root", ROOT, "claim", "compile", &receipt, "--json"],
+    );
+    assert_success(&out, "claim --json");
+    let first = stdout(&out);
+    let value: serde_json::Value = serde_json::from_str(&first).unwrap();
+    assert_eq!(value["receipt"], receipt);
+    assert_eq!(value["schema_version"], "frf-claim-v2");
+    assert_eq!(value["scope"]["observables"][0], "exit");
+    // Determinism: a second emission is byte-identical (canonical form).
+    let out = frf(
+        &work,
+        &["--root", ROOT, "claim", "compile", &receipt, "--json"],
+    );
+    assert_success(&out, "claim --json (again)");
+    assert_eq!(first, stdout(&out));
 }
 
 #[test]

@@ -124,9 +124,14 @@ pub enum ReceiptCmd {
 #[derive(Subcommand)]
 pub enum ClaimCmd {
     /// Compile a claim from a receipt; refuses open/unknown/harness residuals
+    /// whose surface intersects the claim's scope
     Compile {
         /// Receipt id (printed by `frf receipt emit`)
         receipt: String,
+        /// Emit the Claim IR as canonical JSON instead of prose (prose is
+        /// one renderer of the IR)
+        #[arg(long)]
+        json: bool,
     },
 }
 

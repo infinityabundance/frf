@@ -181,22 +181,26 @@ parsing data cannot turn it into evidence.
 ### 5.4 The independent verifier
 
 OpenReceipt is a protocol only if a SECOND implementation can take the same
-evidence and reach the same verdict. `verifier/frf_verify.py` is that
-implementation: a deliberately small Python verifier that does NO execution.
-It implements the RFC 8785 canonicalizer, the identity preimages, the
-structural + semantic conformance algorithms, and the evidentiary checks of
-§5.3 — and runs them against the same corpora and the same bundles as the
-reference engine:
+evidence and reach the same verdict. `cargo xtask verify` (xtask/) is that
+implementation: a deliberately small Rust verifier that does NO execution and
+depends on nothing from the reference engine. It implements the RFC 8785
+canonicalizer, strict I-JSON parsing (duplicate property names refused),
+schema key-set validation (unknown properties refused), the identity
+preimages, the structural + semantic conformance algorithms, and the
+evidentiary checks of §5.3 — and runs them against the same corpora and the
+same bundles as the reference engine:
 
-- **Corpus.** `frf_verify.py corpus conformance/` must pass every fixture the
-  Rust engine passes and refuse every fixture it refuses: canonical bytes and
-  pinned hashes (`valid/` + `canonical/` + `hashes/`), structural refusals
-  (`invalid/`), and semantic refusals (`invalid-semantic/`).
-- **Bundle.** `frf_verify.py bundle <bundle.frf/>` verifies a bundle against
-  itself — manifest hash proof, receipt content-addressing, run-identity
-  rederivation, side-file rehash, event-chain/sign/token rederivation,
-  resolution edges, closure completeness — and derives the admissible Claim
-  IR the claim compiler would license.
+- **Corpus.** `cargo xtask verify corpus conformance/` must pass every
+  fixture the Rust engine passes and refuse every fixture it refuses:
+  canonical bytes and pinned hashes (`valid/` + `canonical/` + `hashes/`),
+  structural refusals (`invalid/` — including duplicate property names and
+  unknown properties), and semantic refusals (`invalid-semantic/`).
+- **Bundle.** `cargo xtask verify bundle <bundle.frf/>` verifies a bundle
+  against itself — manifest hash proof, receipt content-addressing,
+  run-identity rederivation, side-file rehash, event-chain/sign/token
+  rederivation (the drift/slew classification REDERIVES from the trajectory
+  observations), resolution edges, closure completeness — and derives the
+  admissible Claim IR the claim compiler would license.
 
 CI runs both engines against both oracles (the Rust suite in
 `tests/conformance.rs` and `tests/independent.rs`, the verifier in the demo

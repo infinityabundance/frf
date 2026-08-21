@@ -19,12 +19,12 @@ verify:
 conformance:
 	cargo test --test conformance
 
-# Independent verifier: the Python SECOND implementation proves the protocol
-# separation — same corpus, same bundle, no frf binary (needs python3 + PyYAML).
+# Independent verifier: the xtask SECOND implementation proves the protocol
+# separation — same corpus, same bundle, no frf binary, no execution.
 independent:
 	cargo test --test independent
-	python3 verifier/frf_verify.py corpus conformance
-	python3 verifier/frf_verify.py bundle golden/work/portable.frf
+	cargo xtask verify corpus conformance
+	cargo xtask verify bundle golden/work/portable.frf
 
 # Deterministic in-repo fuzz harness (no nightly needed); scale with
 # FRF_FUZZ_ITERS, e.g. make fuzz-iters FRF_FUZZ_ITERS=200000
