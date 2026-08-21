@@ -87,7 +87,7 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// v15: the execution profile adds the per-side process-count limit
 /// (`rlimit_nproc`, RLIMIT_NPROC) — the capture bounds record the complete
 /// resource contract the observation was made under.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v15";
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v16";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -186,6 +186,18 @@ pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v3";
 /// exact replay requires the same profile and the same applied bounds.
 pub const EXECUTION_PROFILE_LINUX: &str = "frf-exec-linux-v1";
 
+/// The cgroup v2 execution profile (`spec/execution-profile.md` §
+/// `frf-exec-linux-v2`): the per-side AGGREGATE resource envelope the
+/// setrlimit layer cannot give. Each side's WHOLE descendant tree runs in
+/// its own cgroup with `pids.max` / `memory.max` / `cpu.max` — bounded per
+/// side, not per real user id (RLIMIT_NPROC) and not per process
+/// (RLIMIT_AS/RLIMIT_CPU). setrlimit remains a second layer. Requires a
+/// writable cgroup v2 subtree (systemd delegation, a container with a
+/// writable `/sys/fs/cgroup`, or a delegated user session); without one the
+/// profile REFUSES to run — a declared profile is enforced, never
+/// approximated.
+pub const EXECUTION_PROFILE_LINUX_V2: &str = "frf-exec-linux-v2";
+
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 
@@ -217,6 +229,13 @@ pub const SCHEMA_MUTATION_RESULT: &str = "frf-mutation-result-v1";
 /// the test hooks' overrides). Recorded at observation time so a receipt
 /// never guesses what the harness bounded. All values are STRINGS: the
 /// OpenReceipt canonical value domain has no numbers.
+///
+/// v16: the `cgroup_*` fields — the per-side AGGREGATE envelope of the
+/// `frf-exec-linux-v2` profile (pids.max / memory.max / cpu.max over the
+/// whole descendant tree). They are ABSENT under the reference profile v1
+/// (whose bounds are per-process setrlimit limits + the per-real-UID
+/// RLIMIT_NPROC layer, not an aggregate envelope), so a v15-shaped document
+/// is a valid v16 document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureBounds {
@@ -238,6 +257,20 @@ pub struct CaptureBounds {
     /// it is one layer of the contract, not a per-side aggregate envelope
     /// (the cgroup v2 profile is that).
     pub rlimit_nproc: String,
+    /// v16, `frf-exec-linux-v2` only: the cgroup v2 `pids.max` of the side's
+    /// whole process tree — the per-side aggregate process-count envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cgroup_pids_max: Option<String>,
+    /// v16, `frf-exec-linux-v2` only: the cgroup v2 `memory.max` (bytes) of
+    /// the side's whole process tree — the per-side aggregate memory
+    /// envelope a per-process RLIMIT_AS cannot give.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cgroup_memory_max: Option<String>,
+    /// v16, `frf-exec-linux-v2` only: the cgroup v2 `cpu.max` (`quota
+    /// period`, microseconds) of the side's whole process tree — the
+    /// per-side aggregate CPU envelope a per-process RLIMIT_CPU cannot give.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cgroup_cpu_max: Option<String>,
 }
 
 /// The protocol's maxima for the capture bounds — a receipt can never claim
@@ -248,8 +281,15 @@ pub const CAPTURE_BOUND_MAX_RLIMIT_AS_MB: u64 = 65_536; // 64 GiB
 pub const CAPTURE_BOUND_MAX_RLIMIT_CPU_S: u64 = 86_400; // 1 day
 pub const CAPTURE_BOUND_MAX_RLIMIT_NOFILE: u64 = 1_048_576;
 pub const CAPTURE_BOUND_MAX_RLIMIT_NPROC: u64 = 65_536;
+pub const CAPTURE_BOUND_MAX_CGROUP_PIDS: u64 = 65_536;
+pub const CAPTURE_BOUND_MAX_CGROUP_MEMORY: u64 = 1 << 36; // 64 GiB
+pub const CAPTURE_BOUND_MAX_CGROUP_CPU_QUOTA_US: u64 = 1_000_000; // 1 second
+pub const CAPTURE_BOUND_MAX_CGROUP_CPU_PERIOD_US: u64 = 1_000_000;
 
 /// Validate capture bounds: positive integers within the protocol's maxima.
+/// The v16 `cgroup_*` fields, when present, must be positive integers (the
+/// `cpu.max` value is the kernel's `quota period` pair) within the protocol's
+/// maxima.
 pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
     for (what, v, max) in [
         ("timeout_ms", &b.timeout_ms, CAPTURE_BOUND_MAX_TIMEOUT_MS),
@@ -292,6 +332,59 @@ pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
         if n > max {
             return Err(crate::error::FrfError::new(format!(
                 "capture bound {what} = {n} exceeds the protocol maximum {max}"
+            )));
+        }
+    }
+    if let Some(v) = &b.cgroup_pids_max {
+        let n: u64 = v.parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "capture bound cgroup_pids_max must be a positive integer, got {v:?}"
+            ))
+        })?;
+        if n == 0 || n > CAPTURE_BOUND_MAX_CGROUP_PIDS {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound cgroup_pids_max = {n} outside (0, {CAPTURE_BOUND_MAX_CGROUP_PIDS}]"
+            )));
+        }
+    }
+    if let Some(v) = &b.cgroup_memory_max {
+        let n: u64 = v.parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "capture bound cgroup_memory_max must be a positive integer, got {v:?}"
+            ))
+        })?;
+        if n == 0 || n > CAPTURE_BOUND_MAX_CGROUP_MEMORY {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound cgroup_memory_max = {n} outside (0, {CAPTURE_BOUND_MAX_CGROUP_MEMORY}]"
+            )));
+        }
+    }
+    if let Some(v) = &b.cgroup_cpu_max {
+        let parts: Vec<&str> = v.split_whitespace().collect();
+        if parts.len() != 2 {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound cgroup_cpu_max must be the kernel's `quota period` pair, got {v:?}"
+            )));
+        }
+        let quota: u64 = parts[0].parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "capture bound cgroup_cpu_max quota must be a positive integer, got {:?}",
+                parts[0]
+            ))
+        })?;
+        let period: u64 = parts[1].parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "capture bound cgroup_cpu_max period must be a positive integer, got {:?}",
+                parts[1]
+            ))
+        })?;
+        if quota == 0
+            || period == 0
+            || quota > CAPTURE_BOUND_MAX_CGROUP_CPU_QUOTA_US
+            || period > CAPTURE_BOUND_MAX_CGROUP_CPU_PERIOD_US
+        {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound cgroup_cpu_max = {v} outside (0, {CAPTURE_BOUND_MAX_CGROUP_CPU_QUOTA_US}] us quota / (0, {CAPTURE_BOUND_MAX_CGROUP_CPU_PERIOD_US}] us period"
             )));
         }
     }
@@ -1609,6 +1702,13 @@ pub struct CourtSpec {
     /// are observed through their streams only.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub produce: Option<ProduceSpec>,
+    /// The DECLARED execution profile (spec/execution-profile.md): the
+    /// harness contract the sides and every extension program run under.
+    /// Absent = the reference profile `frf-exec-linux-v1`. The declared
+    /// profile is ENFORCED (never approximated): `frf-exec-linux-v2`
+    /// requires a writable cgroup v2 subtree and refuses without one.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub execution_profile: Option<String>,
 }
 
 /// The produced-artifact clause. v0: one output directory per side,

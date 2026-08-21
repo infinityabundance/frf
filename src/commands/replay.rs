@@ -117,45 +117,73 @@ fn interpreter_drift(
 fn provenance_drift(store: &Store, capture: &CaptureManifest) -> Result<Vec<String>> {
     let mut drift: Vec<String> = Vec::new();
 
-    // The execution profile and the capture bounds that applied.
-    if capture.execution_profile != crate::model::EXECUTION_PROFILE_LINUX {
+    // The execution profile and the capture bounds that applied. The
+    // effective bounds are computed UNDER THE RECORDED PROFILE (a v2 capture
+    // records its cgroup envelope; the current host must be able to apply
+    // the same envelope).
+    let profile = host::ExecProfile::parse(&capture.execution_profile)?;
+    if capture.execution_profile != profile.as_str() {
         drift.push(format!(
             "execution profile changed: recorded {}, current engine is {}",
             capture.execution_profile,
             crate::model::EXECUTION_PROFILE_LINUX
         ));
     }
-    let bounds_now = host::capture_bounds();
+    let bounds_now = host::capture_bounds(profile);
     let bounds_recorded = &capture.capture_bounds;
     for (what, recorded, now) in [
         (
             "timeout_ms",
-            &bounds_recorded.timeout_ms,
-            &bounds_now.timeout_ms,
+            Some(&bounds_recorded.timeout_ms),
+            Some(&bounds_now.timeout_ms),
         ),
         (
             "max_stream_bytes",
-            &bounds_recorded.max_stream_bytes,
-            &bounds_now.max_stream_bytes,
+            Some(&bounds_recorded.max_stream_bytes),
+            Some(&bounds_now.max_stream_bytes),
         ),
         (
             "rlimit_as_mb",
-            &bounds_recorded.rlimit_as_mb,
-            &bounds_now.rlimit_as_mb,
+            Some(&bounds_recorded.rlimit_as_mb),
+            Some(&bounds_now.rlimit_as_mb),
         ),
         (
             "rlimit_cpu_s",
-            &bounds_recorded.rlimit_cpu_s,
-            &bounds_now.rlimit_cpu_s,
+            Some(&bounds_recorded.rlimit_cpu_s),
+            Some(&bounds_now.rlimit_cpu_s),
         ),
         (
             "rlimit_nofile",
-            &bounds_recorded.rlimit_nofile,
-            &bounds_now.rlimit_nofile,
+            Some(&bounds_recorded.rlimit_nofile),
+            Some(&bounds_now.rlimit_nofile),
+        ),
+        (
+            "rlimit_nproc",
+            Some(&bounds_recorded.rlimit_nproc),
+            Some(&bounds_now.rlimit_nproc),
+        ),
+        (
+            "cgroup_pids_max",
+            bounds_recorded.cgroup_pids_max.as_ref(),
+            bounds_now.cgroup_pids_max.as_ref(),
+        ),
+        (
+            "cgroup_memory_max",
+            bounds_recorded.cgroup_memory_max.as_ref(),
+            bounds_now.cgroup_memory_max.as_ref(),
+        ),
+        (
+            "cgroup_cpu_max",
+            bounds_recorded.cgroup_cpu_max.as_ref(),
+            bounds_now.cgroup_cpu_max.as_ref(),
         ),
     ] {
         if recorded != now {
-            drift.push(format!("capture bound {what} changed: {recorded} -> {now}"));
+            drift.push(format!(
+                "capture bound {what} changed: {} -> {}",
+                recorded.map(String::as_str).unwrap_or("<absent>"),
+                now.map(String::as_str).unwrap_or("<absent>")
+            ));
         }
     }
 
@@ -339,6 +367,12 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         }
     }
 
+    // The harness contract the observation was recorded under: replay
+    // re-executes under the SAME declared profile (a v2 observation cannot
+    // be reproduced under an approximated envelope — and without a writable
+    // cgroup v2 subtree the replay refuses, honestly).
+    let profile = host::ExecProfile::parse(&capture.execution_profile)?;
+
     // -- artifacts must reproduce exactly: verified, re-sealed snapshots -------
     // The executed images are the SEALED verified bytes (verify→execute race
     // closed); the materialized snapshot paths remain argv[0] + the evidence
@@ -388,7 +422,8 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let raw_reference_out = host::run_process_in(&authority_image, &capture.arguments, side_cwd)?;
+    let raw_reference_out =
+        host::run_process_in(&authority_image, &capture.arguments, side_cwd, profile)?;
     let reference_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
         clear_produce(prod)?;
@@ -396,7 +431,8 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     } else {
         None
     };
-    let raw_candidate_out = host::run_process_in(&candidate_image, &capture.arguments, side_cwd)?;
+    let raw_candidate_out =
+        host::run_process_in(&candidate_image, &capture.arguments, side_cwd, profile)?;
     let candidate_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
         clear_produce(prod)?;
@@ -434,6 +470,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
             raw_outcome,
             recorded.as_deref(),
             side_cwd,
+            profile,
         )
     };
     let reference_compared = normalize_side("reference", &raw_reference_out)?;
@@ -499,7 +536,8 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     semantic.id
                 )));
             }
-            let response_bytes = crate::ext::run_program(&snapshot, &request_bytes, side_cwd)?;
+            let response_bytes =
+                crate::ext::run_program(&snapshot, &request_bytes, side_cwd, profile)?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
             crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
@@ -636,6 +674,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     &request_bytes,
                     &request_cid,
                     side_cwd,
+                    profile,
                 )?;
                 let outcome_str = match &outcome {
                     crate::comparators::ComparatorOutcome::Equivalent => "equivalent",

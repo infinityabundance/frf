@@ -2681,6 +2681,7 @@ mod tests {
                 replay_scope: "single-run".into(),
             },
             produce: None,
+            execution_profile: None,
         };
         let semantic = crate::semantics::court_semantic_identity(
             &spec,
@@ -2749,6 +2750,9 @@ mod tests {
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
                 rlimit_nproc: "512".into(),
+            cgroup_pids_max: None,
+            cgroup_memory_max: None,
+            cgroup_cpu_max: None,
             },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),

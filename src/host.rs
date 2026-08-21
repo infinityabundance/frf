@@ -66,6 +66,62 @@ pub const EXEC_RLIMIT_NOFILE: u64 = 1024;
 /// the cgroup v2 execution profile (`frf-exec-linux-v2`) is for.
 pub const EXEC_RLIMIT_NPROC: u64 = 4096;
 
+// ---------------------------------------------------------------------------
+// Execution profiles
+// ---------------------------------------------------------------------------
+
+/// The declared harness contract an execution runs under (see
+/// `spec/execution-profile.md`). The engine implements two Linux profiles:
+/// the reference `frf-exec-linux-v1` (per-process setrlimit layer) and
+/// `frf-exec-linux-v2` (the cgroup v2 per-side AGGREGATE envelope on top of
+/// the same setrlimit layer). A profile is a protocol identifier; exact
+/// replay requires the same profile, and a requested profile is ENFORCED,
+/// never approximated (v2 without a writable cgroup v2 subtree refuses).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecProfile {
+    /// `frf-exec-linux-v1` — the reference profile.
+    LinuxV1,
+    /// `frf-exec-linux-v2` — cgroup v2 aggregate envelope + setrlimit.
+    LinuxV2,
+}
+
+impl ExecProfile {
+    /// Parse a protocol identifier. Unknown profiles are refused: a court
+    /// declaring a profile this engine does not implement cannot be run
+    /// (fail-closed, and the registry pins the namespace).
+    pub fn parse(s: &str) -> crate::error::Result<Self> {
+        match s {
+            crate::model::EXECUTION_PROFILE_LINUX => Ok(ExecProfile::LinuxV1),
+            crate::model::EXECUTION_PROFILE_LINUX_V2 => Ok(ExecProfile::LinuxV2),
+            other => Err(crate::error::FrfError::new(format!(
+                "unsupported execution profile {other:?}: this engine implements {} (the reference profile) and {} (the cgroup v2 aggregate envelope)",
+                crate::model::EXECUTION_PROFILE_LINUX,
+                crate::model::EXECUTION_PROFILE_LINUX_V2
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExecProfile::LinuxV1 => crate::model::EXECUTION_PROFILE_LINUX,
+            ExecProfile::LinuxV2 => crate::model::EXECUTION_PROFILE_LINUX_V2,
+        }
+    }
+}
+
+/// `frf-exec-linux-v2` — the cgroup v2 per-side aggregate envelope
+/// (pids.max / memory.max / cpu.max of the side's whole process tree).
+pub const CGROUP2_PIDS_MAX: u64 = 1024;
+/// 2 GiB — the per-side aggregate memory envelope (RLIMIT_AS is per
+/// process; a hostile tree distributes over descendants).
+pub const CGROUP2_MEMORY_MAX: u64 = 2 * 1024 * 1024 * 1024;
+/// `quota period` in microseconds: one CPU core per side tree (a declared
+/// contract; a court that needs more declares its own bounds).
+pub const CGROUP2_CPU_MAX: &str = "100000 100000";
+
+/// Unique per-side group-name suffix within this process.
+static CGROUP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Total budget for `ETXTBSY` spawn retries. Exec'ing a file another process
 /// just finished writing (or is still writing) transiently fails with
 /// `ExecutableFileBusy` — parallel CI and generated-script workflows hit
@@ -220,6 +276,198 @@ impl Drop for ExecImage {
             let _ = std::fs::remove_file(p);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// cgroup v2 — the per-side AGGREGATE envelope (`frf-exec-linux-v2`)
+// ---------------------------------------------------------------------------
+//
+// RLIMIT_NPROC bounds the processes of the side's real USER ID and
+// RLIMIT_AS/RLIMIT_CPU bound ONE process each: a hostile tree distributes
+// memory or CPU over descendants and the per-UID process cap is shared with
+// every other process of the same user. The cgroup v2 profile bounds the
+// side's WHOLE descendant tree — pids.max / memory.max / cpu.max are
+// aggregate, per side, per tree.
+//
+// The side moves ITSELF into its group in pre_exec (before exec): the move
+// is race-free (descendants inherit the cgroup at fork) and needs no
+// post-fork parent-side pid manipulation. setrlimit remains a second layer.
+//
+// Delegation: cgroupfs is only writable where the manager (systemd user
+// session with `Delegate=`, a container with a writable /sys/fs/cgroup, a
+// delegated subtree) made it writable. The harness locates a writable
+// cgroup v2 root and REFUSES the profile when none exists — a declared
+// profile is enforced, never approximated. `FRF_CGROUP2_ROOT` is the test
+// hook: it points the harness at a writable directory tree standing in for
+// cgroupfs (delegation is a machine property, not a test one).
+
+/// The `FRF_CGROUP2_ROOT` test hook: a writable directory tree standing in
+/// for cgroupfs (the regression suite cannot rely on real delegation). The
+/// literal value `none` forces the "no writable root" path deterministically
+/// on ANY host (including one with real delegation), so the refusal path is
+/// always testable.
+fn cgroup2_hook() -> Option<Option<PathBuf>> {
+    let v = std::env::var("FRF_CGROUP2_ROOT")
+        .ok()
+        .filter(|p| !p.is_empty())?;
+    if v == "none" {
+        return Some(None);
+    }
+    Some(Some(PathBuf::from(v)))
+}
+
+/// Is `dir` writable by this process (access(2) W_OK)?
+fn dir_writable(dir: &Path) -> bool {
+    // SAFETY: access(2) is async-signal-safe and takes a valid C string
+    // (the path is converted lossily, matching the rest of the crate).
+    let c = std::ffi::CString::new(dir.to_string_lossy().as_bytes()).unwrap_or_default();
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Locate a writable cgroup v2 root: the `FRF_CGROUP2_ROOT` test hook
+/// first, then `/sys/fs/cgroup` when it is v2 and writable, then the
+/// deepest writable ancestor of the current process's own cgroup (a
+/// delegated subtree). `Ok(None)` when no writable v2 root exists.
+pub fn cgroup2_root() -> Result<Option<PathBuf>> {
+    if let Some(hook) = cgroup2_hook() {
+        if let Some(p) = &hook {
+            if !p.join("cgroup.controllers").is_file() {
+                return Err(FrfError::new(format!(
+                    "FRF_CGROUP2_ROOT {} is not a cgroup v2 root (no cgroup.controllers)",
+                    p.display()
+                )));
+            }
+        }
+        return Ok(hook);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let sys = PathBuf::from("/sys/fs/cgroup");
+        if sys.join("cgroup.controllers").is_file() && dir_writable(&sys) {
+            return Ok(Some(sys));
+        }
+        // A delegated subtree: walk the current process's own cgroup path
+        // from the deepest ancestor upward and return the first writable
+        // v2 directory (the delegation point).
+        if let Ok(contents) = std::fs::read_to_string("/proc/self/cgroup") {
+            for line in contents.lines() {
+                // `0::/user.slice/user-1000.slice/...`
+                let path = line.split_once("::").map(|(_, p)| p).unwrap_or("");
+                let mut cur = sys.join(path.trim_start_matches('/'));
+                loop {
+                    if cur.join("cgroup.controllers").is_file() && dir_writable(&cur) {
+                        return Ok(Some(cur));
+                    }
+                    if !cur.pop() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// A per-side cgroup v2 group: the side's whole descendant tree runs in it,
+/// bounded by the profile's aggregate envelope; the group is removed when
+/// the side is reaped. `cgroup.procs` is opened WITHOUT close-on-exec so the
+/// child can move itself in during pre_exec.
+pub struct CgroupV2 {
+    dir: PathBuf,
+    procs_fd: Option<std::os::fd::RawFd>,
+}
+
+impl CgroupV2 {
+    /// Create `frf/<name>` under the writable root, apply the envelope, and
+    /// open `cgroup.procs` for the side's pre_exec self-move. Fail-closed:
+    /// any step (unwritable root, a controller not enabled, a limit file
+    /// that refuses the write) aborts — a partial envelope is never used.
+    pub fn create(root: &Path, name: &str) -> Result<CgroupV2> {
+        let dir = root.join("frf").join(name);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            FrfError::new(format!(
+                "cannot create the cgroup v2 group {}: {e} — the delegated root may be read-only or not delegated",
+                dir.display()
+            ))
+        })?;
+        for (what, value) in [
+            ("pids.max", CGROUP2_PIDS_MAX.to_string()),
+            ("memory.max", CGROUP2_MEMORY_MAX.to_string()),
+            ("cpu.max", CGROUP2_CPU_MAX.to_string()),
+        ] {
+            let path = dir.join(what);
+            std::fs::write(&path, format!("{value}\n")).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot apply the cgroup v2 envelope: writing {what} under {} failed: {e} — the controller may not be enabled in the delegated root's subtree_control",
+                    dir.display()
+                ))
+            })?;
+        }
+        // Open cgroup.procs WITHOUT O_CLOEXEC: the fd is inherited by the
+        // child, which writes its own pid in pre_exec. The write is the
+        // race-free move: descendants inherit the cgroup at fork. O_CREAT
+        // makes the regression suite's fake cgroupfs (a plain temp dir)
+        // provide the file the kernel provides on the real filesystem; on
+        // real cgroupfs O_CREAT on an existing pseudo-file is a no-op.
+        let c = std::ffi::CString::new(dir.join("cgroup.procs").to_string_lossy().as_bytes())
+            .map_err(|_| FrfError::new("cgroup.procs path contains a NUL byte"))?;
+        // SAFETY: open(2) with O_WRONLY|O_CREAT on a valid path.
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_WRONLY | libc::O_CREAT, 0o644) };
+        if fd < 0 {
+            return Err(FrfError::new(format!(
+                "cannot open {}: {}",
+                dir.join("cgroup.procs").display(),
+                std::io::Error::last_os_error()
+            )));
+        }
+        Ok(CgroupV2 {
+            dir,
+            procs_fd: Some(fd),
+        })
+    }
+
+    /// The inherited `cgroup.procs` fd the side writes its own pid to.
+    pub fn procs_fd(&self) -> std::os::fd::RawFd {
+        self.procs_fd.unwrap_or(-1)
+    }
+}
+
+impl Drop for CgroupV2 {
+    fn drop(&mut self) {
+        if let Some(fd) = self.procs_fd.take() {
+            // SAFETY: `fd` is an open fd owned by this guard.
+            unsafe { libc::close(fd) };
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+        // Best-effort: remove the empty `frf/` parent too.
+        if let Some(parent) = self.dir.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+}
+
+/// Write `pid` as ASCII decimal + newline into `buf`; returns the length.
+/// Async-signal-safe (no allocation), for the pre_exec self-move.
+fn write_pid(pid: libc::pid_t, buf: &mut [u8]) -> usize {
+    let mut tmp = [0u8; 16];
+    let mut n = 0usize;
+    let mut v = pid.unsigned_abs();
+    if v == 0 {
+        tmp[n] = b'0';
+        n += 1;
+    }
+    while v > 0 {
+        tmp[n] = b'0' + (v % 10) as u8;
+        n += 1;
+        v /= 10;
+    }
+    let mut i = 0usize;
+    while i < n {
+        buf[i] = tmp[n - 1 - i];
+        i += 1;
+    }
+    buf[i] = b'\n';
+    i + 1
 }
 
 /// Create a memfd, copy `bytes` into it, and seal it
@@ -388,7 +636,8 @@ pub fn rlimit_nproc() -> u64 {
 /// execution contract IS. `high-assurance` claim admission compares a
 /// premise's recorded bounds against this value, so a run made under any
 /// overridden contract is refused no matter what environment the compiler
-/// runs in.
+/// runs in. The reference profile is v1; a v2 run records its cgroup
+/// envelope and is (by the profile check) not reference-contract evidence.
 pub fn reference_capture_bounds() -> CaptureBounds {
     CaptureBounds {
         timeout_ms: EXEC_TIMEOUT.as_millis().to_string(),
@@ -397,6 +646,9 @@ pub fn reference_capture_bounds() -> CaptureBounds {
         rlimit_cpu_s: EXEC_RLIMIT_CPU_S.to_string(),
         rlimit_nofile: EXEC_RLIMIT_NOFILE.to_string(),
         rlimit_nproc: EXEC_RLIMIT_NPROC.to_string(),
+        cgroup_pids_max: None,
+        cgroup_memory_max: None,
+        cgroup_cpu_max: None,
     }
 }
 
@@ -407,16 +659,27 @@ pub fn reference_capture_bounds() -> CaptureBounds {
 /// contract it was actually made under. The reference contract is
 /// [`reference_capture_bounds`]; the two differ exactly when a test hook
 /// overrides a bound, and only the observation side may consult the
-/// effective value.
-pub fn capture_bounds() -> CaptureBounds {
-    CaptureBounds {
+/// effective value. The `frf-exec-linux-v2` profile additionally records
+/// its cgroup v2 aggregate envelope (`cgroup_*`); the reference profile
+/// records none.
+pub fn capture_bounds(profile: ExecProfile) -> CaptureBounds {
+    let mut bounds = CaptureBounds {
         timeout_ms: exec_timeout().as_millis().to_string(),
         max_stream_bytes: max_stream_bytes().to_string(),
         rlimit_as_mb: rlimit_as_mb().to_string(),
         rlimit_cpu_s: rlimit_cpu_s().to_string(),
         rlimit_nofile: rlimit_nofile().to_string(),
         rlimit_nproc: rlimit_nproc().to_string(),
+        cgroup_pids_max: None,
+        cgroup_memory_max: None,
+        cgroup_cpu_max: None,
+    };
+    if profile == ExecProfile::LinuxV2 {
+        bounds.cgroup_pids_max = Some(CGROUP2_PIDS_MAX.to_string());
+        bounds.cgroup_memory_max = Some(CGROUP2_MEMORY_MAX.to_string());
+        bounds.cgroup_cpu_max = Some(CGROUP2_CPU_MAX.to_string());
     }
+    bounds
 }
 
 /// SHA-256 hex digest of a byte slice.
@@ -462,20 +725,30 @@ pub struct ProcessOutcome {
     pub exit: String,
 }
 
-/// Execute `image` with `args`, capturing stdout/stderr without a shell.
+/// Execute `image` with `args`, capturing stdout/stderr without a shell,
+/// under the declared [`ExecProfile`].
 ///
 /// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
 /// before failing; everything else fails immediately.
-pub fn run_process(image: &ExecImage, args: &[String]) -> Result<ProcessOutcome> {
-    run_impl(image, args, None, None)
+pub fn run_process(
+    image: &ExecImage,
+    args: &[String],
+    profile: ExecProfile,
+) -> Result<ProcessOutcome> {
+    run_impl(image, args, None, None, profile)
 }
 
 /// [`run_process`] with a declared working directory: the side runs from
 /// `cwd`, so recorded root-relative argv paths resolve against the layout
 /// the replay reconstructed (bundle replay executes sides from the temp
 /// invocation root, never from the user's cwd).
-pub fn run_process_in(image: &ExecImage, args: &[String], cwd: &Path) -> Result<ProcessOutcome> {
-    run_impl(image, args, None, Some(cwd))
+pub fn run_process_in(
+    image: &ExecImage,
+    args: &[String],
+    cwd: &Path,
+    profile: ExecProfile,
+) -> Result<ProcessOutcome> {
+    run_impl(image, args, None, Some(cwd), profile)
 }
 
 /// Execute `image` with `args` and the given bytes on stdin (used by the
@@ -488,8 +761,9 @@ pub fn run_process_with_stdin(
     image: &ExecImage,
     args: &[String],
     stdin: &[u8],
+    profile: ExecProfile,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, Some(stdin), None)
+    run_impl(image, args, Some(stdin), None, profile)
 }
 
 /// [`run_process_with_stdin`] with a declared working directory (bundle
@@ -499,8 +773,9 @@ pub fn run_process_with_stdin_in(
     args: &[String],
     stdin: &[u8],
     cwd: &Path,
+    profile: ExecProfile,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, Some(stdin), Some(cwd))
+    run_impl(image, args, Some(stdin), Some(cwd), profile)
 }
 
 fn run_impl(
@@ -508,6 +783,7 @@ fn run_impl(
     args: &[String],
     stdin: Option<&[u8]>,
     cwd: Option<&Path>,
+    profile: ExecProfile,
 ) -> Result<ProcessOutcome> {
     // The program name the process observes (argv[0]) is the materialized
     // snapshot path — a sealed execution must not silently change argv[0]
@@ -532,6 +808,45 @@ fn run_impl(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // `frf-exec-linux-v2`: the side's WHOLE descendant tree runs in its own
+    // cgroup (pids.max / memory.max / cpu.max — the per-side aggregate
+    // envelope). The group is created BEFORE the spawn; the child moves
+    // ITSELF in during pre_exec (writing its own pid to the inherited
+    // cgroup.procs fd — race-free: descendants inherit the cgroup at fork).
+    // The guard lives until the child is reaped (run_impl is synchronous),
+    // then the group is removed. No writable cgroup v2 subtree = the profile
+    // REFUSES to run (a declared profile is enforced, never approximated).
+    #[cfg(target_os = "linux")]
+    let _cgroup: Option<CgroupV2> = if profile == ExecProfile::LinuxV2 {
+        let root = cgroup2_root()?.ok_or_else(|| {
+            FrfError::new(format!(
+                "{} was requested but no writable cgroup v2 subtree is delegated to this user: the side's aggregate envelope cannot be enforced; run under a delegating manager (a systemd user session with Delegate=, a container with a writable /sys/fs/cgroup) or use the reference profile {}",
+                ExecProfile::LinuxV2.as_str(),
+                ExecProfile::LinuxV1.as_str()
+            ))
+        })?;
+        Some(CgroupV2::create(
+            &root,
+            &format!(
+                "{}-{}",
+                std::process::id(),
+                CGROUP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ),
+        )?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "linux"))]
+    let _cgroup: Option<CgroupV2> = None;
+    #[cfg(not(target_os = "linux"))]
+    if profile == ExecProfile::LinuxV2 {
+        return Err(FrfError::new(format!(
+            "{} is a Linux profile; this host cannot enforce the cgroup v2 envelope — use the reference profile {}",
+            ExecProfile::LinuxV2.as_str(),
+            ExecProfile::LinuxV1.as_str()
+        )));
+    }
+
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
@@ -546,10 +861,24 @@ fn run_impl(
         let cpu_s = rlimit_cpu_s();
         let nofile = rlimit_nofile();
         let nproc = rlimit_nproc();
+        let cgroup_procs_fd = _cgroup.as_ref().map(CgroupV2::procs_fd);
         // SAFETY: `pre_exec` runs after fork(2), before execve(2), in the
-        // single-threaded child; setrlimit(2) is async-signal-safe.
+        // single-threaded child; setrlimit(2) and write(2) are
+        // async-signal-safe.
         unsafe {
             command.pre_exec(move || {
+                if let Some(fd) = cgroup_procs_fd {
+                    // Move the side into its cgroup BEFORE exec: descendants
+                    // inherit the cgroup at fork, so the aggregate envelope
+                    // bounds the whole tree, not just the direct process. A
+                    // failed move refuses the exec (fail-closed: a side
+                    // outside its envelope is not the declared contract).
+                    let mut buf = [0u8; 24];
+                    let n = write_pid(libc::getpid(), &mut buf);
+                    if libc::write(fd, buf.as_ptr().cast(), n) != n as isize {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
                 set_rlimit(libc::RLIMIT_AS, as_bytes)
                     .and_then(|_| set_rlimit(libc::RLIMIT_CPU, cpu_s))
                     .and_then(|_| set_rlimit(libc::RLIMIT_NOFILE, nofile))
@@ -1025,7 +1354,14 @@ mod tests {
     static HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn with_env<T>(overrides: &[(&str, &str)], body: impl FnOnce() -> T) -> T {
-        let _guard = HOOK_LOCK.lock().unwrap();
+        // Recover from a poisoned lock: a test that panicked inside an
+        // earlier body already restored the environment before resuming its
+        // unwind (the restore loop runs before the resume), so the
+        // environment is consistent and the suite can continue.
+        let _guard = match HOOK_LOCK.lock() {
+            Ok(g) => g,
+            Err(e) => e.into_inner(),
+        };
         let mut prior: Vec<(&str, Option<std::ffi::OsString>)> = Vec::new();
         for (k, v) in overrides {
             prior.push((k, std::env::var_os(k)));
@@ -1068,7 +1404,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+        let out = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
         assert_eq!(out.exit, "7");
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
@@ -1088,7 +1424,7 @@ mod tests {
         let hash_a = sha256_bytes(&bytes_a);
         let image = ExecImage::seal(&bytes_a, &hash_a, &materialized).unwrap();
 
-        let out = run_process(&image, &[]).unwrap();
+        let out = run_process(&image, &[], ExecProfile::LinuxV1).unwrap();
         assert_eq!(out.exit, "0");
         assert_eq!(out.stdout, b"sealed-A\n", "the sealed bytes must run");
         assert_eq!(
@@ -1101,7 +1437,7 @@ mod tests {
         // and BEFORE execution. A path-based exec would run the tampered
         // bytes; the sealed image still runs the verified bytes.
         std::fs::write(&materialized, b"#!/bin/sh\necho TAMPERED\n").unwrap();
-        let out2 = run_process(&image, &[]).unwrap();
+        let out2 = run_process(&image, &[], ExecProfile::LinuxV1).unwrap();
         assert_eq!(
             out2.stdout, b"sealed-A\n",
             "the executed image must be the sealed verified bytes, not the mutated pathname"
@@ -1161,7 +1497,7 @@ echo "zero=$0 one=$1"
         std::fs::write(&materialized, &bytes).unwrap();
         let hash = sha256_bytes(&bytes);
         let image = ExecImage::seal(&bytes, &hash, &materialized).unwrap();
-        let out = run_process(&image, &["argX".to_string()]).unwrap();
+        let out = run_process(&image, &["argX".to_string()], ExecProfile::LinuxV1).unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stdout = stdout.trim();
         assert!(
@@ -1175,11 +1511,166 @@ echo "zero=$0 one=$1"
         let _ = std::fs::remove_file(&materialized);
     }
 
+    // -- cgroup v2 (frf-exec-linux-v2) ---------------------------------------
+
+    /// A fake cgroup v2 root for the regression suite: a writable temp dir
+    /// with the v2 root marker and pre-created controller files (the real
+    /// cgroupfs would provide them).
+    fn fake_cgroup_root(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "frf-cgroup-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cgroup.controllers"),
+            "cpuset cpu io memory pids\n",
+        )
+        .unwrap();
+        dir
+    }
+
+    /// The v2 profile REFUSES when no writable cgroup v2 subtree exists: a
+    /// declared profile is enforced, never approximated. The `none` hook
+    /// forces the path deterministically on any host.
+    #[test]
+    fn the_v2_profile_refuses_without_a_writable_cgroup_root() {
+        let script = temp_script("v2-refuse");
+        std::fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        with_env(&[("FRF_CGROUP2_ROOT", "none")], || {
+            let err = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2)
+                .unwrap_err()
+                .0;
+            assert!(
+                err.contains("no writable cgroup v2 subtree"),
+                "error: {err}"
+            );
+        });
+        let _ = std::fs::remove_file(&script);
+    }
+
+    /// The hook root must actually be a cgroup v2 root.
+    #[test]
+    fn the_v2_profile_rejects_a_non_cgroup_hook_root() {
+        let script = temp_script("v2-badroot");
+        std::fs::write(&script, "#!/bin/sh\necho hi\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let not_a_root = std::env::temp_dir().join("frf-not-a-cgroup-root");
+        std::fs::create_dir_all(&not_a_root).unwrap();
+        with_env(
+            &[("FRF_CGROUP2_ROOT", not_a_root.to_str().unwrap())],
+            || {
+                let err = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2)
+                    .unwrap_err()
+                    .0;
+                assert!(err.contains("not a cgroup v2 root"), "error: {err}");
+            },
+        );
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir_all(&not_a_root);
+    }
+
+    /// The v2 profile applies the AGGREGATE envelope: the side's whole tree
+    /// runs in its own group with pids.max / memory.max / cpu.max written
+    /// and the side's own pid moved in (the pre_exec self-move), and the
+    /// group is removed once the side is reaped.
+    #[test]
+    fn the_v2_profile_applies_the_aggregate_envelope() {
+        let root = fake_cgroup_root("envelope");
+        let script = temp_script("v2-envelope");
+        // The side reports its own pid and what the harness wrote into its
+        // group (the fake root path is inherited through the environment).
+        let body = "#!/bin/sh\n\
+             echo my_pid=$$\n\
+             echo procs=$(cat \"$FRF_CGROUP2_ROOT\"/frf/*/cgroup.procs)\n\
+             echo pids_max=$(cat \"$FRF_CGROUP2_ROOT\"/frf/*/pids.max)\n\
+             echo memory_max=$(cat \"$FRF_CGROUP2_ROOT\"/frf/*/memory.max)\n\
+             echo cpu_max=$(cat \"$FRF_CGROUP2_ROOT\"/frf/*/cpu.max)\n";
+        std::fs::write(&script, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        with_env(&[("FRF_CGROUP2_ROOT", root.to_str().unwrap())], || {
+            let out =
+                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2).unwrap();
+            assert_eq!(out.exit, "0");
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut my_pid = "";
+            let mut procs = "";
+            let mut pids_max = "";
+            let mut memory_max = "";
+            let mut cpu_max = "";
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("my_pid=") {
+                    my_pid = v;
+                } else if let Some(v) = line.strip_prefix("procs=") {
+                    procs = v;
+                } else if let Some(v) = line.strip_prefix("pids_max=") {
+                    pids_max = v;
+                } else if let Some(v) = line.strip_prefix("memory_max=") {
+                    memory_max = v;
+                } else if let Some(v) = line.strip_prefix("cpu_max=") {
+                    cpu_max = v;
+                }
+            }
+            assert_eq!(
+                procs.trim(),
+                my_pid,
+                "the side must have moved ITSELF into its cgroup before exec (procs={procs:?} my_pid={my_pid:?}); full output: {text:?}"
+            );
+            assert_eq!(
+                pids_max.trim(),
+                CGROUP2_PIDS_MAX.to_string(),
+                "the aggregate pids.max must be applied"
+            );
+            assert_eq!(
+                memory_max.trim(),
+                CGROUP2_MEMORY_MAX.to_string(),
+                "the aggregate memory.max must be applied"
+            );
+            assert_eq!(
+                cpu_max.trim(),
+                CGROUP2_CPU_MAX,
+                "the aggregate cpu.max must be applied"
+            );
+        });
+        // The group is removed once the side is reaped: nothing lingers.
+        let leftover = std::fs::read_dir(root.join("frf"))
+            .map(|it| it.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(
+            leftover, 0,
+            "the per-side cgroup must be removed after the run"
+        );
+        assert_eq!(
+            leftover, 0,
+            "the per-side cgroup must be removed after the run"
+        );
+        let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn missing_program_is_a_clear_error() {
         let err = run_process(
             &ExecImage::from_path(Path::new("/nonexistent/frf-nope")),
             &[],
+            ExecProfile::LinuxV1,
         )
         .unwrap_err();
         assert!(err.0.contains("failed to execute"));
@@ -1202,7 +1693,8 @@ echo "zero=$0 one=$1"
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         with_default_hooks(|| {
-            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+            let out =
+                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
             assert_eq!(out.exit, "0");
             let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
             assert_eq!(
@@ -1222,7 +1714,7 @@ echo "zero=$0 one=$1"
         std::fs::write(&script, "#!/bin/sh\nkill -TERM $$\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+        let out = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
         assert_eq!(out.exit, "signal(15)");
         let _ = std::fs::remove_file(&script);
     }
@@ -1243,7 +1735,8 @@ echo "zero=$0 one=$1"
             .open(&script)
             .unwrap();
         let start = Instant::now();
-        let err = run_process(&ExecImage::from_path(&script), &[]).unwrap_err();
+        let err =
+            run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap_err();
         drop(held);
         assert!(err.0.contains("ETXTBSY"), "error: {}", err.0);
         assert!(
@@ -1271,7 +1764,8 @@ echo "zero=$0 one=$1"
         // the RUN, not the lock wait.
         let _ = with_default_hooks(|| {
             let start = Instant::now();
-            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+            let out =
+                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
             assert_eq!(out.exit, "0");
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
             assert!(
@@ -1302,7 +1796,8 @@ echo "zero=$0 one=$1"
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             }
             let start = Instant::now();
-            let err = run_process(&ExecImage::from_path(&script), &[]).unwrap_err();
+            let err =
+                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap_err();
             assert!(
                 err.0.contains("capture cap")
                     && err.0.contains("refusing to record truncated output"),
@@ -1338,7 +1833,8 @@ echo "zero=$0 one=$1"
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
                 let start = Instant::now();
-                let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+                let out =
+                    run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
                 assert!(
                     out.exit.starts_with("signal("),
                     "the CPU limit must terminate the side by signal, got {:?}",
@@ -1367,7 +1863,8 @@ echo "zero=$0 one=$1"
             std::fs::write(&script, "#!/bin/sh\nulimit -u\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
+            let out =
+                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
             assert_eq!(
                 String::from_utf8_lossy(&out.stdout).trim(),
                 "42",
@@ -1402,7 +1899,7 @@ echo "zero=$0 one=$1"
                 let start = Instant::now();
                 // The side is bounded (its forks fail) and the harness returns
                 // at the wall-clock deadline at the latest.
-                let _ = run_process(&ExecImage::from_path(&script), &[]);
+                let _ = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1);
                 assert!(
                     start.elapsed() < Duration::from_secs(8),
                     "a fork bomb must not outlive the profile's wall-clock bound (took {:?})",
@@ -1424,14 +1921,28 @@ echo "zero=$0 one=$1"
                 ("FRF_EXEC_RLIMIT_CPU_S", "7"),
             ],
             || {
-                let bounds = capture_bounds();
+                let bounds = capture_bounds(ExecProfile::LinuxV1);
                 assert_eq!(bounds.timeout_ms, "1234");
                 assert_eq!(bounds.max_stream_bytes, "2048");
                 assert_eq!(bounds.rlimit_cpu_s, "7");
                 assert_eq!(bounds.rlimit_as_mb, EXEC_RLIMIT_AS_MB.to_string());
                 assert_eq!(bounds.rlimit_nofile, EXEC_RLIMIT_NOFILE.to_string());
+                // The reference profile records no cgroup envelope.
+                assert_eq!(bounds.cgroup_pids_max, None);
+                // The v2 profile records its aggregate envelope.
+                let v2 = capture_bounds(ExecProfile::LinuxV2);
+                assert_eq!(
+                    v2.cgroup_pids_max.as_deref(),
+                    Some(CGROUP2_PIDS_MAX.to_string().as_str())
+                );
+                assert_eq!(
+                    v2.cgroup_memory_max.as_deref(),
+                    Some(CGROUP2_MEMORY_MAX.to_string().as_str())
+                );
+                assert_eq!(v2.cgroup_cpu_max.as_deref(), Some(CGROUP2_CPU_MAX));
                 // The profile's contract validates within the protocol maxima.
                 crate::model::validate_capture_bounds(&bounds).unwrap();
+                crate::model::validate_capture_bounds(&v2).unwrap();
             },
         );
     }

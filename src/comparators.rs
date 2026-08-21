@@ -764,8 +764,9 @@ pub fn run_external(
     request_bytes: &[u8],
     request_cid: &str,
     cwd: &Path,
+    profile: host::ExecProfile,
 ) -> Result<(ComparatorOutcome, Vec<u8>)> {
-    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd)?;
+    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",
@@ -895,6 +896,10 @@ pub struct EvaluationContext<'a> {
     /// back to `raw` when absent (a court with no normalizers compares the
     /// raw streams).
     pub compared: Option<(&'a ProcessOutcome, &'a ProcessOutcome)>,
+    /// The execution profile the comparison runs under: an externally served
+    /// axis's instrument runs under the SAME declared harness contract as
+    /// the sides (the per-side cgroup v2 envelope for `frf-exec-linux-v2`).
+    pub profile: crate::host::ExecProfile,
 }
 
 /// The verdict of evaluating one axis.
@@ -1015,6 +1020,7 @@ pub fn evaluate(
                 &request_bytes,
                 &request_cid,
                 context.cwd,
+                context.profile,
             )?;
             let response_cid = host::sha256_bytes(&response_bytes);
             let result = match outcome {

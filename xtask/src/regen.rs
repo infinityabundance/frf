@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_SCHEMA: &str = "frf-receipt-v15";
+const RECEIPT_SCHEMA: &str = "frf-receipt-v16";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -130,7 +130,9 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
         }
     }
     // The execution profile + applied capture bounds (v11; the process
-    // limit is v15).
+    // limit is v15, and the reference contract's RLIMIT_NPROC is 4096 since
+    // v15. The v16 cgroup envelope fields are ABSENT under the reference
+    // profile — a v15-shaped capture_bounds is a valid v16 document).
     doc["execution_profile"] = json!(CORPUS_PROFILE);
     doc["capture_bounds"] = json!({
         "timeout_ms": "60000",
@@ -138,7 +140,7 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
         "rlimit_as_mb": "2048",
         "rlimit_cpu_s": "30",
         "rlimit_nofile": "1024",
-        "rlimit_nproc": "512",
+        "rlimit_nproc": "4096",
     });
     // The expanded environment strata; recompute the digest from them unless
     // the fixture's violation IS the digest.

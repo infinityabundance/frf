@@ -444,6 +444,10 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // decided by [`crate::comparators::evaluate`], nothing else.
     let plan = crate::comparators::EvaluationPlan::from_capture(capture, &record.axis)?;
     let environment_digest = capture.environment.digest.clone();
+    // The harness contract the residual was observed under: a reduction
+    // re-executes both sides under the SAME declared profile (a v2
+    // observation cannot be reduced under an approximated envelope).
+    let profile = host::ExecProfile::parse(&capture.execution_profile)?;
 
     // The routed minimizer (the extension protocol, spec/minimizer.md): the
     // residual's κ route names the reducer that may serve it. A declared
@@ -464,6 +468,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             &candidate_image,
             &original_fixture_arg,
             &environment_digest,
+            profile,
         );
     }
 
@@ -486,6 +491,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         false,
         &mut attempts,
         residual_id,
+        profile,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -526,6 +532,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                 false,
                 &mut attempts,
                 residual_id,
+                profile,
             )?;
             let Some(outcome) = outcome else {
                 break 'outer; // budget exhausted — the gate sits around the execution
@@ -575,6 +582,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         false,
         &mut attempts,
         residual_id,
+        profile,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -686,6 +694,7 @@ fn run_attempt(
     accepted: bool,
     attempts: &mut Vec<ReductionAttempt>,
     what: &str,
+    profile: host::ExecProfile,
 ) -> Result<Option<ReductionAttemptOutcome>> {
     if attempts.len() >= MINIMIZE_MAX_ATTEMPTS {
         return Ok(None);
@@ -704,8 +713,8 @@ fn run_attempt(
             }
         })
         .collect();
-    let raw_reference_out = host::run_process(authority_image, &arguments)?;
-    let raw_candidate_out = host::run_process(candidate_image, &arguments)?;
+    let raw_reference_out = host::run_process(authority_image, &arguments, profile)?;
+    let raw_candidate_out = host::run_process(candidate_image, &arguments, profile)?;
     // The comparison surface is the NORMALIZED streams: re-apply the exact
     // snapshotted normalizers the court bound (a fresh attempt is a NEW
     // observation — its requests are not checked against the run's evidence).
@@ -716,6 +725,7 @@ fn run_attempt(
         &raw_reference_out,
         None,
         std::path::Path::new("."),
+        profile,
     )?;
     let candidate_out = crate::normalizers::apply_capture_normalizers(
         store,
@@ -724,6 +734,7 @@ fn run_attempt(
         &raw_candidate_out,
         None,
         std::path::Path::new("."),
+        profile,
     )?;
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
@@ -735,6 +746,7 @@ fn run_attempt(
         cwd: std::path::Path::new("."),
         raw: Some((&raw_reference_out, &raw_candidate_out)),
         compared: Some((&reference_out, &candidate_out)),
+        profile,
     };
     let evaluation = crate::comparators::evaluate(store, plan, &reference, &candidate, &context);
     let (outcome, recordable) = match evaluation {
@@ -793,6 +805,7 @@ fn minimize_external(
     candidate_image: &host::ExecImage,
     original_fixture_arg: &str,
     environment_digest: &str,
+    profile: host::ExecProfile,
 ) -> Result<String> {
     let residual_id = record.id.clone();
     let implementation = capture
@@ -839,8 +852,12 @@ fn minimize_external(
     };
     let request_bytes = crate::canon::canonical(&request)?.into_bytes();
     let request_cid = crate::ext::request_cid(&request_bytes);
-    let response_bytes =
-        crate::ext::run_program(&snapshot, &request_bytes, std::path::Path::new("."))?;
+    let response_bytes = crate::ext::run_program(
+        &snapshot,
+        &request_bytes,
+        std::path::Path::new("."),
+        profile,
+    )?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.
     crate::ext::require_canonical_response(&response_bytes, "minimizer response")?;
@@ -905,6 +922,7 @@ fn minimize_external(
         false,
         &mut attempts,
         &residual_id,
+        profile,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -933,6 +951,7 @@ fn minimize_external(
         false,
         &mut attempts,
         &residual_id,
+        profile,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -1216,6 +1235,17 @@ pub fn run_once(
             )));
         }
     }
+
+    // The DECLARED execution profile (spec/execution-profile.md): the
+    // harness contract the sides and every extension program run under.
+    // Absent = the reference profile. The profile is ENFORCED, never
+    // approximated — `frf-exec-linux-v2` requires a writable cgroup v2
+    // subtree and refuses without one.
+    let profile = host::ExecProfile::parse(
+        spec.execution_profile
+            .as_deref()
+            .unwrap_or(crate::model::EXECUTION_PROFILE_LINUX),
+    )?;
 
     let authority = store.load_authority(&spec.authority)?;
 
@@ -1676,7 +1706,7 @@ pub fn run_once(
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let reference_out = host::run_process(&authority_image, &arguments)?;
+    let reference_out = host::run_process(&authority_image, &arguments, profile)?;
     let mut reference = SideCapture::from_outcome(&reference_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
@@ -1684,7 +1714,7 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
-    let candidate_out = host::run_process(&candidate_image, &arguments)?;
+    let candidate_out = host::run_process(&candidate_image, &arguments, profile)?;
     let mut candidate = SideCapture::from_outcome(&candidate_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
@@ -1738,6 +1768,7 @@ pub fn run_once(
                 &stdout,
                 &stderr,
                 std::path::Path::new("."),
+                profile,
             )?;
             // The invocation + result records are written once the run id
             // exists (the evidence lives under captures/<run>/).
@@ -1822,8 +1853,12 @@ pub fn run_once(
             };
             let json = crate::canon::canonical(&request)?;
             let request_bytes = json.into_bytes();
-            let response_bytes =
-                crate::ext::run_program(&snap.image, &request_bytes, std::path::Path::new("."))?;
+            let response_bytes = crate::ext::run_program(
+                &snap.image,
+                &request_bytes,
+                std::path::Path::new("."),
+                profile,
+            )?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
             crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
@@ -1957,6 +1992,7 @@ pub fn run_once(
             cwd: std::path::Path::new("."),
             raw: Some((&reference_out, &candidate_out)),
             compared: Some((&reference_compared, &candidate_compared)),
+            profile,
         };
         let evaluation =
             crate::comparators::evaluate(store, &plan, &reference, &candidate, &context)?;
@@ -2311,8 +2347,8 @@ pub fn run_once(
             interpreter: candidate_interpreter,
         },
         court_semantic_identity,
-        execution_profile: crate::model::EXECUTION_PROFILE_LINUX.to_string(),
-        capture_bounds: host::capture_bounds(),
+        execution_profile: profile.as_str().to_string(),
+        capture_bounds: host::capture_bounds(profile),
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
@@ -2359,6 +2395,13 @@ pub fn challenge(
     let manifest: CourtManifest = store.parse_yaml(manifest_path)?;
     let spec = &manifest.court;
     crate::store::validate_id("court", &spec.id)?;
+    // The declared execution profile: the mutant run and the mutation
+    // provider execute under the same harness contract as the court's sides.
+    let profile = host::ExecProfile::parse(
+        spec.execution_profile
+            .as_deref()
+            .unwrap_or(crate::model::EXECUTION_PROFILE_LINUX),
+    )?;
 
     // The declared observables must be served comparators (the run itself
     // re-validates); the challenge needs them to scope the operators and the
@@ -2616,7 +2659,7 @@ pub fn challenge(
                 let request_bytes = crate::canon::canonical(&request)?.into_bytes();
                 let request_cid = crate::ext::request_cid(&request_bytes);
                 let response_bytes =
-                    crate::ext::run_program(&snap.image, &request_bytes, Path::new("."))?;
+                    crate::ext::run_program(&snap.image, &request_bytes, Path::new("."), profile)?;
                 let response_cid = host::sha256_bytes(&response_bytes);
                 // The protocol says canonical JSON: the response must BE its
                 // own canonical serialization.

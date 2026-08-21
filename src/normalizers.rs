@@ -139,7 +139,8 @@ pub fn interpret(
 }
 
 /// Run a snapshotted normalizer against one side's raw streams and interpret
-/// its response. Returns the normalized streams and the raw response bytes.
+/// its response, under the declared execution profile. Returns the
+/// normalized streams and the raw response bytes.
 pub fn run_side(
     image: &host::ExecImage,
     request_bytes: &[u8],
@@ -147,8 +148,9 @@ pub fn run_side(
     raw_stdout: &[u8],
     raw_stderr: &[u8],
     cwd: &Path,
+    profile: host::ExecProfile,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let response_bytes = ext::run_program(image, request_bytes, cwd)?;
+    let response_bytes = ext::run_program(image, request_bytes, cwd, profile)?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
     ext::require_canonical_response(&response_bytes, "normalizer response")?;
@@ -244,6 +246,7 @@ pub fn apply_capture_normalizers(
     raw_outcome: &host::ProcessOutcome,
     verify_request_cids: Option<&[String]>,
     cwd: &Path,
+    profile: host::ExecProfile,
 ) -> Result<host::ProcessOutcome> {
     let mut stdout = raw_outcome.stdout.clone();
     let mut stderr = raw_outcome.stderr.clone();
@@ -284,8 +287,15 @@ pub fn apply_capture_normalizers(
                 )));
             }
         }
-        let (new_stdout, new_stderr, _response_bytes) =
-            run_side(&snapshot, &request_bytes, semantic, &stdout, &stderr, cwd)?;
+        let (new_stdout, new_stderr, _response_bytes) = run_side(
+            &snapshot,
+            &request_bytes,
+            semantic,
+            &stdout,
+            &stderr,
+            cwd,
+            profile,
+        )?;
         stdout = new_stdout;
         stderr = new_stderr;
     }
