@@ -55,5 +55,4 @@ else:
         ],
     }
 
-json.dump(response, sys.stdout, ensure_ascii=False, separators=(",", ":"))
-sys.stdout.write("\n")
+json.dump(response, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_V13: &str = "frf-receipt-v13";
+const RECEIPT_V14: &str = "frf-receipt-v14";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -60,11 +60,15 @@ fn bump_semantic(c: &mut Value) {
     if c.get("residual_classifier").is_none() {
         c["residual_classifier"] = json!("text");
     }
+    if c.get("relation_version").is_none() {
+        c["relation_version"] = json!("v1");
+    }
     let spec = comparator_spec_hash(
         &id,
         c["relation_id"].as_str().unwrap_or_default(),
         c["extractor"].as_str().unwrap_or_default(),
         c["residual_classifier"].as_str().unwrap_or_default(),
+        c["relation_version"].as_str().unwrap_or_default(),
     );
     c["specification_hash"] = json!(spec);
 }
@@ -77,13 +81,19 @@ fn bump_semantic(c: &mut Value) {
 /// keeps its wrong hash so the corpus isolates exactly one rule per
 /// document.
 fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
-    doc["schema_version"] = json!(RECEIPT_V13);
+    doc["schema_version"] = json!(RECEIPT_V14);
     // v13: the normalizer relations applied to the compared streams, copied
     // from the capture (empty for a court with no normalizers), and the
     // extension implementations in provenance (normalizer / capture-adapter /
     // minimizer — empty when none were bound).
     if doc.get("normalizer_semantics").is_none() {
         doc["normalizer_semantics"] = json!([]);
+    }
+    // v14: the capture-adapter semantics (the axis-keyed observation-
+    // surface definitions served by external capture adapters), copied from
+    // the capture (empty when no axis was externally captured).
+    if doc.get("adapter_semantics").is_none() {
+        doc["adapter_semantics"] = json!([]);
     }
     let prov = &mut doc["provenance"];
     prov["schema_version"] = json!("frf-provenance-v3");
@@ -168,7 +178,7 @@ fn write(dir: &Path, rel: &str, bytes: &str) {
 /// from the regenerated golden fixture so everything else is consistent.
 fn wire_fixture(golden: &Value) -> Value {
     let mut doc = golden.clone();
-    let wire_spec = comparator_spec_hash("wire", "eq", "stderr-bytes", "wire");
+    let wire_spec = comparator_spec_hash("wire", "eq", "stderr-bytes", "wire", "v1");
     let request_cid =
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
     let result_cid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();

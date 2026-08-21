@@ -795,6 +795,9 @@ fn minimize_external(
     let request_cid = crate::ext::request_cid(&request_bytes);
     let response_bytes =
         crate::ext::run_program(&snapshot, &request_bytes, std::path::Path::new("."))?;
+    // The protocol says canonical JSON: the response must BE its own
+    // canonical serialization.
+    crate::ext::require_canonical_response(&response_bytes, "minimizer response")?;
     let response: MinimizerResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
         FrfError::new(format!(
             "minimizer {} produced an unparseable response: {e}",
@@ -1523,8 +1526,11 @@ pub fn run_once(
         .minimizers
         .iter()
         .map(|m| {
-            let specification_hash =
-                crate::semantics::minimizer_specification_hash(&m.id, &m.relation)?;
+            let specification_hash = crate::semantics::minimizer_specification_hash(
+                &m.id,
+                &m.relation,
+                &m.relation_version,
+            )?;
             Ok(MinimizerSemantic {
                 id: m.id.clone(),
                 relation_id: m.relation.clone(),
@@ -1537,8 +1543,11 @@ pub fn run_once(
         .capture_adapters
         .iter()
         .map(|a| {
-            let specification_hash =
-                crate::semantics::capture_adapter_specification_hash(&a.axis, &a.relation)?;
+            let specification_hash = crate::semantics::capture_adapter_specification_hash(
+                &a.axis,
+                &a.relation,
+                &a.relation_version,
+            )?;
             Ok(CaptureAdapterSemantic {
                 id: a.axis.clone(),
                 relation_id: a.relation.clone(),
@@ -1552,6 +1561,8 @@ pub fn run_once(
         &authority_sha256,
         &fixture_sha256,
         &comparator_semantics,
+        &normalizer_semantics,
+        &adapter_semantics,
     )?;
 
     // The fixture argument resolves to the SNAPSHOT path: the side reads
@@ -1757,6 +1768,9 @@ pub fn run_once(
             let request_bytes = json.into_bytes();
             let response_bytes =
                 crate::ext::run_program(&snap.snapshot, &request_bytes, std::path::Path::new("."))?;
+            // The protocol says canonical JSON: the response must BE its own
+            // canonical serialization.
+            crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
             let response: crate::model::CaptureAdapterResponse =
                 serde_json::from_slice(&response_bytes).map_err(|e| {
                     FrfError::new(format!(

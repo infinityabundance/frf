@@ -1,7 +1,7 @@
 # The witness extension protocol
 
-*Version: `frf-witness-request-v1` / `frf-witness-response-v1`
-(`frf-witness-statement-v1` for the recorded attestation).*
+*Version: `frf-witness-request-v1` / `frf-witness-response-v2`
+(`frf-witness-statement-v2` for the recorded attestation).*
 
 A witness is a *protocol participant*, not Rust code: any program that
 speaks this protocol can attest to a content-addressed evidence subject — a
@@ -18,10 +18,11 @@ The property that makes an attestation binding:
   never read from the caller, so a witness cannot be pointed at a forged
   address;
 - the statement's identity covers the subject, the witness SEMANTIC (what
-  the attestation relation is: `{id, relation}` →
-  `FRF/WITNESS-SPEC/v1`), the witness IMPLEMENTATION (the program bytes,
-  sealed BEFORE it runs, plus its artifact identity), the exact statement,
-  the attestation, and the request/response content addresses.
+  the attestation relation is: `{id, relation, relation_version}` →
+  `FRF/WITNESS-SPEC/v2` — the relation's version is part of its semantic
+  identity, in every protocol), the witness IMPLEMENTATION (the program
+  bytes, sealed BEFORE it runs, plus its artifact identity), the exact
+  statement, the attestation, and the request/response content addresses.
 
 ## 1. Attesting a subject
 
@@ -66,17 +67,29 @@ proved its own identity and derivation.
 
 ```json
 {
-  "schema_version": "frf-witness-response-v1",
+  "schema_version": "frf-witness-response-v2",
   "request_id": "<SHA-256 of the exact request bytes received>",
   "indeterminate": false,
   "failure": null,
   "attestation": {
     "statement": "the candidate diverges on the malformed fixture (witnessed)",
-    "verified": true,
+    "outcome": "affirm",
     "detail": "independent review confirms the statement against the subject content address ..."
   }
 }
 ```
+
+The response MUST be its own canonical serialization (RFC 8785): the host
+strict-parses the bytes, re-encodes the parsed document canonically, and
+refuses anything that is not byte-identical — one semantic response has one
+evidence identity, so two byte sequences cannot split it.
+
+The attestation's `outcome` is the WITNESS's assertion — `affirm`, `deny`,
+or `indeterminate` — and it is recorded as the witness's claim. FRF's own
+`verified` is a different predicate: whether the recorded evidence object's
+identity and derivations re-prove on read. A witness that says `affirm` is
+a witness that affirms; it is not, by that fact alone, proven independent or
+truthful.
 
 ## 4. Fail-closed interpretation
 
@@ -87,7 +100,9 @@ proved its own identity and derivation.
 - a missing `attestation` is a refusal — an attestation is the ONLY
   admissible outcome (a decline is never recorded as "not verified");
 - the attestation's `statement` MUST equal the requested statement — a
-  witness cannot attest a different sentence.
+  witness cannot attest a different sentence;
+- the attestation's `outcome` MUST be `affirm`, `deny`, or `indeterminate`
+  (a closed set — anything else is refused).
 
 ## 5. Evidence and verification
 

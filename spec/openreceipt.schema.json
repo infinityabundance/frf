@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
   "title": "OpenReceipt",
-  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v13). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance).",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v14). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance). v14 records the capture-adapter relations that defined the observations delivered to externally served axes (adapter_semantics) — the adapter extraction scheme is part of the court's question, so it enters the court semantic identity (FRF/COURT/v2).",
   "type": "object",
   "required": [
     "schema_version",
@@ -11,6 +11,7 @@
     "provenance",
     "comparator_semantics",
     "normalizer_semantics",
+    "adapter_semantics",
     "execution_profile",
     "capture_bounds",
     "authority",
@@ -26,7 +27,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v13"
+      "const": "frf-receipt-v14"
     },
     "run": {
       "type": "string"
@@ -224,6 +225,34 @@
           "applies_to": {
             "type": "string",
             "enum": ["stdout", "stderr", "both"]
+          },
+          "relation_version": {
+            "type": "string"
+          },
+          "specification_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "adapter_semantics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "relation_id",
+          "relation_version",
+          "specification_hash"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "relation_id": {
+            "type": "string"
           },
           "relation_version": {
             "type": "string"

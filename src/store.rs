@@ -603,26 +603,28 @@ impl Store {
     }
 
     /// The EVIDENCE UNIVERSE of the store right now: every residual head
-    /// (id + projected disposition + the event that supplied it), receipt,
-    /// run, authority, series snapshot, and reduction record present — sorted
-    /// and content-addressed. A claim compiled now is admissible relative to
-    /// THIS universe: no unresolved residual in it intersects the claim's
-    /// scope, and the compiled claim carries the snapshot, so the negative
-    /// search is portable and a later store mutation cannot silently change
-    /// what the claim means.
+    /// (id + RECORD CONTENT ADDRESS + fingerprint + projected disposition +
+    /// the event that supplied it) and every other member of the universe
+    /// (receipt, run, authority, series, reduction) as a TYPED CONTENT
+    /// REFERENCE (kind/id/cid) — sorted and content-addressed. A claim
+    /// compiled now is admissible relative to THIS universe: no unresolved
+    /// residual in it intersects the claim's scope, and the compiled claim
+    /// carries the snapshot, so the negative search is portable and a later
+    /// store mutation cannot silently change what the claim means. The CID
+    /// commits the exact bytes the blocker scan depended on — residual
+    /// records and authority records by their canonical content hash (their
+    /// ids are labels), runs/receipts/series/reductions by their
+    /// content-derived addresses.
     pub fn knowledge_snapshot(&self) -> Result<KnowledgeSnapshot> {
         let mut snapshot = KnowledgeSnapshot {
             schema_version: crate::model::SCHEMA_CLAIM.to_string(),
             cid: String::new(),
             residual_heads: Vec::new(),
-            receipts: Vec::new(),
-            runs: Vec::new(),
-            authorities: Vec::new(),
-            series: Vec::new(),
-            reductions: Vec::new(),
+            objects: Vec::new(),
         };
 
-        // Residual heads: every residual record with its projected head
+        // Residual heads: every residual record with its canonical record
+        // content address, its fingerprint, and its projected head
         // disposition (the event chain is verified on load).
         let residuals_dir = self.root.join("residuals");
         if residuals_dir.is_dir() {
@@ -635,12 +637,15 @@ impl Store {
             names.sort();
             for name in names {
                 let id = name.trim_end_matches(".yaml").to_string();
+                let record = self.load_residual(&id)?;
                 let events = self.disposition_events(&id)?;
                 let disposition = events
                     .last()
                     .map(|e| e.disposition.clone())
                     .unwrap_or(Disposition::Open);
-                snapshot.residual_heads.push(ResidualHead {
+                snapshot.residual_heads.push(SnapshotResidualHead {
+                    record_cid: crate::semantics::record_content_identity(&record)?,
+                    fingerprint: crate::semantics::residual_fingerprint(&record)?,
                     id,
                     disposition: disposition.as_str().to_string(),
                     disposition_event_id: events.last().map(|e| e.event_id.clone()),
@@ -649,9 +654,12 @@ impl Store {
             snapshot.residual_heads.sort_by(|a, b| a.id.cmp(&b.id));
         }
 
-        // Receipts, runs, authorities, series, reductions: deterministic
-        // sorted listings. Runs are the capture directories; the rest are
-        // record files.
+        // The other members of the universe, as typed content references.
+        // Runs, receipts, series, and reductions are content-addressed by
+        // construction (their verified id IS their content address); an
+        // authority's id is a LABEL, so its cid is the canonical hash of its
+        // record — the exact bytes the blocker scan's lineage computation
+        // reads.
         let listing = |sub: &str| -> Result<Vec<String>> {
             let dir = self.root.join(sub);
             let mut out = Vec::new();
@@ -676,11 +684,63 @@ impl Store {
             out.sort();
             Ok(out)
         };
-        snapshot.receipts = listing("receipts")?;
-        snapshot.runs = listing("captures")?;
-        snapshot.authorities = listing("authorities")?;
-        snapshot.series = listing("series")?;
-        snapshot.reductions = listing("reductions")?;
+        for receipt in listing("receipts")? {
+            // The verified receipt id is `receipt-{run}-{digest}`; the digest
+            // IS the content address (verified on read).
+            let cid = receipt
+                .strip_prefix("receipt-")
+                .and_then(|rest| rest.rsplit_once('-'))
+                .map(|(_, d)| d.to_string())
+                .unwrap_or_default();
+            snapshot.objects.push(SnapshotObject {
+                kind: "receipt".to_string(),
+                id: receipt,
+                cid,
+            });
+        }
+        for run in listing("captures")? {
+            let verified = crate::verify::load_capture_verified(self, &run)?;
+            let residuals: Vec<ResidualRecord> = verified
+                .capture
+                .residuals
+                .iter()
+                .map(|rid| self.load_residual(rid))
+                .collect::<Result<_>>()?;
+            let cid = verified.digest(&residuals)?;
+            snapshot.objects.push(SnapshotObject {
+                kind: "run".to_string(),
+                id: run,
+                cid,
+            });
+        }
+        for authority in listing("authorities")? {
+            let record = self.load_authority(&authority)?;
+            let cid = crate::semantics::record_content_identity(&record)?;
+            snapshot.objects.push(SnapshotObject {
+                kind: "authority".to_string(),
+                id: authority,
+                cid,
+            });
+        }
+        for series in listing("series")? {
+            let cid = series.clone();
+            snapshot.objects.push(SnapshotObject {
+                kind: "series".to_string(),
+                id: series,
+                cid,
+            });
+        }
+        for reduction in listing("reductions")? {
+            let cid = reduction.clone();
+            snapshot.objects.push(SnapshotObject {
+                kind: "reduction".to_string(),
+                id: reduction,
+                cid,
+            });
+        }
+        snapshot.objects.sort_by(|a, b| {
+            (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str()))
+        });
 
         let cid = crate::semantics::knowledge_snapshot_identity(&snapshot)?;
         snapshot.cid = cid;

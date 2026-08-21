@@ -14,8 +14,11 @@ comparator receives; the raw outcome survives as the request evidence.
 The two identities are always separate:
 
 - **Semantic identity** — what the capture *is*: a canonical specification
-  document `{id (the axis), relation}` whose SHA-256
-  (`FRF/CAPTURE-ADAPTER-SPEC/v1`) is the adapter's `specification_hash`.
+  document `{id (the axis), relation, relation_version}` whose SHA-256
+  (`FRF/CAPTURE-ADAPTER-SPEC/v2`) is the adapter's `specification_hash`.
+  The adapter's extraction scheme is part of the court's QUESTION: it enters
+  the court semantic identity (FRF/COURT/v2), so two courts that differ
+  only in how an axis was captured ask different questions.
 - **Implementation identity** — what *captured* it: the SHA-256 of the
   program bytes (sealed BEFORE it runs) plus its ARTIFACT identity,
   recorded in the capture's `provenance.adapter_implementations`.

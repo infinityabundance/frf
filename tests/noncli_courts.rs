@@ -447,12 +447,12 @@ cand = dur(req["candidate"])
 base = {"schema_version": "frf-comparator-response-v2", "request_id": request_id, "indeterminate": False, "failure": None}
 if ref is None or cand is None:
     out = {"surface": "latency-parse", "raw_reference": str(ref), "raw_candidate": str(cand)}
-    print(json.dumps({**base, "equivalent": False, "residuals": [out]}, separators=(",", ":")))
+    sys.stdout.write(json.dumps({**base, "equivalent": False, "residuals": [out]}, sort_keys=True, separators=(",", ":")))
 elif cand <= 2 * ref:
-    print(json.dumps({**base, "equivalent": True, "residuals": []}, separators=(",", ":")))
+    sys.stdout.write(json.dumps({**base, "equivalent": True, "residuals": []}, sort_keys=True, separators=(",", ":")))
 else:
     out = {"surface": "latency-ratio", "raw_reference": str(ref), "raw_candidate": str(cand)}
-    print(json.dumps({**base, "equivalent": False, "residuals": [out]}, separators=(",", ":")))
+    sys.stdout.write(json.dumps({**base, "equivalent": False, "residuals": [out]}, sort_keys=True, separators=(",", ":")))
 "#;
 
 const TIMING_MANIFEST: &str = "court:\n  id: timing-bench\n  question: >-\n    For the bench spec in fixture family timing-bench, is the candidate's\n    latency within the declared envelope of the reference's?\n  falsifier: >-\n    The candidate's latency exceeds twice the reference's.\n  authority: timing-ref-1.0\n  candidate:\n    name: timing-cand\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: timing-cand.sh\n  fixture:\n    id: bench-spec.conf\n    path: frf/courts/timing-bench/fixtures/bench-spec.conf\n    arguments: [\"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: timing-bench\n    platforms: [\"x86_64-linux\"]\n    observables: [timing.latency]\n    normalizers: []\n    replay_scope: single-run\ncomparators:\n  - axis: timing.latency\n    relation: within-2x\n    extractor: latency-ms\n    residual_classifier: text\n    relation_version: \"v1\"\n    program: timing-compare.py\n";

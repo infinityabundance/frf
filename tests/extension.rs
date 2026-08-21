@@ -206,8 +206,7 @@ response = {\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
 }\n\
-json.dump(response, sys.stdout, separators=(\",\", \":\"))\n\
-sys.stdout.write(\"\\n\")\n",
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
     );
     let manifest = fs::read_to_string(work.path(MANIFEST)).unwrap();
     let variant = format!(
@@ -257,10 +256,9 @@ response = {\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
 }\n\
-json.dump(response, sys.stdout, separators=(\",\", \":\"))\n\
-sys.stdout.write(\"\\n\")\n";
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n";
 
-const WIRE_COMPARATOR: &str = "#!/usr/bin/env python3\nimport hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nassert req[\"schema_version\"] == \"frf-comparator-request-v4\", req\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = req[\"reference\"][\"adapted\"][\"payload_base64\"]\ncand = req[\"candidate\"][\"adapted\"][\"payload_base64\"]\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"dns-wire-bytes\", \"raw_reference\": ref, \"raw_candidate\": cand}]}, separators=(\",\", \":\")))\n";
+const WIRE_COMPARATOR: &str = "#!/usr/bin/env python3\nimport hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nassert req[\"schema_version\"] == \"frf-comparator-request-v4\", req\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = req[\"reference\"][\"adapted\"][\"payload_base64\"]\ncand = req[\"candidate\"][\"adapted\"][\"payload_base64\"]\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, sort_keys=True, separators=(\",\", \":\")))\nelse:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"dns-wire-bytes\", \"raw_reference\": ref, \"raw_candidate\": cand}]}, sort_keys=True, separators=(\",\", \":\")))\n";
 
 #[test]
 fn a_capture_adapter_serves_a_domain_axis() {
@@ -533,8 +531,7 @@ response = {\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
 }\n\
-json.dump(response, sys.stdout, separators=(\",\", \":\"))\n\
-sys.stdout.write(\"\\n\")\n",
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
     );
     // Point the manifest at the lying minimizer.
     let manifest_path = work.path("frf/courts/cli-external-minimizer/manifest.yaml");
@@ -622,18 +619,17 @@ req = json.loads(raw.decode(\"utf-8\"))\n\
 assert req[\"schema_version\"] == \"frf-witness-request-v1\", req\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v1\",\n\
+    \"schema_version\": \"frf-witness-response-v2\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
     \"attestation\": {\n\
         \"statement\": req[\"statement\"],\n\
-        \"verified\": True,\n\
+        \"outcome\": \"affirm\",\n\
         \"detail\": \"independent confirmation\",\n\
     },\n\
 }\n\
-json.dump(response, sys.stdout, separators=(\",\", \":\"))\n\
-sys.stdout.write(\"\\n\")\n";
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n";
 
 #[test]
 fn a_witness_attests_a_content_addressed_subject() {
@@ -683,7 +679,7 @@ fn a_witness_attests_a_content_addressed_subject() {
     );
     assert_eq!(stmt.statement, statement);
     assert_eq!(stmt.attestation.statement, statement);
-    assert!(stmt.attestation.verified);
+    assert_eq!(stmt.attestation.outcome, "affirm");
     // The preserved request names the subject + statement; the preserved
     // response cryptographically names the request.
     let request: serde_json::Value = serde_json::from_str(
@@ -747,14 +743,13 @@ import hashlib, json, sys\n\
 raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v1\",\n\
+    \"schema_version\": \"frf-witness-response-v2\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
     \"attestation\": None,\n\
 }\n\
-json.dump(response, sys.stdout, separators=(\",\", \":\"))\n\
-sys.stdout.write(\"\\n\")\n",
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
     );
     let out = frf(
         &work,

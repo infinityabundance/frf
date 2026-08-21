@@ -280,7 +280,9 @@ fn captures_are_self_consistent() {
                 &cap.court_spec,
                 &cap.authority_artifact.sha256,
                 &cap.fixture_sha256,
-                &cap.comparator_semantics
+                &cap.comparator_semantics,
+                &cap.normalizer_semantics,
+                &cap.adapter_semantics,
             )
             .unwrap(),
             cap.court_semantic_identity
@@ -1141,7 +1143,7 @@ fn witness_statements_are_self_consistent() {
             }
             _ => {}
         }
-        assert!(stmt.attestation.verified);
+        assert_eq!(stmt.attestation.outcome, "affirm");
         assert_eq!(stmt.attestation.statement, stmt.statement);
         found += 1;
     }

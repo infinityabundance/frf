@@ -1215,7 +1215,7 @@ fn claim_json_renderer_emits_the_ir_canonically() {
     let first = stdout(&out);
     let value: serde_json::Value = serde_json::from_str(&first).unwrap();
     assert_eq!(value["receipt"], receipt);
-    assert_eq!(value["schema_version"], "frf-claim-v3");
+    assert_eq!(value["schema_version"], "frf-claim-v4");
     assert_eq!(value["scope"]["observables"][0], "exit");
     // Determinism: a second emission is byte-identical (canonical form).
     let out = frf(

@@ -5,7 +5,7 @@ by `frf claim compile` from a verified receipt (`ReceiptVerified`) — the only
 code path that can emit a positive claim sentence — and written to
 `claims/<receipt-id>.yaml` (or rendered canonically with `--json`).
 
-The claim schema is `frf-claim-v3`. The core of the protocol is the paper's
+The claim schema is `frf-claim-v4`. The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of knowledge:
 
 ```text
@@ -23,7 +23,7 @@ CARRIES U: the negative search is as portable as the premises.
 
 ```text
 ClaimRecord {
-    schema_version     frf-claim-v3
+    schema_version     frf-claim-v4
     receipt            the premise receipt (v0: exactly one premise)
     authority          prose id of the admitted reference
     candidate          { name, version_or_commit, identity_hash } — the
@@ -45,16 +45,17 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v3
-    cid                SHA-256 of FRF/KNOWLEDGE/v1 over the snapshot's fields
-    residual_heads     every residual present in U, with its head disposition
-                       (id + disposition + the disposition event that
-                       supplied it)
-    receipts           receipt ids present in U
-    runs               run ids present in U
-    authorities        admitted authority ids present in U
-    series             series snapshot ids present in U
-    reductions         reduction record ids present in U
+    schema_version     frf-claim-v4
+    cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
+    residual_heads     every residual present in U, committed as an exact
+                       immutable observation: (id, record_cid — the content
+                       address of the record's own fields, fingerprint,
+                       disposition, and the disposition event that supplied
+                       it). The blocker scan reads those records, so the
+                       universe commits their bytes, not their labels.
+    objects            every other member of U as a typed content reference:
+                       (kind, id, cid) for receipts, runs, authorities,
+                       series, and reductions
 }
 ```
 

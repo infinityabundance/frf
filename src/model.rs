@@ -43,8 +43,12 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// output directory is walked after execution and captured immutably —
 /// every produced file is copied under the run, hashed, and recorded in the
 /// side capture, so a court observes what its sides BUILD, not only what
-/// they print.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v10";
+/// they print. v10 records the normalizer relations applied to the compared
+/// streams and the normalizer/capture-adapter/minimizer implementations
+/// bound at observation time. v11: the recorded `court_semantic_identity`
+/// is the FRF/COURT/v2 formula — the question now covers the normalizer
+/// and capture-adapter SEMANTICS, not only the comparator relations.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v11";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -58,27 +62,30 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// event in the hash-chained history, it does not merely copy state. v9
 /// pins each residual's sign to the exact ExecutionSeries snapshot it was
 /// derived from (per coordinate system — `sign.trajectory_evidence`), so
-/// later experiments that reference the
-/// same content-addressed run can never change what a receipt means. v10
-/// makes the comparator layer OBSERVABLE-PLUGGABLE: observable ids and
-/// residual kinds become open protocol identifiers (no closed enum), each
-/// comparator semantic carries its extractor and residual classifier (its
-/// specification hash REDERIVES from its own fields), external
-/// implementations record their artifact identity, and an externally served
-/// observable binds the exact comparator request/result records that
-/// produced its verdict. v11 binds the EXECUTION PROFILE: which reference
-/// execution contract observed the run and the exact capture bounds that
-/// applied (timeout, stream caps, resource limits) — an observation is
-/// made under a declared harness contract, and exact replay requires the
-/// same one. v12 replaces the single drift/slew/series sign with
-/// TRAJECTORY EVIDENCE: a residual does not have one universal drift — it
-/// has a trajectory with respect to a coordinate system, and the receipt
-/// entry carries one entry per coordinate system the run participates in
-/// (`sign.trajectory_evidence`), each pinning the exact ExecutionSeries
-/// snapshot the drift/slew were derived from. The body is serialized as
-/// canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
-/// bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v13";
+/// later experiments that reference the same content-addressed run can
+/// never change what a receipt means. v10 makes the comparator layer
+/// OBSERVABLE-PLUGGABLE: observable ids and residual kinds become open
+/// protocol identifiers (no closed enum), each comparator semantic carries
+/// its extractor and residual classifier (its specification hash REDERIVES
+/// from its own fields), external implementations record their artifact
+/// identity, and an externally served observable binds the exact comparator
+/// request/result records that produced its verdict. v11 binds the
+/// EXECUTION PROFILE: which reference execution contract observed the run
+/// and the exact capture bounds that applied (timeout, stream caps,
+/// resource limits) — an observation is made under a declared harness
+/// contract, and exact replay requires the same one. v12 replaces the
+/// single drift/slew/series sign with TRAJECTORY EVIDENCE: a residual does
+/// not have one universal drift — it has a trajectory with respect to a
+/// coordinate system, and the receipt entry carries one entry per
+/// coordinate system the run participates in (`sign.trajectory_evidence`),
+/// each pinning the exact ExecutionSeries snapshot the drift/slew were
+/// derived from. v13 records the normalizer relations applied to the
+/// compared streams. v14: the receipt also carries the capture-ADAPTER
+/// relations applied (the axis-keyed observation semantics — part of the
+/// court semantic identity, so a receipt can rederive the question it
+/// binds). The body is serialized as canonical JSON (RFC 8785) and its
+/// identity is the full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v14";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -88,8 +95,11 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v13";
 /// committed state of knowledge — no unresolved residual IN U intersects K —
 /// and the compiled claim carries U's content address, so the negative
 /// search (not merely the positive premises) is portable and reproducible
-/// by any implementation.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v3";
+/// by any implementation. v4: the knowledge snapshot is a TYPED CONTENT
+/// REFERENCE — every residual head commits its record content address and
+/// fingerprint, and the universe is a list of typed objects (kind, id, cid),
+/// so the negative search's dependency set is itself content-addressed.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v4";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 /// Environment identity block recorded in every capture at court time. v2
@@ -303,8 +313,8 @@ pub const SCHEMA_CAPTURE_ADAPTER_RESULT: &str = "frf-capture-result-v1";
 /// [`WitnessStatement`] with the canonical request/response preserved as
 /// evidence.
 pub const SCHEMA_WITNESS_REQUEST: &str = "frf-witness-request-v1";
-pub const SCHEMA_WITNESS_RESPONSE: &str = "frf-witness-response-v1";
-pub const SCHEMA_WITNESS_STATEMENT: &str = "frf-witness-statement-v1";
+pub const SCHEMA_WITNESS_RESPONSE: &str = "frf-witness-response-v2";
+pub const SCHEMA_WITNESS_STATEMENT: &str = "frf-witness-statement-v2";
 
 /// Versions of the extension RELATION lines. Bump whenever a relation's
 /// semantics change; implementation changes alone never do (the program
@@ -331,7 +341,7 @@ pub struct NormalizerSemantic {
     pub applies_to: String,
     pub relation_version: String,
     /// SHA-256 of the canonical normalizer specification document
-    /// (`FRF/NORMALIZER-SPEC/v1`).
+    /// (`FRF/NORMALIZER-SPEC/v2`).
     pub specification_hash: String,
 }
 
@@ -503,7 +513,12 @@ pub struct MinimizerResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinimizerAttempt {
-    pub attempt: u32,
+    /// The attempt index, as a STRING: the canonical JSON value domain is
+    /// strings/arrays/booleans/null, so an attempt counter cannot be a JSON
+    /// number (RFC 8785 number serialization is out of scope for the
+    /// protocol value domain). The core records its own executable attempts
+    /// with real ordering in the reduction record.
+    pub attempt: String,
     pub fixture_sha256: String,
     pub kept: bool,
 }
@@ -705,7 +720,13 @@ pub struct WitnessResponse {
 pub struct WitnessAttestation {
     /// The exact statement the witness attests (must equal the request's).
     pub statement: String,
-    pub verified: bool,
+    /// The witness's own assertion: `affirm`, `deny`, or `indeterminate`.
+    /// This is the witness's claim about the world — NOT FRF's verification.
+    /// FRF's verification of the evidence object's integrity is the
+    /// content-address + the loader's rehash; the two predicates are never
+    /// conflated. A different executable hash is not evidence of independent
+    /// observation either — independence is a future explicit relation.
+    pub outcome: String,
     pub detail: String,
 }
 
@@ -2792,6 +2813,11 @@ pub struct Receipt {
     /// the capture.
     #[serde(default)]
     pub normalizer_semantics: Vec<NormalizerSemantic>,
+    /// The capture-adapter relations applied (axis-keyed observation
+    /// semantics), copied from the capture — part of the court semantic
+    /// identity, so a receipt can rederive the question it binds.
+    #[serde(default)]
+    pub adapter_semantics: Vec<CaptureAdapterSemantic>,
     /// The execution profile the observation was made under, and the capture
     /// bounds that applied (copied from the capture — a receipt never
     /// guesses what the harness enforced).
@@ -3258,20 +3284,43 @@ pub struct ClaimRecord {
 // Knowledge snapshot — the evidence universe of a claim's absence search
 // ---------------------------------------------------------------------------
 
-/// One residual head in the knowledge universe: the residual id and its
-/// CURRENT disposition (as an event projection, with the exact event that
-/// supplied it). This is what the blocker scan actually reads — a claim's
-/// absence is relative to these heads, and a later disposition change is a
-/// NEW universe, not a silent rewrite of the old one.
+/// One residual head in the knowledge universe: the residual id, its
+/// RECORD CONTENT ADDRESS (the canonical hash of the immutable residual
+/// record the blocker scan reads), its fingerprint (the derived identity the
+/// blocker scan's scope depends on), its CURRENT disposition (an event
+/// projection, with the exact event that supplied it). A claim's absence is
+/// relative to these heads; a later disposition change is a NEW universe,
+/// not a silent rewrite of the old one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ResidualHead {
+pub struct SnapshotResidualHead {
     pub id: String,
+    /// SHA-256 of the canonical serialization of the residual RECORD — the
+    /// universe commits the exact immutable observation, not merely the
+    /// label "cli-exit-0007 exists".
+    pub record_cid: String,
+    /// The residual FINGERPRINT (the derived identity of the disagreement).
+    pub fingerprint: String,
     pub disposition: String,
     /// The disposition event that supplied the disposition, or `None` for
     /// `open` (the projection of no events).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disposition_event_id: Option<String>,
+}
+
+/// One typed content reference in the knowledge universe: the kind of
+/// object, its id, and its content address. The universe commits every
+/// object the blocker scan depends upon BY CONTENT — a run/receipt/series/
+/// reduction is content-addressed by construction (its id IS its cid); an
+/// authority's cid is the canonical hash of its record (an authority id is
+/// a label).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotObject {
+    /// `receipt` | `run` | `authority` | `series` | `reduction`.
+    pub kind: String,
+    pub id: String,
+    pub cid: String,
 }
 
 /// The evidence universe a claim's absence search ran over: the committed
@@ -3281,27 +3330,25 @@ pub struct ResidualHead {
 /// claim alone, and a store mutation after compile time does not silently
 /// change what the claim means.
 ///
-/// Identity: SHA-256 of `FRF/KNOWLEDGE/v1` over the canonical document of
+/// v2: the universe is a TYPED CONTENT REFERENCE — every residual head
+/// commits its record content address + fingerprint, and the objects list
+/// commits every authority/run/receipt/series/reduction by content, so the
+/// CID binds the exact bytes the blocker scan depended on, not the labels.
+///
+/// Identity: SHA-256 of `FRF/KNOWLEDGE/v2` over the canonical document of
 /// the snapshot's fields — the snapshot is content-addressed, and a claim
 /// binding a different universe is a different claim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeSnapshot {
     pub schema_version: String,
-    /// Content address: `FRF/KNOWLEDGE/v1` over this snapshot's fields.
+    /// Content address: `FRF/KNOWLEDGE/v2` over this snapshot's fields.
     pub cid: String,
-    /// Every residual present in the universe, with its head disposition.
-    pub residual_heads: Vec<ResidualHead>,
-    /// The receipts present in the universe.
-    pub receipts: Vec<String>,
-    /// The runs (captures) present in the universe.
-    pub runs: Vec<String>,
-    /// The admitted authorities present in the universe.
-    pub authorities: Vec<String>,
-    /// The series snapshots present in the universe.
-    pub series: Vec<String>,
-    /// The reduction records present in the universe.
-    pub reductions: Vec<String>,
+    /// Every residual present in the universe, with its head disposition,
+    /// record content address, and fingerprint.
+    pub residual_heads: Vec<SnapshotResidualHead>,
+    /// Every other object the universe commits, by kind/id/cid.
+    pub objects: Vec<SnapshotObject>,
 }
 
 #[cfg(test)]

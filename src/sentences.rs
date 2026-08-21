@@ -205,6 +205,7 @@ mod tests {
             provenance: provenance(),
             comparator_semantics: vec![],
             normalizer_semantics: vec![],
+            adapter_semantics: vec![],
             execution_profile: EXECUTION_PROFILE_LINUX.into(),
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),

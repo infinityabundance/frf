@@ -37,18 +37,57 @@ pub fn is_valid_identifier(s: &str) -> bool {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
 }
 
-/// FRF/COMPARATOR-SPEC/v1 over the specification document
-/// (id + relation + extractor + residual_classifier) — the comparator's
-/// semantic identity, rederivable from a recorded ComparatorSemantic's own
-/// fields.
-pub fn comparator_spec_hash(id: &str, relation: &str, extractor: &str, classifier: &str) -> String {
+/// FRF/COMPARATOR-SPEC/v2 over the specification document
+/// (id + relation + extractor + residual_classifier + relation_version) — the
+/// comparator's semantic identity, rederivable from a recorded
+/// ComparatorSemantic's own fields. v2: the version enters the preimage
+/// itself, so two relations with the same fields under different versions are
+/// two relations.
+pub fn comparator_spec_hash(
+    id: &str,
+    relation: &str,
+    extractor: &str,
+    classifier: &str,
+    relation_version: &str,
+) -> String {
     preimage(
-        "FRF/COMPARATOR-SPEC/v1",
+        "FRF/COMPARATOR-SPEC/v2",
         &json!({
             "id": id,
             "relation": relation,
             "extractor": extractor,
             "residual_classifier": classifier,
+            "relation_version": relation_version,
+        }),
+    )
+}
+
+/// FRF/NORMALIZER-SPEC/v2 over {id, relation, applies_to, relation_version}.
+pub fn normalizer_spec_hash(
+    id: &str,
+    relation: &str,
+    applies_to: &str,
+    relation_version: &str,
+) -> String {
+    preimage(
+        "FRF/NORMALIZER-SPEC/v2",
+        &json!({
+            "id": id,
+            "relation": relation,
+            "applies_to": applies_to,
+            "relation_version": relation_version,
+        }),
+    )
+}
+
+/// FRF/CAPTURE-ADAPTER-SPEC/v2 over {id, relation, relation_version}.
+pub fn capture_adapter_spec_hash(id: &str, relation: &str, relation_version: &str) -> String {
+    preimage(
+        "FRF/CAPTURE-ADAPTER-SPEC/v2",
+        &json!({
+            "id": id,
+            "relation": relation,
+            "relation_version": relation_version,
         }),
     )
 }
@@ -80,12 +119,19 @@ pub fn interpreter_hash(artifact: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// FRF/COURT/v1 over the receipt's own document (declared arguments,
-/// authority artifact hash, fixture, envelope, comparator semantics).
+/// FRF/COURT/v2 over the receipt's own document (declared arguments,
+/// authority artifact hash, fixture, envelope, comparator semantics, the
+/// normalizer semantics in application order, and the capture-adapter
+/// semantics sorted by axis — the full observation-defining semantics).
 pub fn court_semantic_identity_from_receipt(rec: &Value) -> String {
     let court = &rec["court"];
     let env = &court["admissibility_envelope"];
     let fixture = &rec["fixtures"][0];
+    let mut adapters = rec["adapter_semantics"]
+        .as_array()
+        .map(|as_| as_.to_vec())
+        .unwrap_or_default();
+    adapters.sort_by(|a, b| s(&a["id"]).cmp(s(&b["id"])));
     let doc = json!({
         "question": s(&court["question"]),
         "falsifier": s(&court["falsifier"]),
@@ -117,8 +163,35 @@ pub fn court_semantic_identity_from_receipt(rec: &Value) -> String {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default(),
+        "normalizers": rec["normalizer_semantics"]
+            .as_array()
+            .map(|ns| {
+                ns.iter()
+                    .map(|n| {
+                        json!({
+                            "id": s(&n["id"]),
+                            "relation_id": s(&n["relation_id"]),
+                            "applies_to": s(&n["applies_to"]),
+                            "relation_version": s(&n["relation_version"]),
+                            "specification_hash": s(&n["specification_hash"]),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        "capture_adapters": adapters
+            .iter()
+            .map(|a| {
+                json!({
+                    "id": s(&a["id"]),
+                    "relation_id": s(&a["relation_id"]),
+                    "relation_version": s(&a["relation_version"]),
+                    "specification_hash": s(&a["specification_hash"]),
+                })
+            })
+            .collect::<Vec<_>>(),
     });
-    preimage("FRF/COURT/v1", &doc)
+    preimage("FRF/COURT/v2", &doc)
 }
 
 /// FRF/RESIDUAL-FINGERPRINT/v1 over the immutable observation record.
@@ -382,29 +455,36 @@ pub fn reduction_identity(
     preimage("FRF/REDUCTION/v3", &doc)
 }
 
-/// FRF/KNOWLEDGE/v1 over the claim's committed evidence universe: the
-/// residual heads (with their dispositions + events), receipts, runs,
-/// authorities, series snapshots, and reductions present at compile time.
-/// Sorted lists — the same universe hashes identically in every
-/// implementation.
+/// FRF/KNOWLEDGE/v2 over the claim's committed evidence universe: every
+/// residual head enters as (id, record content address, fingerprint,
+/// disposition, event) — the universe commits the exact immutable
+/// observations the blocker scan reads, not labels — and every other member
+/// enters as (kind, id, cid) in the objects list. Sorted lists — the same
+/// universe hashes identically in every implementation.
 pub fn knowledge_snapshot_identity(snapshot: &Value) -> String {
     let doc = json!({
         "residual_heads": snapshot["residual_heads"].as_array().map(|hs| {
             hs.iter()
                 .map(|h| json!({
                     "id": s(&h["id"]),
+                    "record_cid": s(&h["record_cid"]),
+                    "fingerprint": s(&h["fingerprint"]),
                     "disposition": s(&h["disposition"]),
                     "disposition_event_id": h.get("disposition_event_id").cloned().unwrap_or(Value::Null),
                 }))
                 .collect::<Vec<_>>()
         }).unwrap_or_default(),
-        "receipts": snapshot["receipts"],
-        "runs": snapshot["runs"],
-        "authorities": snapshot["authorities"],
-        "series": snapshot["series"],
-        "reductions": snapshot["reductions"],
+        "objects": snapshot["objects"].as_array().map(|os| {
+            os.iter()
+                .map(|o| json!({
+                    "kind": s(&o["kind"]),
+                    "id": s(&o["id"]),
+                    "cid": s(&o["cid"]),
+                }))
+                .collect::<Vec<_>>()
+        }).unwrap_or_default(),
     });
-    preimage("FRF/KNOWLEDGE/v1", &doc)
+    preimage("FRF/KNOWLEDGE/v2", &doc)
 }
 
 /// The deterministic ordered-axis classification: drift, slew, localization,

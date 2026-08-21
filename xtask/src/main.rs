@@ -397,15 +397,18 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 }
             }
         }
-        if let Some(reductions) = claim["knowledge_snapshot"]["reductions"].as_array() {
-            for rid in reductions {
-                needed.insert(format!("reductions/{}.yaml", as_str(rid)));
+        // The v2 universe commits every other member as (kind, id, cid)
+        // objects; reductions enter the closure through kind == "reduction".
+        if let Some(objects) = claim["knowledge_snapshot"]["objects"].as_array() {
+            for o in objects {
+                if as_str(&o["kind"]) != "reduction" {
+                    continue;
+                }
+                let rid = as_str(&o["id"]);
+                needed.insert(format!("reductions/{rid}.yaml"));
                 // An external minimizer's invocation evidence lives under
                 // `reductions/<id>/minimizer/`; the record binds it.
-                let reduction = load_yaml(&safe_rel(
-                    bundle,
-                    &format!("reductions/{}.yaml", as_str(rid)),
-                ));
+                let reduction = load_yaml(&safe_rel(bundle, &format!("reductions/{rid}.yaml")));
                 if reduction["minimizer_semantic_id"].is_string() {
                     for f in [
                         "request.json",
@@ -413,9 +416,9 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                         "invocation.json",
                         "result.json",
                     ] {
-                        let p = bundle.join(format!("reductions/{}/minimizer/{f}", as_str(rid)));
+                        let p = bundle.join(format!("reductions/{rid}/minimizer/{f}"));
                         if p.is_file() {
-                            needed.insert(format!("reductions/{}/minimizer/{f}", as_str(rid)));
+                            needed.insert(format!("reductions/{rid}/minimizer/{f}"));
                         }
                     }
                 }
@@ -1042,6 +1045,25 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 if as_str(&record["id"]) != hid {
                     panic!("claim {receipt_id}: snapshot residual head {hid} is missing from the bundle");
                 }
+                // The v2 universe commits the head's RECORD CONTENT ADDRESS
+                // and FINGERPRINT — the exact immutable observation the
+                // blocker scan read — not the label. Both rederive from the
+                // bundle's own record.
+                let record_cid = sha256_bytes(
+                    encode(&record)
+                        .unwrap_or_else(|e| {
+                            panic!("claim {receipt_id}: cannot canonicalize residual {hid}: {e}")
+                        })
+                        .as_bytes(),
+                );
+                if record_cid != as_str(&h["record_cid"]) {
+                    panic!(
+                        "claim {receipt_id}: snapshot head {hid} record_cid does not rederive from the bundle's record"
+                    );
+                }
+                if rederive::residual_fingerprint(&record) != as_str(&h["fingerprint"]) {
+                    panic!("claim {receipt_id}: snapshot head {hid} fingerprint does not rederive");
+                }
                 // The head disposition must be the bundle's projected
                 // disposition for that residual (the events are verified
                 // elsewhere in this walk).
@@ -1058,9 +1080,25 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
         if snapshot_ids.len() != head_ids.len() {
             panic!("claim {receipt_id}: duplicate residual heads in the knowledge snapshot");
         }
-        if let Some(reductions) = snapshot["reductions"].as_array() {
-            for rid in reductions {
-                let rid = as_str(rid);
+        // The v2 universe commits every other member as (kind, id, cid)
+        // objects; the reduction records enter through kind == "reduction".
+        if let Some(objects) = snapshot["objects"].as_array() {
+            let mut seen: Vec<String> = Vec::new();
+            for o in objects {
+                let key = format!("{}:{}", as_str(&o["kind"]), as_str(&o["id"]));
+                if seen.contains(&key) {
+                    panic!(
+                        "claim {receipt_id}: duplicate object {:?} in the knowledge snapshot",
+                        key
+                    );
+                }
+                seen.push(key);
+            }
+            for o in objects {
+                if as_str(&o["kind"]) != "reduction" {
+                    continue;
+                }
+                let rid = as_str(&o["id"]);
                 let reduction = load_yaml(&safe_rel(bundle, &format!("reductions/{rid}.yaml")));
                 if as_str(&reduction["id"]) != rid {
                     panic!(

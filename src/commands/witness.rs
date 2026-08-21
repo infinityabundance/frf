@@ -98,11 +98,14 @@ pub fn attest(
     };
 
     // -- the semantic + implementation identities ----------------------------
-    // WHAT the attestation is (id + relation, hashed into the semantic
-    // identity) vs. WHO attests (the program's bytes + interpreter, sealed
-    // BEFORE it runs — the same ArtifactIdentity discipline as every other
-    // extension participant).
-    let specification_hash = crate::semantics::witness_specification_hash(id, relation)?;
+    // WHAT the attestation is (id + relation + version, hashed into the
+    // semantic identity) vs. WHO attests (the program's bytes + interpreter,
+    // sealed BEFORE it runs — the same ArtifactIdentity discipline as every
+    // other extension participant). A different executable hash is NOT
+    // evidence of independent observation; independence is a future explicit
+    // relation (WitnessIdentity / WitnessAuthority / IndependenceEvidence).
+    let specification_hash =
+        crate::semantics::witness_specification_hash(id, relation, relation_version)?;
     let semantic = WitnessSemantic {
         id: id.to_string(),
         relation_id: relation.to_string(),
@@ -137,6 +140,9 @@ pub fn attest(
     let response_bytes =
         crate::ext::run_program(&snapshot.snapshot, &request_bytes, Path::new("."))?;
     let response_cid = host::sha256_bytes(&response_bytes);
+    // The protocol says canonical JSON: the response must BE its own
+    // canonical serialization.
+    crate::ext::require_canonical_response(&response_bytes, "witness response")?;
     let response: WitnessResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
         FrfError::new(format!(
             "witness {id} produced an unparseable response: {e}"
@@ -169,6 +175,19 @@ pub fn attest(
     if attestation.statement != statement {
         return Err(FrfError::new(format!(
             "witness {id} attested a different statement than the request; refusing to record a mismatched attestation"
+        )));
+    }
+    // The witness's own assertion is one of the closed outcomes. It is the
+    // WITNESS's claim about the world; FRF's verification — that the
+    // statement is bound to the correct subject, request, and statement — is
+    // the content-address, and the two predicates are never conflated.
+    if !matches!(
+        attestation.outcome.as_str(),
+        "affirm" | "deny" | "indeterminate"
+    ) {
+        return Err(FrfError::new(format!(
+            "witness {id} returned attestation outcome {:?}; the protocol admits affirm, deny, or indeterminate",
+            attestation.outcome
         )));
     }
 
@@ -214,12 +233,12 @@ pub fn attest(
     )?;
 
     eprintln!(
-        "witness statement {}: {} {} -> {} (verified={})",
+        "witness statement {}: {} {} -> outcome={} ({})",
         &stmt.id[..16],
         subject.kind,
         subject.id,
-        stmt.attestation.detail,
-        stmt.attestation.verified
+        stmt.attestation.outcome,
+        stmt.attestation.detail
     );
     Ok(stmt.id)
 }

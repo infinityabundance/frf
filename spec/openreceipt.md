@@ -57,10 +57,16 @@ environment or executable observed an old court:
   resolver, downstream interpreter).
 
 Semantic identity is separate from implementation provenance: the court's
-`semantic_identity` hashes the question, falsifier, authority artifact
-bytes, fixture, envelope, and comparator **semantic** identities — never
-implementation hashes. Two independent implementations that implement the
-same comparator specifications ask the same question.
+`semantic_identity` (FRF/COURT/v2) hashes the question, falsifier, authority
+artifact bytes, fixture, envelope, the comparator **semantic** identities,
+the normalizer **semantic** identities in application order (a normalizer
+changes the comparison surface, so its relation and the streams it moves are
+part of the question), and the capture-adapter **semantic** identities
+axis-keyed (an adapter's extraction scheme defines the observation delivered
+to an externally served axis) — never implementation hashes. Two
+independent implementations that implement the same comparator, normalizer,
+and adapter specifications ask the same question; two courts that differ in
+any observation-defining semantics ask different questions.
 
 The semantic identity is computed over the fixture's **declared** arguments
 (the question); the `fixtures[].arguments` block records the **resolved**
