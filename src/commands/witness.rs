@@ -82,8 +82,14 @@ pub fn attest(
             }
         }
         "residual" => {
-            let record = store.load_residual(subject_id)?;
-            let cid = crate::semantics::residual_fingerprint(&record)?;
+            // The residual is verified on read: it must derive from a
+            // verified parent run (same run/court/authority/candidate,
+            // declared axis, comparator-generated divergence, rederived
+            // projections), and its fingerprint is computed from the verified
+            // record — a witness cannot be pointed at a residual that is not
+            // an actual observation.
+            let verified = crate::verify::load_residual_verified(store, subject_id)?;
+            let cid = crate::semantics::residual_fingerprint(verified.record())?;
             WitnessSubject {
                 kind: "residual".to_string(),
                 id: subject_id.to_string(),
