@@ -1,0 +1,35 @@
+# The external-minimizer golden court: a fixture with documentation and
+# comment lines around the malformed directive, and an EXTERNAL MINIMIZER
+# declared for the exit residual's κ route (cli-exit-minimize).
+# `frf court minimize` consults the residual's capture for a minimizer
+# matching its route and uses it — the core court-verifies every proposal
+# with the one comparison operation — instead of the built-in ddmin reducer.
+court:
+  id: cli-external-minimizer
+  question: >-
+    For malformed input in fixture family malformed-input, does the candidate
+    preserve the admitted reference's exit class and first diagnostic line?
+  falsifier: >-
+    The candidate's exit class or first diagnostic line diverges from the
+    admitted reference on a fixture in family malformed-input.
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: "0.1.0"
+    build_profile: debug
+    path: golden/candidate.sh
+  fixture:
+    id: malformed-verbose.conf
+    path: frf/courts/cli-external-minimizer/fixtures/malformed-verbose.conf
+    arguments: ["--strict", "{fixture}"]
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [exit, stderr]
+    normalizers: []
+    replay_scope: single-run
+minimizers:
+  - id: cli-exit-minimize
+    relation: drop-comment-blank-lines
+    relation_version: "v1"
+    program: golden/minimizers/ddmin-lines.py

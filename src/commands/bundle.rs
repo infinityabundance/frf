@@ -310,6 +310,33 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     kind: "reduction",
                 },
             );
+            // The external minimizer's invocation evidence, when the
+            // reduction binds one: `reductions/<id>/minimizer/`.
+            let rec = store.load_reduction(rid)?;
+            if rec.minimizer_invocation_id.is_some() {
+                let mdir = store.minimizer_dir(rid)?;
+                for f in [
+                    "request.json",
+                    "response.json",
+                    "invocation.json",
+                    "result.json",
+                ] {
+                    let path = mdir.join(f);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let bytes = read(&path, "minimizer evidence")?;
+                    let rel = format!("reductions/{rid}/minimizer/{f}");
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: "minimizer-evidence",
+                        },
+                    );
+                }
+            }
         }
     }
 
@@ -506,6 +533,114 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             }
         }
 
+        // Normalizer invocation evidence (the comparison-surface instruments):
+        // `captures/<run>/normalizer/<id>/<side>/` — the canonical request +
+        // response and the content-addressed invocation + result records, so
+        // the exact normalization that built the compared streams is in the
+        // closure.
+        let normalizer_dir = dir.join("normalizer");
+        if normalizer_dir.is_dir() {
+            let mut ids: Vec<String> = std::fs::read_dir(&normalizer_dir)
+                .map_err(|e| {
+                    FrfError::new(format!(
+                        "cannot read normalizer evidence directory {}: {e}",
+                        normalizer_dir.display()
+                    ))
+                })?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            ids.sort();
+            for id in ids {
+                let mut sides: Vec<String> = std::fs::read_dir(normalizer_dir.join(&id))
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "cannot read normalizer evidence directory {}: {e}",
+                            normalizer_dir.join(&id).display()
+                        ))
+                    })?
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                sides.sort();
+                for side in sides {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let path = normalizer_dir.join(&id).join(&side).join(f);
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let bytes = read(&path, "normalizer evidence")?;
+                        let rel = format!("captures/{run}/normalizer/{id}/{side}/{f}");
+                        entries.insert(
+                            rel.clone(),
+                            ClosureEntry {
+                                rel,
+                                sha256: host::sha256_bytes(&bytes),
+                                kind: "normalizer-evidence",
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        // Capture-adapter invocation evidence (the adapted-observation
+        // instruments): `captures/<run>/capture-adapter/<axis>/<side>/`.
+        let adapter_dir = dir.join("capture-adapter");
+        if adapter_dir.is_dir() {
+            let mut axes: Vec<String> = std::fs::read_dir(&adapter_dir)
+                .map_err(|e| {
+                    FrfError::new(format!(
+                        "cannot read capture-adapter evidence directory {}: {e}",
+                        adapter_dir.display()
+                    ))
+                })?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            axes.sort();
+            for axis in axes {
+                let mut sides: Vec<String> = std::fs::read_dir(adapter_dir.join(&axis))
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "cannot read capture-adapter evidence directory {}: {e}",
+                            adapter_dir.join(&axis).display()
+                        ))
+                    })?
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                sides.sort();
+                for side in sides {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let path = adapter_dir.join(&axis).join(&side).join(f);
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let bytes = read(&path, "capture-adapter evidence")?;
+                        let rel = format!("captures/{run}/capture-adapter/{axis}/{side}/{f}");
+                        entries.insert(
+                            rel.clone(),
+                            ClosureEntry {
+                                rel,
+                                sha256: host::sha256_bytes(&bytes),
+                                kind: "capture-adapter-evidence",
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
         // Residual records + disposition-event chains; a `fixed` event adds
         // its resolution run to the closure (the graph traversal).
         for id in &cap.residuals {
@@ -543,6 +678,50 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 } = &e.disposition
                 {
                     runs.push(resolution_run_id.clone());
+                }
+            }
+            // Refused external-minimizer proposals: a content-addressed
+            // minimizer refusal under `residuals/<id>.minimizer/<request_cid>/`
+            // is itself evidence and travels with the residual.
+            let minimizer_evidence_root = store
+                .residual_path(id)?
+                .parent()
+                .expect("residual path has a parent")
+                .join(format!("{id}.minimizer"));
+            if minimizer_evidence_root.is_dir() {
+                let mut cids: Vec<String> = std::fs::read_dir(&minimizer_evidence_root)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "cannot read minimizer evidence directory {}: {e}",
+                            minimizer_evidence_root.display()
+                        ))
+                    })?
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                cids.sort();
+                for cid in cids {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let path = minimizer_evidence_root.join(&cid).join(f);
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let bytes = read(&path, "minimizer evidence")?;
+                        let rel = format!("residuals/{id}.minimizer/{cid}/{f}");
+                        entries.insert(
+                            rel.clone(),
+                            ClosureEntry {
+                                rel,
+                                sha256: host::sha256_bytes(&bytes),
+                                kind: "minimizer-evidence",
+                            },
+                        );
+                    }
                 }
             }
             // The series experiments this run belongs to, and the derived

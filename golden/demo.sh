@@ -28,8 +28,8 @@ fi
 ROOT=frf
 
 # Regenerate the evidence tree (courts/ is source and is kept).
-rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges "$ROOT"/reductions
-mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges
+rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges "$ROOT"/reductions "$ROOT"/witnesses
+mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges "$ROOT"/witnesses
 rm -rf golden/work
 mkdir -p golden/work
 
@@ -69,6 +69,22 @@ echo "-- the produced trees are captured under the run; the tree observation rep
 "$FRF_BIN" --root "$ROOT" replay "$TREE_RUN" --policy exact
 TREE_RECEIPT=$("$FRF_BIN" --root "$ROOT" receipt emit "$TREE_RUN")
 echo "tree receipt: $TREE_RECEIPT"
+
+step "2d. the normalizer extension protocol — the comparison surface"
+# A normalizer maps one side's raw streams to the streams the court COMPARES.
+# The reference's diagnostic carries trailing whitespace; the candidate's is
+# identical except for it. Raw first lines diverge; the normalized surface is
+# equivalent — the court passes ONLY because the declared normalizer applies,
+# and the raw streams survive as the normalizer request evidence (an
+# observation is never rewritten, the comparison surface is).
+echo "-- admit the whitespace-carrying reference; the normalized court passes"
+"$FRF_BIN" --root "$ROOT" authority admit golden/ref-ws.sh --name ref-ws --version 1.0
+NORM_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-normalized/manifest.yaml)
+echo "normalized run: $NORM_RUN"
+echo "-- the normalizer invocation evidence (raw streams in, normalized surface out)"
+ls "$ROOT"/captures/"$NORM_RUN"/normalizer/trim-trailing-ws/reference/
+echo "-- the normalized observation replays byte-for-byte (the normalizer is re-invoked)"
+"$FRF_BIN" --root "$ROOT" replay "$NORM_RUN" --policy exact
 
 step "3. try to compile a claim while both residuals are open (must be refused)"
 RECEIPT_OPEN=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")
@@ -158,6 +174,26 @@ echo "reduction: $MIN_ID"
 echo "-- the reproducer (1 line vs the original 3):"
 cat "$ROOT"/objects/sha256/$(grep final_fixture_sha256 "$ROOT"/reductions/$MIN_ID.yaml | awk '{print $2}')
 
+step "8b. the external minimizer extension protocol — a declared reducer, court-verified"
+# The minimizer is a protocol participant: the court BINDS it at observation
+# time (its program bytes are sealed and recorded in the capture), and
+# `court minimize` consults the residual's capture for a minimizer matching
+# its κ route. The minimizer proposes a reduced fixture; the core
+# COURT-VERIFIES every proposal with the one comparison operation — a
+# proposal that does not preserve the lineage would be recorded-but-not-
+# accepted. The reduction record binds the minimizer's semantic +
+# implementation identities and the content-addressed invocation evidence.
+echo "-- run the external-minimizer court (its fixture carries comments the reducer can drop)"
+MIN_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-external-minimizer/manifest.yaml)
+MIN_RESIDUAL=$(grep -A4 '^residuals:' "$ROOT"/captures/"$MIN_RUN"/capture.yaml | sed -n '2p' | sed 's/^[[:space:]]*-[[:space:]]*//')
+echo "external-minimizer run: $MIN_RUN (residual $MIN_RESIDUAL)"
+MIN_EXT_ID=$("$FRF_BIN" --root "$ROOT" court minimize "$MIN_RESIDUAL")
+echo "external reduction: $MIN_EXT_ID"
+echo "-- the reduction record binds the external minimizer (semantic + implementation):"
+grep -E 'minimizer_semantic_id|minimizer_implementation_hash' "$ROOT"/reductions/"$MIN_EXT_ID".yaml
+echo "-- the minimizer's canonical request/response + invocation evidence:"
+ls "$ROOT"/reductions/"$MIN_EXT_ID"/minimizer/
+
 step "9. replay — exact reproduction, and the declared-policy distinction"
 # The run identity is rederived from the capture's recorded fields, the
 # snapshots are re-verified and re-sealed, and the observation must
@@ -173,6 +209,22 @@ if FRF_EXEC_MAX_BYTES=2048 "$FRF_BIN" --root "$ROOT" replay "$RESOLUTION_RUN" --
 fi
 cat golden/work/drift-refusal.txt
 FRF_EXEC_MAX_BYTES=2048 "$FRF_BIN" --root "$ROOT" replay "$RESOLUTION_RUN" --policy semantic
+
+step "9b. the witness extension protocol — independent attestation"
+# A witness is a protocol participant: it attests a content-addressed subject
+# (the resolution run's identity digest is REDERIVED here, never read from
+# the caller) and an exact statement. The attestation is recorded as a
+# content-addressed WitnessStatement with the canonical request/response
+# preserved as evidence — no one can attach an attestation to a different
+# object after the fact.
+WIT_ID=$("$FRF_BIN" --root "$ROOT" witness attest run "$RESOLUTION_RUN" \
+  --id manual-review \
+  --relation independent-confirmation \
+  --program golden/witnesses/attest.py \
+  --statement "candidate-fixed.sh preserves the reference exit class on the malformed fixture (independent review)")
+echo "witness statement: $WIT_ID"
+echo "-- the attested statement is content-addressed and re-verified on read:"
+head -c 400 "$ROOT"/witnesses/"$WIT_ID".json; echo
 
 step "7. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort

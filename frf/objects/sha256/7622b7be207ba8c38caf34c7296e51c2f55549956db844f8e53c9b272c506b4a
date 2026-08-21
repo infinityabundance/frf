@@ -1,0 +1,7 @@
+# sample directive configuration
+# more documentation
+server 192.168.1.1
+
+# the malformed directive follows
+servre 127.0.0.1
+# trailing note

@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""External witness attesting to content-addressed subjects under the spec
+{relation: independent-confirmation} — the witness extension protocol
+(spec/witness.md).
+
+Protocol: reads a canonical JSON frf-witness-request-v1 on stdin, writes a
+canonical JSON frf-witness-response-v1 on stdout. The request names the
+subject (kind, id, content address), the exact statement to attest, and the
+evidence root. The response MUST echo `request_id` (the SHA-256 of the exact
+request bytes) and either return an attestation of EXACTLY that statement or
+an explicit refusal — no other outcome is admissible.
+"""
+import hashlib
+import json
+import sys
+
+raw = sys.stdin.buffer.read()
+req = json.loads(raw.decode("utf-8"))
+assert req["schema_version"] == "frf-witness-request-v1", req
+request_id = hashlib.sha256(raw).hexdigest()
+
+response = {
+    "schema_version": "frf-witness-response-v1",
+    "request_id": request_id,
+    "indeterminate": False,
+    "failure": None,
+    "attestation": {
+        "statement": req["statement"],
+        "verified": True,
+        "detail": "independent review confirms the statement against the subject content address {}".format(
+            req["subject"]["cid"][:16]
+        ),
+    },
+}
+json.dump(response, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+sys.stdout.write("\n")

@@ -1,0 +1,38 @@
+# Court declaration for the normalized golden path: the stderr axis is
+# compared over the surface the DECLARED NORMALIZER builds. The reference's
+# diagnostic carries trailing whitespace; the candidate's is identical except
+# for it. The raw streams diverge; the normalized surface is equivalent — so
+# this court passes ONLY because the normalizer applies, and the normalizer
+# request evidence preserves the raw streams (an observation is never
+# rewritten, the comparison surface is).
+court:
+  id: cli-normalized
+  question: >-
+    For malformed input in fixture family malformed-input, does the candidate
+    preserve the admitted reference's first diagnostic line after the declared
+    normalization?
+  falsifier: >-
+    The candidate's normalized first diagnostic line diverges from the
+    admitted reference's.
+  authority: ref-ws-1.0
+  candidate:
+    name: cand-ws
+    version_or_commit: "0.1.0"
+    build_profile: debug
+    path: golden/cand-ws.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments: ["--strict", "{fixture}"]
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [stderr]
+    normalizers: [trim-trailing-ws]
+    replay_scope: single-run
+normalizers:
+  - id: trim-trailing-ws
+    relation: trim-trailing-whitespace
+    applies_to: stderr
+    relation_version: "v1"
+    program: golden/normalizers/trim-trailing-ws.py

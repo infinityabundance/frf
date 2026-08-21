@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""External normalizer serving the `stderr` stream under the spec
+{relation: trim-trailing-whitespace, applies_to: stderr} — the normalizer
+extension protocol (spec/normalizer.md).
+
+Protocol: reads a canonical JSON frf-normalizer-request-v1 on stdin, writes a
+canonical JSON frf-normalizer-response-v1 on stdout. One side's raw streams
+arrive base64; the response returns the NORMALIZED streams (here: stderr with
+trailing whitespace trimmed from every line, stdout byte-identical). The
+response MUST echo `request_id` — the SHA-256 of the exact request bytes — so
+it cryptographically names the request it answers; a court refuses a response
+that does not.
+
+The raw streams survive as the request evidence: an observation is never
+rewritten, the comparison surface is.
+"""
+import base64
+import hashlib
+import json
+import sys
+
+raw = sys.stdin.buffer.read()
+req = json.loads(raw.decode("utf-8"))
+assert req["schema_version"] == "frf-normalizer-request-v1", req
+assert req["normalizer"]["applies_to"] == "stderr", req
+request_id = hashlib.sha256(raw).hexdigest()
+
+stdout = base64.b64decode(req["stdout_base64"])
+stderr = base64.b64decode(req["stderr_base64"])
+normalized = b"\n".join(line.rstrip(b" \t") for line in stderr.split(b"\n"))
+
+response = {
+    "schema_version": "frf-normalizer-response-v1",
+    "request_id": request_id,
+    "stdout_base64": base64.b64encode(stdout).decode("ascii"),
+    "stderr_base64": base64.b64encode(normalized).decode("ascii"),
+    "indeterminate": False,
+    "failure": None,
+}
+json.dump(response, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+sys.stdout.write("\n")

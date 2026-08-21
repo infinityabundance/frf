@@ -509,12 +509,21 @@ fn diff_json(
 /// derived object, and its identity (`request_cid`) is its canonical bytes'
 /// SHA-256, so rebuilding it must reproduce the same cid or the evidence is
 /// refused.
+///
+/// `reference`/`candidate` are the streams the request carries. For a
+/// non-adapted external axis these are the COMPARED streams (normalized, when
+/// normalizers applied); for an adapted axis the comparison is over the
+/// adapted payloads and the streams are the truly raw ones (the adapter's
+/// input evidence). The adapted observations (when an adapter serves the
+/// axis) travel alongside.
 #[allow(clippy::too_many_arguments)] // one argument per request dimension; the doc is the protocol shape
 pub fn build_request<'a>(
     axis: &'a str,
     semantic: &'a ComparatorSemantic,
     reference: &'a ProcessOutcome,
     candidate: &'a ProcessOutcome,
+    reference_adapted: Option<&'a crate::model::AdaptedObservation>,
+    candidate_adapted: Option<&'a crate::model::AdaptedObservation>,
     fixture_sha256: &'a str,
     arguments: &'a [String],
     environment_digest: &'a str,
@@ -531,11 +540,13 @@ pub fn build_request<'a>(
             exit: &reference.exit,
             stdout_base64: b64(&reference.stdout),
             stderr_base64: b64(&reference.stderr),
+            adapted: reference_adapted,
         },
         candidate: crate::model::ComparatorObservation {
             exit: &candidate.exit,
             stdout_base64: b64(&candidate.stdout),
             stderr_base64: b64(&candidate.stderr),
+            adapted: candidate_adapted,
         },
         context: crate::model::ComparatorContext {
             fixture_sha256,
@@ -691,11 +702,17 @@ pub struct EvaluationContext<'a> {
     pub produced: Option<(&'a ProducedSide, &'a ProducedSide)>,
     /// The working directory external programs run from.
     pub cwd: &'a Path,
-    /// The raw streams, for externally evaluated axes: present when the
-    /// caller holds the ProcessOutcomes (court run, replay, minimization).
-    /// The external request is built from these raw bytes — the same bytes
-    /// the instrument received the first time.
+    /// The truly RAW streams (before normalization), for externally evaluated
+    /// axes: present when the caller holds the ProcessOutcomes (court run,
+    /// replay, minimization). For an ADAPTED axis the external request
+    /// carries these raw bytes (the adapter's input evidence) plus the
+    /// adapted payloads.
     pub raw: Option<(&'a ProcessOutcome, &'a ProcessOutcome)>,
+    /// The COMPARED streams (after the declared normalizers applied), for
+    /// externally evaluated NON-adapted axes: the comparison surface. Falls
+    /// back to `raw` when absent (a court with no normalizers compares the
+    /// raw streams).
+    pub compared: Option<(&'a ProcessOutcome, &'a ProcessOutcome)>,
 }
 
 /// The verdict of evaluating one axis.
@@ -772,12 +789,20 @@ pub fn evaluate(
             })
         }
         Some(artifact) => {
-            // Re-invoke the exact snapshotted implementation. The raw
-            // streams must be available: the request is built from the same
-            // bytes the instrument saw.
-            let (reference_out, candidate_out) = context.raw.ok_or_else(|| {
+            // Re-invoke the exact snapshotted implementation. The streams the
+            // request carries must be available: an adapted axis carries the
+            // truly raw streams (the adapter's input evidence) plus the
+            // adapted payloads; a non-adapted axis carries the COMPARED
+            // streams (normalized, when normalizers applied) — the surface
+            // the comparator is the meaning of.
+            let (reference_out, candidate_out) = if reference.adapted.is_some() {
+                context.raw
+            } else {
+                context.compared.or(context.raw)
+            }
+            .ok_or_else(|| {
                 FrfError::new(format!(
-                    "the {} axis is externally served; evaluating it requires the raw streams (context.raw) — a recorded result is only valid for verification without execution",
+                    "the {} axis is externally served; evaluating it requires the side streams (context.raw/compared) — a recorded result is only valid for verification without execution",
                     plan.axis.as_str()
                 ))
             })?;
@@ -787,6 +812,8 @@ pub fn evaluate(
                 &plan.semantic,
                 reference_out,
                 candidate_out,
+                reference.adapted.as_ref(),
+                candidate.adapted.as_ref(),
                 context.fixture_sha256,
                 context.arguments,
                 context.environment_digest,
@@ -991,6 +1018,7 @@ mod tests {
             stdout_sha256: "d".repeat(64),
             stderr_sha256: "e".repeat(64),
             produced: None,
+            adapted: None,
             stdout_bytes: vec![],
         };
         let candidate = SideCapture {
@@ -1003,6 +1031,7 @@ mod tests {
             stdout_sha256: "h".repeat(64),
             stderr_sha256: "i".repeat(64),
             produced: None,
+            adapted: None,
             stdout_bytes: vec![],
         };
         let divergences = BuiltinKind::Exit.compare(&reference, &candidate);

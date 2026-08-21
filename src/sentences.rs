@@ -178,6 +178,9 @@ mod tests {
                 frf_executable_hash: "0".repeat(64),
             },
             comparator_implementations: vec![],
+            normalizer_implementations: vec![],
+            adapter_implementations: vec![],
+            minimizer_implementations: vec![],
         }
     }
 
@@ -201,6 +204,7 @@ mod tests {
             },
             provenance: provenance(),
             comparator_semantics: vec![],
+            normalizer_semantics: vec![],
             execution_profile: EXECUTION_PROFILE_LINUX.into(),
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),
