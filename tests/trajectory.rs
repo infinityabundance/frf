@@ -12,6 +12,208 @@ use common::*;
 use std::fs;
 
 #[test]
+fn environment_axis_records_every_observation_event_even_when_the_evidence_is_identical() {
+    // The review's bug, executed: identical evidence correctly shares the
+    // content-addressed run, but each COORDINATE at which an observation
+    // occurred is still an experimental event. Three observations of the
+    // deterministic court at different environment coordinates must yield
+    // THREE points referencing ONE run — deduplicating by run would destroy
+    // the persistence information precisely when the system is stable.
+    let work = Workdir::new("trajectory-env-accumulate");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let mut run: Option<String> = None;
+    for coord in ["machine-a", "machine-b", "machine-c"] {
+        let out = frf(
+            &work,
+            &[
+                "--root",
+                ROOT,
+                "court",
+                "run",
+                MANIFEST,
+                "--environment-point",
+                coord,
+            ],
+        );
+        assert_success(&out, &format!("environment point {coord}"));
+        let fresh = stdout(&out);
+        if let Some(prev) = &run {
+            assert_eq!(
+                &fresh, prev,
+                "identical evidence must produce the same content-addressed run"
+            );
+        }
+        run = Some(fresh);
+    }
+    let run = run.unwrap();
+
+    // The experiment's history: three parent-linked snapshots, the newest
+    // carrying three points — all referencing the single run.
+    let store = frf::store::Store::new(work.path("frf"));
+    let heads = store
+        .experiment_heads("cli-malformed-input-environment")
+        .unwrap();
+    assert_eq!(heads.len(), 1, "one unique head");
+    let head = &heads[0];
+    assert_eq!(head.coordinate_system, "environment");
+    assert_eq!(head.points.len(), 3, "every observation event is a point");
+    let coords: Vec<&str> = head.points.iter().map(|p| p.coordinate.as_str()).collect();
+    assert_eq!(coords, vec!["machine-a", "machine-b", "machine-c"]);
+    assert!(
+        head.points.iter().all(|p| p.run == run),
+        "all three coordinates reference the single content-addressed run"
+    );
+    // The chain: walking parents reaches the first snapshot, whose parent is
+    // None, and every snapshot's points are a prefix of the next's.
+    let mut depth = 0u32;
+    let mut current = head.id.clone();
+    let mut previous_points: Vec<frf::model::SeriesPoint> = Vec::new();
+    loop {
+        let series = store.load_series(&current).unwrap();
+        // Walking the chain NEWEST -> OLDEST: each ancestor's points are a
+        // prefix of its descendant's (an append only extends).
+        assert!(
+            previous_points.is_empty() || series.points.len() <= previous_points.len(),
+            "an append only extends the experiment"
+        );
+        previous_points = series.points.clone();
+        match series.parent_series_id {
+            Some(parent) => {
+                current = parent;
+                depth += 1;
+            }
+            None => break,
+        }
+    }
+    assert_eq!(depth, 2, "S1 -> S2 -> S3");
+
+    // The receipt from the run carries the trajectory evidence per coordinate
+    // system (the environment entry pins the newest snapshot).
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit (environment series run)");
+    let receipt = stdout(&out);
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/receipts/{receipt}.json"))).unwrap(),
+    )
+    .unwrap();
+    for res in rec["residuals"].as_array().unwrap() {
+        let evidence = res["sign"]["trajectory_evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1, "one entry per coordinate system");
+        assert_eq!(evidence[0]["coordinate_system"], "environment");
+        assert_eq!(evidence[0]["series"], head.id);
+    }
+}
+
+#[test]
+fn a_branched_experiment_exposes_two_heads_and_implicit_appends_are_refused() {
+    // The experiment's history is a parent-linked chain; a BRANCH (two heads)
+    // is visible, and an implicit append has no unambiguous target — the
+    // court refuses and names the heads; --series-parent chooses the branch.
+    let work = Workdir::new("trajectory-env-branch");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let mut run = String::new();
+    for coord in ["machine-a", "machine-b"] {
+        let out = frf(
+            &work,
+            &[
+                "--root",
+                ROOT,
+                "court",
+                "run",
+                MANIFEST,
+                "--environment-point",
+                coord,
+            ],
+        );
+        assert_success(&out, &format!("environment point {coord}"));
+        run = stdout(&out);
+    }
+    let store = frf::store::Store::new(work.path("frf"));
+    let head = store
+        .experiment_heads("cli-malformed-input-environment")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    // Fabricate a SECOND head: a sibling of the current head with the same
+    // parent but a different final point (an alternative branch).
+    let mut branch_points = head.points.clone();
+    branch_points[1].coordinate = "machine-b-prime".to_string();
+    let experiment_id = head.experiment_id.clone();
+    let branch_id = frf::semantics::series_identity(
+        &experiment_id,
+        head.parent_series_id.as_deref(),
+        &head.court,
+        &head.coordinate_system,
+        &branch_points,
+    )
+    .unwrap();
+    let branch = frf::model::ExecutionSeries {
+        schema_version: frf::model::SCHEMA_SERIES.to_string(),
+        id: branch_id,
+        experiment_id: experiment_id.clone(),
+        parent_series_id: head.parent_series_id.clone(),
+        court: head.court.clone(),
+        coordinate_system: head.coordinate_system.clone(),
+        points: branch_points,
+    };
+    store.write_series(&branch).unwrap();
+    let heads = store.experiment_heads(&experiment_id).unwrap();
+    assert_eq!(heads.len(), 2, "the branch is visible as two heads");
+
+    // An implicit append is now ambiguous: refused, naming both heads.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            MANIFEST,
+            "--environment-point",
+            "machine-d",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a branched experiment must refuse an implicit append"
+    );
+    assert!(
+        stderr(&out).contains("branched") && stderr(&out).contains("--series-parent"),
+        "the refusal must name the branch choice: {}",
+        stderr(&out)
+    );
+
+    // --series-parent picks the branch: appending to the fabricated head
+    // extends THAT chain.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            MANIFEST,
+            "--environment-point",
+            "machine-d",
+            "--series-parent",
+            &branch.id,
+        ],
+    );
+    assert_success(&out, "append to the chosen branch");
+    let _ = run;
+    let heads = store.experiment_heads(&experiment_id).unwrap();
+    assert_eq!(heads.len(), 2, "both branches remain visible");
+    let chosen = heads
+        .iter()
+        .find(|h| h.parent_series_id.as_deref() == Some(branch.id.as_str()));
+    assert!(chosen.is_some(), "the chosen branch was extended");
+}
+
+#[test]
 fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sign() {
     let work = Workdir::new("trajectory-persistent");
     work.copy_canonical_tree();
@@ -80,9 +282,14 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
         &fs::read_to_string(work.path(&format!("frf/series/{series_id}.yaml"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(series["schema_version"], "frf-series-v1");
+    assert_eq!(series["schema_version"], "frf-series-v2");
     assert_eq!(series["id"], series_id);
     assert_eq!(series["coordinate_system"], "repeat_index");
+    assert_eq!(series["experiment_id"], "cli-malformed-input-repeat_index");
+    assert!(
+        series["parent_series_id"].is_null(),
+        "first snapshot has no parent"
+    );
     let points = series["points"].as_sequence().unwrap();
     assert_eq!(points.len(), 3);
     for (i, p) in points.iter().enumerate() {
@@ -101,11 +308,13 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     .unwrap();
     assert_eq!(rec["residuals"].as_array().unwrap().len(), 2);
     for res in rec["residuals"].as_array().unwrap() {
-        assert_eq!(res["sign"]["norm"], "repeated-run");
-        assert_eq!(res["sign"]["drift"], "persistent");
-        assert_eq!(res["sign"]["slew"], "stable");
+        let evidence = res["sign"]["trajectory_evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 1, "one entry per coordinate system");
+        assert_eq!(evidence[0]["coordinate_system"], "repeat_index");
+        assert_eq!(evidence[0]["drift"], "persistent");
+        assert_eq!(evidence[0]["slew"], "stable");
         assert_eq!(
-            res["sign"]["series"], series_id,
+            evidence[0]["series"], series_id,
             "the receipt pins the series snapshot its sign was derived from"
         );
     }
@@ -288,8 +497,10 @@ fn single_run_courts_keep_the_honest_not_observed_sign_and_write_no_trajectories
     )
     .unwrap();
     for res in rec["residuals"].as_array().unwrap() {
-        assert_eq!(res["sign"]["norm"], "single-run");
-        assert_eq!(res["sign"]["drift"], "not-observed");
-        assert_eq!(res["sign"]["slew"], "not-observed");
+        assert_eq!(
+            res["sign"]["trajectory_evidence"],
+            serde_json::json!([]),
+            "a single-run receipt honestly carries no trajectory evidence (drift/slew are not-observed)"
+        );
     }
 }

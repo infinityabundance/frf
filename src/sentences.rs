@@ -282,10 +282,7 @@ mod tests {
                 ResidualKind::text()
             },
             sign: ResidualSign {
-                norm: "single-run".into(),
-                drift: "not-observed".into(),
-                slew: "not-observed".into(),
-                series: None,
+                trajectory_evidence: vec![],
             },
             grammar_state: "violation".into(),
             raw_reference_hash: "e".repeat(64),

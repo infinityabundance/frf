@@ -22,6 +22,13 @@
 //!   (fail closed: no evidence is recorded from a malfunctioning instrument).
 //! - REPLAY re-invokes the exact snapshotted comparator implementation, and
 //!   requires the request to rederive and the outcome to reproduce.
+//! - ONE comparator governs observation, replay, resolution, and reduction:
+//!   every operation that decides "does this axis differ?" evaluates through
+//!   the SAME plan (semantic + implementation) — never a hard-coded
+//!   built-in projection. The proof: a comparator whose extractor sees what
+//!   the built-in first-line extractor cannot (the full stderr differs while
+//!   the first line does not) still governs court, replay, minimization
+//!   preservation, and the fixed-resolution verdict.
 
 mod common;
 use common::*;
@@ -529,6 +536,219 @@ fn a_declared_axis_with_no_comparator_refuses_the_court() {
     assert!(
         stderr(&out).contains("no comparator serves observable axis"),
         "the refusal must name the unserved axis: {}",
+        stderr(&out)
+    );
+}
+
+/// The full-stderr comparator: extractor `stderr-bytes` — the relation is
+/// BYTE-IDENTITY OF THE FULL STDERR, not the built-in first line. A
+/// candidate whose first line matches the reference but whose second line
+/// differs is therefore DIVERGENT under this comparator and equivalent under
+/// the built-in projection: whichever relation the court declared is the one
+/// every operation must use.
+const FULL_STDERR_COMPARATOR: &str = "#!/usr/bin/env python3\n\
+import base64, hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+req = json.loads(raw.decode(\"utf-8\"))\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+def stderr_of(side):\n    return base64.b64decode(side[\"stderr_base64\"]).decode(\"utf-8\", \"replace\")\n\
+ref = stderr_of(req[\"reference\"])\n\
+cand = stderr_of(req[\"candidate\"])\n\
+base = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\n\
+if ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\n\
+else:\n    out = {\"surface\": \"stderr-bytes\", \"raw_reference\": ref, \"raw_candidate\": cand}\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [out]}, separators=(\",\", \":\")))\n";
+
+#[test]
+fn one_comparator_governs_observation_replay_resolution_and_reduction() {
+    // The review's P0, executed: the comparator that generated the original
+    // evidence must govern EVERY operation that decides parity — court run,
+    // replay, minimization preservation, and the fixed-resolution verdict.
+    // The setup makes the built-in projection provably wrong for the
+    // declared relation: the full stderr differs while the first line is
+    // identical, so only the declared comparator can see the divergence.
+    let work = Workdir::new("cmp-unified");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::write(
+        work.path("diag-ref.sh"),
+        "#!/bin/sh\necho 'error 42: boom' >&2\necho 'line A' >&2\nexit 2\n",
+    )
+    .unwrap();
+    fs::write(
+        work.path("diag-cand.sh"),
+        "#!/bin/sh\necho 'error 42: boom' >&2\necho 'line B' >&2\nexit 2\n",
+    )
+    .unwrap();
+    fs::write(
+        work.path("diag-fixed.sh"),
+        "#!/bin/sh\necho 'error 42: boom' >&2\necho 'line A' >&2\nexit 2\n",
+    )
+    .unwrap();
+    for script in ["diag-ref.sh", "diag-cand.sh", "diag-fixed.sh"] {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(work.path(script), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    fs::write(work.path("diag-compare.py"), FULL_STDERR_COMPARATOR).unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "authority",
+            "admit",
+            "diag-ref.sh",
+            "--name",
+            "diag-ref",
+            "--version",
+            "1.0",
+        ],
+    );
+    assert_success(&out, "admit diag-ref");
+
+    // The court: stderr served by the full-stderr comparator; exit in-binary.
+    let manifest = "court:\n  id: diag-court\n  question: >-\n    For malformed input in fixture family malformed-input, does the candidate\n    preserve the admitted reference's full stderr?\n  falsifier: >-\n    The candidate's stderr diverges from the admitted reference's.\n  authority: diag-ref-1.0\n  candidate:\n    name: diag-cand\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: diag-cand.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [exit, stderr]\n    normalizers: []\n    replay_scope: single-run\ncomparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-bytes\n    residual_classifier: text\n    relation_version: \"v1\"\n    program: diag-compare.py\n";
+    fs::write(work.path("diag-manifest.yaml"), manifest).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "diag-manifest.yaml"],
+    );
+    assert_success(&out, "court run (full-stderr comparator)");
+    let run = stdout(&out);
+
+    // The divergence the built-in projection cannot see: first lines are
+    // identical, full stderr differs — the declared comparator sees it.
+    let cap = capture(&work, &run);
+    let residual_ids: Vec<String> = cap["residuals"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|r| r.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(residual_ids.len(), 1, "only the declared relation diverges");
+    let rid = &residual_ids[0];
+    let record: frf::model::ResidualRecord = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{rid}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record.axis.as_str(), "stderr");
+    assert_eq!(
+        record.surface.as_deref(),
+        Some("stderr-bytes"),
+        "the residual surface is the DECLARED extractor's, not the built-in's"
+    );
+    // The built-in first-line projection would call this equivalent — the
+    // captured first lines prove the declared relation is what decided.
+    assert_eq!(cap["reference"]["stderr_first_line"], "error 42: boom");
+    assert_eq!(cap["candidate"]["stderr_first_line"], "error 42: boom");
+
+    // REPLAY: re-invokes the same comparator; the request must rederive and
+    // the outcome must reproduce.
+    let out = frf(&work, &["--root", ROOT, "replay", &run]);
+    assert_success(&out, "replay (full-stderr comparator)");
+    assert!(stdout(&out).contains("reproduced"), "{}", stdout(&out));
+
+    // REDUCTION: preservation is decided by the SAME comparator (the built-in
+    // first-line projection would report the lineage LOST on the very first
+    // baseline — the reduction could not even start). The record binds the
+    // comparator semantic + implementation.
+    let out = frf(&work, &["--root", ROOT, "court", "minimize", rid]);
+    assert_success(&out, "court minimize (full-stderr comparator)");
+    let reduction_id = stdout(&out);
+    let reduction: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    let semantic =
+        frf::comparators::specification_hash("stderr", "eq", "stderr-bytes", "text").unwrap();
+    assert_eq!(reduction["comparator_semantic_hash"], semantic);
+    assert_eq!(reduction["comparator_semantic_id"], "stderr");
+    assert_eq!(
+        reduction["transform"]["success_predicate"],
+        "lineage-survives"
+    );
+    assert_eq!(
+        reduction["attempts"][0]["outcome"], "preserved",
+        "the BASELINE survives under the declared comparator"
+    );
+
+    // RESOLUTION: a run whose full stderr MATCHES the reference closes the
+    // axis (the recorded comparator result is `equivalent`); a run whose
+    // first line matches but full stderr still differs does NOT — the
+    // recorded result is `divergent` and the fixed disposition is refused.
+    let resolution_manifest = manifest.replace("diag-cand.sh", "diag-fixed.sh");
+    fs::write(work.path("diag-resolution.yaml"), resolution_manifest).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "diag-resolution.yaml"],
+    );
+    assert_success(&out, "resolution court run");
+    let resolution_run = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            rid,
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &resolution_run,
+            "--reason",
+            "candidate full stderr now matches the reference",
+        ],
+    );
+    assert_success(&out, "dispose fixed (full stderr matches)");
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit (fixed)");
+    let receipt = stdout(&out);
+    // The receipt VERIFIES: the fixed closure is backed by the recorded
+    // equivalent comparator result of the resolution run.
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert!(out.status.success(), "claim refused: {}", stderr(&out));
+
+    // The negative: a resolution run whose full stderr still diverges (the
+    // first line alone would look identical to the built-in) must NOT close.
+    let still_bad = manifest.replace("diag-cand.sh", "diag-stillbad.sh");
+    fs::write(
+        work.path("diag-stillbad.sh"),
+        "#!/bin/sh\necho 'error 42: boom' >&2\necho 'line C' >&2\nexit 2\n",
+    )
+    .unwrap();
+    fs::write(work.path("diag-stillbad.yaml"), still_bad).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "diag-stillbad.yaml"],
+    );
+    assert_success(&out, "still-divergent court run");
+    let still_bad_run = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            rid,
+            "--disposition",
+            "fixed",
+            "--resolution-run",
+            &still_bad_run,
+            "--reason",
+            "candidate still diverges on the full stderr",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a resolution run whose recorded comparator result is divergent must not close the axis"
+    );
+    assert!(
+        stderr(&out).contains("does not close"),
+        "the refusal must say the axis does not close: {}",
         stderr(&out)
     );
 }

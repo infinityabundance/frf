@@ -284,17 +284,22 @@ pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Res
 }
 
 /// The ExecutionSeries identity: content-addressed over the experiment
-/// (court, coordinate system, and the ordered points). Every append produces
-/// a NEW series record — the growth of a series is itself an immutable
-/// history; trajectories reference the series snapshot they derive from.
-/// The point index enters the preimage as its string form (the canonical
-/// value domain is strings/arrays/booleans/null — numbers are refused).
+/// (court, coordinate system, the parent snapshot, and the ordered points).
+/// Every append produces a NEW series record — the growth of a series is an
+/// immutable, parent-linked history; trajectories reference the series
+/// snapshot they derive from. The point index enters the preimage as its
+/// string form (the canonical value domain is strings/arrays/booleans/null
+/// — numbers are refused).
 pub fn series_identity(
+    experiment_id: &str,
+    parent_series_id: Option<&str>,
     court: &str,
     coordinate_system: &str,
     points: &[SeriesPoint],
 ) -> Result<String> {
     let doc = json!({
+        "experiment_id": experiment_id,
+        "parent_series_id": parent_series_id,
         "court": court,
         "coordinate_system": coordinate_system,
         "points": points
@@ -306,48 +311,96 @@ pub fn series_identity(
             }))
             .collect::<Vec<_>>(),
     });
-    hash_preimage("FRF/SERIES/v1", &doc)
+    hash_preimage("FRF/SERIES/v2", &doc)
 }
 
 /// The reduction identity: content-addressed over the minimization
-/// experiment (residual, artifacts, fixtures, and every attempt).
+/// experiment (residual, every bound identity, fixtures, the attempts, the
+/// derivation, and the transform declaration).
 #[allow(clippy::too_many_arguments)] // one argument per record dimension; the doc is the protocol shape
 pub fn reduction_identity(
     residual_id: &str,
+    source_run: &str,
     axis: &str,
     kind: ResidualKind,
-    authority: &str,
-    candidate_sha256: &str,
+    court_semantic_identity: &str,
+    authority_artifact_sha256: &str,
+    candidate_artifact_sha256: &str,
+    environment_digest: &str,
+    comparator_semantic_id: &str,
+    comparator_semantic_hash: &str,
+    comparator_implementation_hash: &str,
+    argv_template: &[String],
     original_fixture_sha256: &str,
     final_fixture_sha256: &str,
     attempts: &[ReductionAttempt],
     derivation: &ReductionDerivation,
+    transform: &EvidenceTransform,
 ) -> Result<String> {
     let doc = json!({
         "residual_id": residual_id,
+        "source_run": source_run,
         "axis": axis,
         "kind": kind.as_str(),
-        "authority": authority,
-        "candidate_sha256": candidate_sha256,
+        "court_semantic_identity": court_semantic_identity,
+        "authority_artifact_sha256": authority_artifact_sha256,
+        "candidate_artifact_sha256": candidate_artifact_sha256,
+        "environment_digest": environment_digest,
+        "comparator_semantic_id": comparator_semantic_id,
+        "comparator_semantic_hash": comparator_semantic_hash,
+        "comparator_implementation_hash": comparator_implementation_hash,
+        "argv_template": argv_template,
         "original_fixture_sha256": original_fixture_sha256,
         "final_fixture_sha256": final_fixture_sha256,
         "attempts": attempts
             .iter()
             .map(|a| json!({
                 "attempt": a.attempt.to_string(),
+                "role": a.role.as_str(),
                 "fixture_sha256": a.fixture_sha256,
-                "preserved": a.preserved,
-                "kept": a.kept,
+                "outcome": a.outcome.as_str(),
+                "accepted": a.accepted,
             }))
             .collect::<Vec<_>>(),
         "derivation": {
             "strategy": derivation.strategy,
             "original_lines": derivation.original_lines.to_string(),
             "final_lines": derivation.final_lines.to_string(),
-            "minimal": derivation.minimal,
+            "minimality": {
+                "kind": derivation.minimality.kind,
+                "granularity": derivation.minimality.granularity,
+                "proven": derivation.minimality.proven,
+            },
         },
+        "transform": serde_json::to_value(transform)
+            .map_err(|e| FrfError::new(format!("cannot serialize the transform: {e}")))?,
     });
-    hash_preimage("FRF/REDUCTION/v1", &doc)
+    hash_preimage("FRF/REDUCTION/v2", &doc)
+}
+
+/// The knowledge-snapshot identity: SHA-256 of `FRF/KNOWLEDGE/v1` over the
+/// canonical document of the snapshot's fields. The residual heads enter as
+/// (id, disposition, event) triples — a disposition change is a NEW
+/// universe. Every list is sorted, so the same universe hashes identically
+/// in every implementation.
+pub fn knowledge_snapshot_identity(snapshot: &KnowledgeSnapshot) -> Result<String> {
+    let doc = json!({
+        "residual_heads": snapshot
+            .residual_heads
+            .iter()
+            .map(|h| json!({
+                "id": h.id,
+                "disposition": h.disposition,
+                "disposition_event_id": h.disposition_event_id,
+            }))
+            .collect::<Vec<_>>(),
+        "receipts": snapshot.receipts,
+        "runs": snapshot.runs,
+        "authorities": snapshot.authorities,
+        "series": snapshot.series,
+        "reductions": snapshot.reductions,
+    });
+    hash_preimage("FRF/KNOWLEDGE/v1", &doc)
 }
 
 /// The court-challenge identity: `FRF/CHALLENGE/v1` over the DECLARED

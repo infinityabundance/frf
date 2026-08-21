@@ -73,9 +73,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v11" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v12" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v11",
+            "schema_version is {:?}, expected frf-receipt-v12",
             doc["schema_version"]
         ));
     }
@@ -210,6 +210,15 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             for k in unknown_keys(&r["sign"], SIGN_KEYS) {
                 v.push(format!("unknown property {k:?} on residuals[{i}].sign"));
             }
+            if let Some(entries) = r["sign"]["trajectory_evidence"].as_array() {
+                for (j, entry) in entries.iter().enumerate() {
+                    for k in unknown_keys(entry, TRAJECTORY_EVIDENCE_KEYS) {
+                        v.push(format!(
+                            "unknown property {k:?} on residuals[{i}].sign.trajectory_evidence[{j}]"
+                        ));
+                    }
+                }
+            }
             if !is_valid_identifier(as_str(&r["kind"])) {
                 v.push(format!(
                     "residual {:?} has invalid kind {:?}",
@@ -324,7 +333,8 @@ const RESIDUAL_KEYS: &[&str] = &[
     "resolution_run_id",
     "closure_predicate",
 ];
-const SIGN_KEYS: &[&str] = &["norm", "drift", "slew", "series"];
+const SIGN_KEYS: &[&str] = &["trajectory_evidence"];
+const TRAJECTORY_EVIDENCE_KEYS: &[&str] = &["coordinate_system", "series", "drift", "slew"];
 const ENDODUCTION_KEYS: &[&str] = &["schema_version", "tokens"];
 const TOKEN_KEYS: &[&str] = &["residual_id", "token", "next_court", "blocks_claims"];
 const CLAIMS_KEYS: &[&str] = &["positive", "non_claims", "blocked_by_open_residuals"];
@@ -332,9 +342,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v11" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v12" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v11",
+            "schema_version is {:?}, expected frf-receipt-v12",
             rec["schema_version"]
         ));
     }
@@ -572,32 +582,53 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             ));
         }
         let sign = &r["sign"];
-        match as_str(&sign["norm"]) {
-            "single-run" => {
-                if as_str(&sign["drift"]) != "not-observed"
-                    || as_str(&sign["slew"]) != "not-observed"
+        // v12: the sign is TRAJECTORY EVIDENCE per coordinate system — a
+        // residual does not have one universal drift, it has a trajectory
+        // with respect to a coordinate system. A single-run receipt honestly
+        // carries NO entries; every entry names a closed vocabulary
+        // coordinate system (at most once), a non-empty pinned series, and
+        // well-formed drift/slew.
+        let mut seen_coordinates: Vec<&str> = Vec::new();
+        if let Some(entries) = sign["trajectory_evidence"].as_array() {
+            for entry in entries {
+                if ![
+                    "repeat_index",
+                    "candidate_revision",
+                    "authority_version",
+                    "environment",
+                    "time",
+                ]
+                .contains(&as_str(&entry["coordinate_system"]))
                 {
                     v.push(format!(
-                        "single-run residual {rid} must carry drift/slew not-observed"
+                        "residual {rid} names unknown trajectory coordinate system {:?}",
+                        entry["coordinate_system"]
                     ));
                 }
-            }
-            "repeated-run" => {
-                if !["persistent", "transient", "recurrent"].contains(&as_str(&sign["drift"])) {
+                if seen_coordinates.contains(&as_str(&entry["coordinate_system"])) {
                     v.push(format!(
-                        "repeated-run residual {rid} has invalid drift {:?}",
-                        sign["drift"]
+                        "residual {rid} names coordinate system {:?} twice in its trajectory evidence",
+                        entry["coordinate_system"]
                     ));
                 }
-                if !["stable", "abrupt", "burst", "recurrent"].contains(&as_str(&sign["slew"])) {
+                seen_coordinates.push(as_str(&entry["coordinate_system"]));
+                if as_str(&entry["series"]).is_empty() {
                     v.push(format!(
-                        "repeated-run residual {rid} has invalid slew {:?}",
-                        sign["slew"]
+                        "residual {rid} has trajectory evidence without a pinned series"
                     ));
                 }
-            }
-            other => {
-                v.push(format!("residual {rid} has invalid sign norm {other:?}"));
+                if !["persistent", "transient", "recurrent"].contains(&as_str(&entry["drift"])) {
+                    v.push(format!(
+                        "residual {rid} has invalid drift {:?} in its trajectory evidence",
+                        entry["drift"]
+                    ));
+                }
+                if !["stable", "abrupt", "burst", "recurrent"].contains(&as_str(&entry["slew"])) {
+                    v.push(format!(
+                        "residual {rid} has invalid slew {:?} in its trajectory evidence",
+                        entry["slew"]
+                    ));
+                }
             }
         }
         if as_str(&r["reproducer"]) != as_str(&rec["run"]) {
@@ -775,7 +806,7 @@ pub struct ClaimIr {
     pub blockers: Vec<String>,
 }
 
-fn projected_disposition(bundle: &Path, rid: &str) -> String {
+pub fn projected_disposition(bundle: &Path, rid: &str) -> String {
     let ev_dir = bundle.join(format!("residuals/{rid}.events"));
     let mut events: Vec<Value> = Vec::new();
     if ev_dir.is_dir() {

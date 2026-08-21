@@ -26,29 +26,61 @@ in the recorded argv.
 ## The record
 
 Every minimization is a content-addressed protocol object
-(`reductions/<id>.yaml`, `frf-reduction-v1`):
+(`reductions/<id>.yaml`, `frf-reduction-v2`):
 
 ```text
 ReductionRecord {
-    id                        FRF/REDUCTION/v1 over the record's own fields
-    residual_id               the residual being minimized
+    id                                FRF/REDUCTION/v2 over the record's own
+                                      fields
+    residual_id                       the residual being minimized
+    source_run                        the run that observed the residual
     axis / kind
-    authority                 the admitted authority id
-    candidate_sha256          the exact candidate artifact (held fixed)
+    court_semantic_identity           the question (held fixed)
+    authority_artifact_sha256         the authority artifact (held fixed)
+    candidate_artifact_sha256         the exact candidate artifact (held fixed)
+    environment_digest                the environment (held fixed)
+    comparator_semantic_id            the comparator RELATION that governs the
+    comparator_semantic_hash          preservation predicate (held fixed)
+    comparator_implementation_hash    the comparator IMPLEMENTATION that
+                                      observed the residual (held fixed)
+    argv_template                     the resolved argv the sides executed
+                                      under (the fixture slot varies)
     original_fixture_sha256
-    final_fixture_sha256      the reproducer (court-verified)
-    attempts[]                { attempt, fixture_sha256, preserved, kept } —
-                              every reduction step, in order
-    derivation                { strategy, original_lines, final_lines,
-                                minimal }
+    final_fixture_sha256              the reproducer (court-verified)
+    attempts[]                        { attempt, role, fixture_sha256,
+                                      outcome, accepted } — every EXECUTABLE
+                                      step, in order
+    derivation                        { strategy, original_lines,
+                                      final_lines, minimality }
+    transform                         the evidence-transform declaration
+                                      (kind=reduction, fixture varies,
+                                      candidate/authority/comparator/
+                                      environment stay, predicate=
+                                      lineage-survives)
 }
 ```
 
-`minimal` is only claimed when the deterministic ddmin search completed
-within the attempt budget; a budget-cut search says so honestly (the last
-attempt is still the court verification of the reproducer). The reproducer
-object lives under `objects/sha256/` like every other content-addressed
-artifact.
+Every recorded attempt carries its ROLE (`baseline` — the original fixture
+checked before the search; `candidate` — a ddmin step; `final_verification`
+— the reproducer's last court run), its OUTCOME (`preserved` / `lost` /
+`harness_failure` — an unevaluable attempt ABORTS the minimization, never
+silently skipped), and whether it was ACCEPTED (preserved AND the fixture
+shrank; a baseline is never accepted). The attempt budget is a HARD gate
+around every executable attempt: neither the outer nor the inner ddmin loop
+can exceed it, and the final verification is executed under the same gate.
+
+`minimality` is stated precisely — `{kind: one-minimal, granularity: line,
+proven}`: classic ddmin establishes that no single line can be removed while
+preserving the lineage, not global cardinality minimality — and `proven` is
+only true when the deterministic search completed within the attempt budget;
+a budget-cut search says so honestly. The reproducer object lives under
+`objects/sha256/` like every other content-addressed artifact.
+
+The preservation predicate is decided by the SAME evaluation plan that
+observed the residual (`spec/evaluation.md`): the built-in implementation
+in-process, or the exact snapshotted external comparator re-invoked — never a
+re-derived built-in projection. The bound identities prove the record held
+what the transform declares it held.
 
 The record is immutable: tampering breaks the content address and is refused
 on read.

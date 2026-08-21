@@ -35,6 +35,7 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 authority_versions,
                 environment_point,
                 time_point,
+                series_parent,
             } => {
                 let opts = court::SeriesOptions {
                     repeat,
@@ -56,6 +57,7 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                         .filter(|v: &Vec<String>| !v.is_empty()),
                     environment_point,
                     time_point,
+                    series_parent,
                 };
                 let run = court::run(store, &manifest, &opts)?;
                 println!("{run}");
