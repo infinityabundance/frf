@@ -390,7 +390,7 @@ evidence, identical evidence shares the content-addressed run while every
 observation COORDINATE is still a point, and a branched experiment (two
 heads) refuses an implicit append (`--series-parent` chooses the branch). A
 run NEVER knows its experiments: the series references the runs.
-Trajectories (`frf-trajectory-v3`, under
+Trajectories (`frf-trajectory-v4`, under
 `trajectories/<lineage>.<coordinate-system>.<series>.json`) are DERIVED from
 a series snapshot and reference it:
 
@@ -402,9 +402,12 @@ Trajectory {
                        environment | time
     series             the ExecutionSeries snapshot this is derived from
     observations[]     { point_index, coordinate, run, observed, residual?,
-                       fingerprint? } — identical evidence shares the run;
-                       an observed point names the exact fingerprint
-    derivation         { drift, slew, localization, bands }
+                       fingerprint?, magnitude? } — identical evidence shares
+                       the run; an observed point names the exact fingerprint
+                       and (when the axis declares a magnitude measure) the
+                       divergence DEGREE at that point
+    derivation         { drift, slew, localization, bands, trend,
+                       magnitude_kind }
 }
 ```
 
@@ -412,19 +415,36 @@ The classification is a deterministic table (never a model): given the
 observed pattern `o[1..=N]` with `T = {i | o[i]}` non-empty —
 
 ```text
-|T| == N                     -> persistent, stable,  localization=none, bands=1
-T contiguous, start          -> transient,  abrupt,  localization=start   (boundary-localized)
-T contiguous, end            -> transient,  abrupt,  localization=end     (boundary-localized)
-T contiguous, interior       -> transient,  burst,   localization=interior
-T non-contiguous, both ends  -> recurrent,  recurrent, localization=both  (2+ bands =
-                               version-stratified along a version axis)
-otherwise                    -> transient,  recurrent, localization by the ends touched
+|T| == N                     -> persistent,        stable,   localization=none,   bands=1
+T contiguous, start          -> boundary-localized, abrupt,   localization=start (cessation)
+T contiguous, end            -> boundary-localized, abrupt,   localization=end   (onset)
+T contiguous, interior       -> transient,         burst,    localization=interior
+T non-contiguous, 2+ bands on a version/revision axis
+                             -> version-stratified, recurrent, localization by the ends touched
+T non-contiguous, both ends  -> recurrent,         recurrent, localization=both
+otherwise                    -> transient,         recurrent, localization by the ends touched
 ```
 
-`localization` (start/end/both/interior — the paper's boundary-localized)
-and `bands` (2+ = version-stratified) make the extended vocabulary
-executable; `gradual` needs a magnitude dimension (presence is binary) and
-is deliberately not claimed.
+The v4 vocabulary makes the paper's extended terms first-class: `drift` is
+`boundary-localized` for a single contiguous band touching exactly one bound
+(cessation/onset) and `version-stratified` for 2+ bands along an ordered
+version or revision ladder; `localization` (start/end/both/interior) and
+`bands` (2+) carry the detail; and `gradual` is the slew when the divergence's
+DEGREE moves monotonically across the axis.
+
+`gradual` needs a magnitude dimension, and v4 provides it: each axis's
+comparator declares a deterministic distance measure (`exit-code-distance`,
+`line-edit-distance`, `value-edit-distance` — computed on the compared
+projections, bounded and documented; the filesystem-tree, byte-wire, and
+all external surfaces declare `none` because their projections are an
+identity, not a degree). Each observation carries the measure's value as a
+string, and the derivation carries the `trend` of those values in coordinate
+order — `flat` / `increasing` / `decreasing` / `non-monotonic`, or `unknown`
+when no measure exists or fewer than two observed points cannot establish a
+trend. `gradual` is claimed EXACTLY when the trend is monotonic
+(`increasing` or `decreasing`): a ramp, not a step. An axis without a
+measure never claims gradual (fail-closed — presence is binary, degree is
+the measure).
 
 A single-run court cannot observe drift or slew, and its receipts honestly
 carry NO trajectory evidence (`sign: {trajectory_evidence: []}` — the

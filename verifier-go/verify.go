@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"frf-verifier-go/jcs"
@@ -211,6 +212,15 @@ func verifyBundle(bundle string) ClaimIR {
 		_ = i
 	}
 
+	// 4b. The receipt's trajectory evidence REDERIVES from the pinned
+	//     series: each entry's snapshot must exist, match the coordinate
+	//     system, contain the run, and its trajectory record for the
+	//     residual's lineage must yield the recorded drift/slew — with the
+	//     full derivation (localization/bands/trend/magnitude_kind)
+	//     recomputed from the trajectory's observations and the observed
+	//     residuals' compared projections.
+	verifyTrajectoryEvidence(bundle, body, run)
+
 	// 5. The claim, when the bundle carries one: its knowledge snapshot
 	//    rederives and its blockers derive from the bundle's universe.
 	var ir ClaimIR
@@ -252,6 +262,107 @@ type ClaimIR struct {
 	ObservableScope []string
 	Excluded        []string
 	Blockers        []string
+}
+
+// verifyTrajectoryEvidence — the receipt's sign entries REDERIVE from the
+// bundle alone: each entry's pinned series snapshot must exist, match the
+// coordinate system, contain the run, and its trajectory record for the
+// residual's lineage must yield the recorded drift/slew. The trajectory's
+// derivation (drift/slew/localization/bands/trend/magnitude_kind) is
+// recomputed from its observations and the observed residuals' compared
+// projections — never trusted from the trajectory file.
+func verifyTrajectoryEvidence(bundle string, body *jcs.Object, run string) {
+	cap := obj(loadEvidence(safeJoin(bundle, "captures/"+run+"/capture.json")))
+	fixture := str(cap, "fixture")
+	for _, rv := range arr(recVal(body, "residuals")) {
+		ro := obj(rv)
+		rid := str(ro, "id")
+		record := obj(loadEvidence(safeJoin(bundle, "residuals/"+rid+".json")))
+		authority := obj(loadEvidence(safeJoin(bundle, "authorities/"+str(record, "authority")+".json")))
+		var surface *string
+		if s, ok := recVal(record, "surface").(string); ok {
+			surface = &s
+		}
+		lineage, err := residualLineage(
+			str(record, "kind"),
+			str(record, "axis"),
+			surface,
+			str(record, "scope"),
+			str(authority, "name"),
+			fixture,
+		)
+		if err != nil {
+			fail("residual %s: cannot rederive lineage: %v", rid, err)
+		}
+		sign := objKeys(ro, "sign")
+		for _, ev := range arr(recVal(sign, "trajectory_evidence")) {
+			eo := obj(ev)
+			coord := str(eo, "coordinate_system")
+			sid := str(eo, "series")
+			series := obj(loadEvidence(safeJoin(bundle, "series/"+sid+".json")))
+			if str(series, "coordinate_system") != coord {
+				fail("residual %s: the pinned series %s is a %s experiment, not %s", rid, sid, str(series, "coordinate_system"), coord)
+			}
+			containsRun := false
+			for _, p := range arr(recVal(series, "points")) {
+				if str(obj(p), "run") == str(record, "run") {
+					containsRun = true
+					break
+				}
+			}
+			if !containsRun {
+				fail("residual %s: the pinned series %s does not contain its run", rid, sid)
+			}
+			t := obj(loadEvidence(safeJoin(bundle, "trajectories/"+lineage+"."+coord+"."+sid+".json")))
+			if str(t, "subject") != lineage {
+				fail("residual %s: the trajectory is not keyed by its lineage", rid)
+			}
+			// The classification recomputes from the observations (sorted by
+			// point index) with the magnitudes recomputed from the residuals.
+			type obsPoint struct {
+				idx       int
+				observed  bool
+				magnitude *string
+			}
+			var points []obsPoint
+			for _, ov := range arr(recVal(t, "observations")) {
+				oo := obj(ov)
+				observed, _ := recVal(oo, "observed").(bool)
+				var mag *string
+				if ridObs := str(oo, "residual"); ridObs != "" {
+					obsRec := obj(loadEvidence(safeJoin(bundle, "residuals/"+ridObs+".json")))
+					mag = divergenceMagnitude(
+						str(obsRec, "axis"),
+						str(obsRec, "raw_reference"),
+						str(obsRec, "raw_candidate"),
+					)
+				}
+				idx, _ := strconv.Atoi(str(oo, "point_index"))
+				points = append(points, obsPoint{idx: idx, observed: observed, magnitude: mag})
+			}
+			sort.SliceStable(points, func(a, b int) bool { return points[a].idx < points[b].idx })
+			observed := make([]bool, len(points))
+			magnitudes := make([]*string, len(points))
+			for i, p := range points {
+				observed[i] = p.observed
+				magnitudes[i] = p.magnitude
+			}
+			kind := magnitudeKind(str(t, "axis"))
+			der := obj(recVal(t, "derivation"))
+			drift, slew, localization, bands, trend := trajectoryClassify(observed, coord, magnitudes, kind)
+			if drift != str(der, "drift") ||
+				slew != str(der, "slew") ||
+				localization != str(der, "localization") ||
+				bands != str(der, "bands") ||
+				trend != str(der, "trend") ||
+				kind != str(der, "magnitude_kind") {
+				fail("residual %s: trajectory derivation does not rederive", rid)
+			}
+			if drift != str(eo, "drift") || slew != str(eo, "slew") {
+				fail("residual %s: sign does not match its pinned trajectory", rid)
+			}
+		}
+	}
 }
 
 // verifyEventChain proves the disposition events of one residual are

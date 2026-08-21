@@ -559,11 +559,11 @@ func semanticViolations(rec jcs.Value) []string {
 				push(&v, fmt.Sprintf("residual %s has trajectory evidence without a pinned series", rid))
 			}
 			drift := str(eo, "drift")
-			if drift != "persistent" && drift != "transient" && drift != "recurrent" {
+			if drift != "persistent" && drift != "transient" && drift != "recurrent" && drift != "boundary-localized" && drift != "version-stratified" {
 				push(&v, fmt.Sprintf("residual %s has invalid drift %v in its trajectory evidence", rid, drift))
 			}
 			slew := str(eo, "slew")
-			if slew != "stable" && slew != "abrupt" && slew != "burst" && slew != "recurrent" {
+			if slew != "stable" && slew != "abrupt" && slew != "burst" && slew != "recurrent" && slew != "gradual" {
 				push(&v, fmt.Sprintf("residual %s has invalid slew %v in its trajectory evidence", rid, slew))
 			}
 		}

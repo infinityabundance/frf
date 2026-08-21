@@ -1220,8 +1220,11 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 panic!("trajectory of {rid} is not keyed by its lineage");
             }
             // The classification REDERIVES from the observations (sorted by
-            // point), it is not read from the file's derivation.
-            let mut obs: Vec<(u64, bool)> = t["observations"]
+            // point), it is not read from the file's derivation: the
+            // presence pattern over the coordinate system, with the
+            // divergence magnitudes RECOMPUTED from the observed residuals'
+            // compared projections (never trusted from the trajectory file).
+            let mut obs: Vec<(u64, bool, Option<String>)> = t["observations"]
                 .as_array()
                 .map(|a| {
                     a.iter()
@@ -1229,18 +1232,34 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                             (
                                 o["point_index"].as_u64().unwrap_or(0),
                                 o["observed"].as_bool().unwrap_or(false),
+                                o["residual"].as_str().and_then(|rid| {
+                                    let rec = load_evidence(&safe_rel(
+                                        bundle,
+                                        &format!("residuals/{rid}.json"),
+                                    ));
+                                    rederive::divergence_magnitude(
+                                        as_str(&rec["axis"]),
+                                        as_str(&rec["raw_reference"]),
+                                        as_str(&rec["raw_candidate"]),
+                                    )
+                                }),
                             )
                         })
                         .collect()
                 })
                 .unwrap_or_default();
-            obs.sort_by_key(|(rep, _)| *rep);
-            let flags: Vec<bool> = obs.iter().map(|(_, o)| *o).collect();
-            let (drift, slew, localization, bands) = classify(&flags);
+            obs.sort_by_key(|(rep, _, _)| *rep);
+            let flags: Vec<bool> = obs.iter().map(|(_, o, _)| *o).collect();
+            let magnitudes: Vec<Option<String>> = obs.iter().map(|(_, _, m)| m.clone()).collect();
+            let kind = rederive::magnitude_kind(as_str(&t["axis"]));
+            let (drift, slew, localization, bands, trend) =
+                rederive::classify(&flags, as_str(&t["coordinate_system"]), &magnitudes, &kind);
             if drift != as_str(&t["derivation"]["drift"])
                 || slew != as_str(&t["derivation"]["slew"])
                 || localization != as_str(&t["derivation"]["localization"])
                 || bands != t["derivation"]["bands"].as_u64().unwrap_or(0) as u32
+                || trend != as_str(&t["derivation"]["trend"])
+                || kind != as_str(&t["derivation"]["magnitude_kind"])
             {
                 panic!("residual {rid} trajectory derivation does not rederive");
             }

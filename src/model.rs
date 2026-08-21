@@ -289,7 +289,12 @@ pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 /// observation fingerprint; each observation records the exact fingerprint
 /// it saw. Trajectories are DERIVED from an [`ExecutionSeries`] — a run
 /// never knows which experiment references it.
-pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v3";
+/// v4: the extended vocabulary — drift gains `boundary-localized` (a single
+/// contiguous band touching exactly one axis bound) and `version-stratified`
+/// (2+ bands along an ordered version/revision axis); slew gains `gradual`
+/// (a monotonic magnitude trend across the axis, driven by the new
+/// per-observation `magnitude` measure and the derivation's `trend`).
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v4";
 
 /// The ExecutionSeries protocol object: the experiment. One chain per
 /// (court, coordinate system); points are appended by series courts
@@ -2174,26 +2179,38 @@ pub struct TokenRecord {
 
 /// The deterministic classification of a trajectory: how STABLE the
 /// divergence is (drift), what pattern of change it shows (slew), where the
-/// observed bands touch the axis bounds (localization), and how many
-/// contiguous observed bands there are (bands). See
-/// [`crate::trajectory::classify`] for the exact table.
+/// observed bands touch the axis bounds (localization), how many contiguous
+/// observed bands there are (bands), and — when the axis admits a
+/// deterministic magnitude measure — the trend of the divergence's degree
+/// across the axis. See [`crate::trajectory::classify`] for the exact table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrajectoryDrift {
     /// Observed at every point of the axis.
     Persistent,
-    /// Observed at some but not all points.
+    /// Observed at some but not all points, with no more specific pattern.
     Transient,
     /// Transient AND observed at both the first and the last point (it came
     /// back).
     Recurrent,
+    /// A single contiguous band touching exactly one axis bound (the
+    /// paper's boundary-localized): a cessation (present only at the start)
+    /// or an onset (present only at the end).
+    BoundaryLocalized,
+    /// Two or more distinct observed bands along an ORDERED stratification
+    /// axis (an authority-version or candidate-revision ladder): the
+    /// divergence is stratified across versions — it recurs in non-adjacent
+    /// version bands.
+    VersionStratified,
 }
 
 impl TrajectoryDrift {
-    pub const ALL: [TrajectoryDrift; 3] = [
+    pub const ALL: [TrajectoryDrift; 5] = [
         TrajectoryDrift::Persistent,
         TrajectoryDrift::Transient,
         TrajectoryDrift::Recurrent,
+        TrajectoryDrift::BoundaryLocalized,
+        TrajectoryDrift::VersionStratified,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -2201,6 +2218,8 @@ impl TrajectoryDrift {
             TrajectoryDrift::Persistent => "persistent",
             TrajectoryDrift::Transient => "transient",
             TrajectoryDrift::Recurrent => "recurrent",
+            TrajectoryDrift::BoundaryLocalized => "boundary-localized",
+            TrajectoryDrift::VersionStratified => "version-stratified",
         }
     }
 
@@ -2224,14 +2243,18 @@ pub enum TrajectorySlew {
     Burst,
     /// Non-contiguous observation pattern.
     Recurrent,
+    /// The divergence's degree (magnitude) moves monotonically across the
+    /// axis — a ramp, not a step: the boundary is gradual.
+    Gradual,
 }
 
 impl TrajectorySlew {
-    pub const ALL: [TrajectorySlew; 4] = [
+    pub const ALL: [TrajectorySlew; 5] = [
         TrajectorySlew::Stable,
         TrajectorySlew::Abrupt,
         TrajectorySlew::Burst,
         TrajectorySlew::Recurrent,
+        TrajectorySlew::Gradual,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -2240,6 +2263,7 @@ impl TrajectorySlew {
             TrajectorySlew::Abrupt => "abrupt",
             TrajectorySlew::Burst => "burst",
             TrajectorySlew::Recurrent => "recurrent",
+            TrajectorySlew::Gradual => "gradual",
         }
     }
 
@@ -2298,10 +2322,63 @@ impl TrajectoryLocalization {
     }
 }
 
+/// The magnitude TREND of a divergence across an axis: how the degree of
+/// divergence (the per-observation magnitude measure) moves in coordinate
+/// order. `gradual` is claimed exactly when the trend is monotonic
+/// (`increasing` or `decreasing`) — a ramp, not a step. An axis whose
+/// comparator declares no magnitude measure, or a series with too few
+/// observed points to establish a trend, honestly yields `unknown` and never
+/// claims gradual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrajectoryTrend {
+    /// All observed magnitudes are equal across the axis.
+    Flat,
+    /// Non-decreasing, with at least one strict increase.
+    Increasing,
+    /// Non-increasing, with at least one strict decrease.
+    Decreasing,
+    /// Neither monotonic direction holds.
+    NonMonotonic,
+    /// No magnitude evidence (no declared measure, or too few observed
+    /// points to establish a trend).
+    Unknown,
+}
+
+impl TrajectoryTrend {
+    pub const ALL: [TrajectoryTrend; 5] = [
+        TrajectoryTrend::Flat,
+        TrajectoryTrend::Increasing,
+        TrajectoryTrend::Decreasing,
+        TrajectoryTrend::NonMonotonic,
+        TrajectoryTrend::Unknown,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TrajectoryTrend::Flat => "flat",
+            TrajectoryTrend::Increasing => "increasing",
+            TrajectoryTrend::Decreasing => "decreasing",
+            TrajectoryTrend::NonMonotonic => "non-monotonic",
+            TrajectoryTrend::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        TrajectoryTrend::ALL
+            .iter()
+            .copied()
+            .find(|t| t.as_str() == s)
+    }
+}
+
 /// The derived classification of one trajectory. `localization` and `bands`
 /// make the paper's extended vocabulary executable: `abrupt` ↔ start/end
 /// (boundary-localized), `burst` ↔ interior, `recurrent` ↔ both with 2+
-/// bands (version-stratified along a version axis).
+/// bands (version-stratified along a version axis). v4 adds the magnitude
+/// evidence: `trend` (how the divergence's degree moves across the axis, or
+/// `unknown` when no deterministic measure exists) and `magnitude_kind` (the
+/// declared measure, or `none`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryDerivation {
@@ -2314,6 +2391,12 @@ pub struct TrajectoryDerivation {
     /// canonical JSON value domain is strings/arrays/booleans/null, so no
     /// generated evidence document can carry a JSON number.
     pub bands: String,
+    /// The trend of the divergence's magnitude across the axis (v4).
+    pub trend: TrajectoryTrend,
+    /// The declared deterministic magnitude measure: `none` when the axis's
+    /// comparator declares no distance function (external axes, the
+    /// filesystem-tree and byte-wire surfaces), otherwise the measure name.
+    pub magnitude_kind: String,
 }
 
 /// One point of a trajectory: the coordinate value, the run that point
@@ -2335,6 +2418,12 @@ pub struct TrajectoryObservation {
     pub residual: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// The deterministic divergence degree at this point (v4): the declared
+    /// magnitude measure applied to this observation's compared projections,
+    /// as a STRING. Absent when the axis declares no measure or the measure
+    /// is not computable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnitude: Option<String>,
 }
 
 /// The trajectory protocol object: an ordered series of observations of one

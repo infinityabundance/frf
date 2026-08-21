@@ -96,6 +96,104 @@ pub fn spec_for(id: &str) -> Option<&'static ComparatorSpec> {
     SPECS.iter().find(|s| s.id == id)
 }
 
+// ---------------------------------------------------------------------------
+// Trajectory magnitude measures (v0.1.37, frf-trajectory-v4)
+// ---------------------------------------------------------------------------
+//
+// The trajectory vocabulary's `gradual` needs a MAGNITUDE dimension: presence
+// is binary, so how FAR apart the compared projections are at each point must
+// be a separate, deterministic measure. The measure is declared PER COMPARATOR
+// here, in the registry that already defines each built-in's extractor — the
+// trajectory derivation code stays surface-agnostic. Only built-ins whose
+// residual projections admit a distance get a measure:
+//
+//   exit            -> exit-code-distance    |ref_exit - cand_exit|
+//   stderr/stdout   -> line-edit-distance    Levenshtein on the compared
+//                                            first-line projections
+//   structured.state-> value-edit-distance   Levenshtein on the compared
+//                                            field values
+//   filesystem.tree, bytes.wire, external -> none (the projections are
+//                                            content hashes / hashes — an
+//                                            identity, not a degree; an
+//                                            external surface is unknowable)
+//
+// The measures are bounded and deterministic: the edit distance is computed
+// over the first MAGNITUDE_BOUND bytes of each projection (a declared
+// constant), so a hostile or enormous stream cannot make the derivation
+// unbounded, and the truncation is part of the measure's declaration. The
+// computed degree is a decimal STRING (the canonical JSON value domain has no
+// numbers).
+
+/// The declared truncation bound of the edit-distance measures (bytes).
+pub const MAGNITUDE_BOUND: usize = 2048;
+
+/// The declared magnitude measure for a built-in axis, or `none`.
+pub fn magnitude_kind(axis: &str) -> String {
+    match axis {
+        "exit" => "exit-code-distance".to_string(),
+        "stderr" | "stdout" => "line-edit-distance".to_string(),
+        "structured.state" => "value-edit-distance".to_string(),
+        _ => "none".to_string(),
+    }
+}
+
+/// The deterministic divergence degree between a residual observation's
+/// compared projections on `axis` — a decimal string, or `None` when the
+/// axis declares no measure or the measure is not computable on this
+/// observation. Computed from the projections THE COMPARATOR COMPARED (the
+/// residual record's raw values), never from any derived claim.
+pub fn divergence_magnitude(
+    axis: &str,
+    raw_reference: &str,
+    raw_candidate: &str,
+) -> Option<String> {
+    match axis {
+        "exit" => {
+            let a = raw_reference.trim().parse::<i64>().ok()?;
+            let b = raw_candidate.trim().parse::<i64>().ok()?;
+            Some((a - b).abs().to_string())
+        }
+        "stderr" | "stdout" | "structured.state" => Some(
+            edit_distance(
+                &truncate(raw_reference, MAGNITUDE_BOUND),
+                &truncate(raw_candidate, MAGNITUDE_BOUND),
+            )
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+fn truncate(s: &str, bound: usize) -> String {
+    if s.len() <= bound {
+        s.to_string()
+    } else {
+        s[..bound].to_string()
+    }
+}
+
+/// The Levenshtein (byte edit) distance between two strings — deterministic,
+/// declared as the line/value distance measure of the text-family
+/// comparators. The inputs are already bounded by the caller.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    let a: Vec<u8> = a.as_bytes().to_vec();
+    let b: Vec<u8> = b.as_bytes().to_vec();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
+}
+
 /// The specification hash: SHA-256 of `FRF/COMPARATOR-SPEC/v2` over the
 /// The comparator specification hash — the SEMANTIC identity of a relation.
 /// v2: `relation_version` enters the specification document itself (the one

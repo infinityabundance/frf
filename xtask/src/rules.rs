@@ -785,13 +785,23 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                         "residual {rid} has trajectory evidence without a pinned series"
                     ));
                 }
-                if !["persistent", "transient", "recurrent"].contains(&as_str(&entry["drift"])) {
+                if ![
+                    "persistent",
+                    "transient",
+                    "recurrent",
+                    "boundary-localized",
+                    "version-stratified",
+                ]
+                .contains(&as_str(&entry["drift"]))
+                {
                     v.push(format!(
                         "residual {rid} has invalid drift {:?} in its trajectory evidence",
                         entry["drift"]
                     ));
                 }
-                if !["stable", "abrupt", "burst", "recurrent"].contains(&as_str(&entry["slew"])) {
+                if !["stable", "abrupt", "burst", "recurrent", "gradual"]
+                    .contains(&as_str(&entry["slew"]))
+                {
                     v.push(format!(
                         "residual {rid} has invalid slew {:?} in its trajectory evidence",
                         entry["slew"]

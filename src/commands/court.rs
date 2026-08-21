@@ -289,8 +289,9 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
 /// are DERIVED projections of the series (regenerable from the immutable
 /// runs), so re-derivation overwrites — the runs never change.
 fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize> {
-    /// Per-point observation of one lineage: (residual id, fingerprint).
-    type Observed = Vec<Option<(String, String)>>;
+    /// Per-point observation of one lineage: (residual id, fingerprint,
+    /// magnitude).
+    type Observed = Vec<Option<(String, String, Option<String>)>>;
     // lineage -> (axis, per-point observation)
     let mut seen: BTreeMap<String, (String, Observed)> = BTreeMap::new();
     for (i, point) in series.points.iter().enumerate() {
@@ -299,20 +300,34 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
             let record = store.load_residual(id)?;
             let fp = crate::semantics::residual_fingerprint(&record)?;
             let lineage = crate::semantics::residual_lineage_of_record(store, &record)?;
+            // The divergence DEGREE at this point (v4): the axis's declared
+            // magnitude measure applied to the compared projections — the
+            // deterministic input to the `gradual` vocabulary.
+            let magnitude = crate::comparators::divergence_magnitude(
+                record.axis.as_str(),
+                &record.raw_reference,
+                &record.raw_candidate,
+            );
             let entry = seen.entry(lineage).or_insert_with(|| {
                 (
                     record.axis.as_str().to_string(),
                     vec![None; series.points.len()],
                 )
             });
-            entry.1[i] = Some((id.clone(), fp));
+            entry.1[i] = Some((id.clone(), fp, magnitude));
         }
     }
 
     let mut written = 0usize;
     for (lineage, (axis, per_point)) in &seen {
         let observed: Vec<bool> = per_point.iter().map(|o| o.is_some()).collect();
-        let derivation = crate::trajectory::classify(&observed)?;
+        let magnitudes: Vec<Option<String>> = per_point
+            .iter()
+            .map(|o| o.as_ref().and_then(|(_, _, m)| m.clone()))
+            .collect();
+        let kind = crate::comparators::magnitude_kind(axis);
+        let derivation =
+            crate::trajectory::classify(&observed, &series.coordinate_system, &magnitudes, &kind)?;
         let record = TrajectoryRecord {
             schema_version: SCHEMA_TRAJECTORY.to_string(),
             subject: lineage.clone(),
@@ -327,8 +342,9 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
                     coordinate: series.points[i].coordinate.clone(),
                     run: series.points[i].run.clone(),
                     observed: o.is_some(),
-                    residual: o.as_ref().map(|(r, _)| r.clone()),
-                    fingerprint: o.as_ref().map(|(_, f)| f.clone()),
+                    residual: o.as_ref().map(|(r, _, _)| r.clone()),
+                    fingerprint: o.as_ref().map(|(_, f, _)| f.clone()),
+                    magnitude: o.as_ref().and_then(|(_, _, m)| m.clone()),
                 })
                 .collect(),
             derivation,
@@ -337,7 +353,7 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
         store.write_derived(&path, &store.to_evidence(&record)?)?;
         written += 1;
         eprintln!(
-            "trajectory {} (axis {}, {} x{}): drift={}, slew={}, localization={}, bands={}",
+            "trajectory {} (axis {}, {} x{}): drift={}, slew={}, localization={}, bands={}, trend={}",
             &lineage[..16],
             record.axis,
             record.coordinate_system,
@@ -345,7 +361,8 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
             record.derivation.drift.as_str(),
             record.derivation.slew.as_str(),
             record.derivation.localization.as_str(),
-            record.derivation.bands
+            record.derivation.bands,
+            record.derivation.trend.as_str()
         );
     }
     Ok(written)
