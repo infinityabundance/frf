@@ -797,6 +797,13 @@ impl Store {
         }
         let path = self.witness_path(&stmt.id)?;
         if path.exists() {
+            // Idempotent write, content-addressed discipline: the object
+            // already exists — load + verify it IS this object (canonical
+            // document, identity rederives from its fields, the preserved
+            // request/response bind it) before declaring success. "Exists"
+            // is never "assume okay": a corrupt or hand-edited statement at
+            // this address is refused.
+            self.load_witness_statement(&stmt.id)?;
             return Ok(());
         }
         let json = crate::canon::canonical(stmt)?;
@@ -942,6 +949,11 @@ impl Store {
         }
         let path = self.challenge_path(&id)?;
         if path.exists() {
+            // Idempotent write: the object already exists — load + verify it
+            // IS this object (canonical document, id rederives from its
+            // fields) before declaring success; a corrupt or hand-edited
+            // record at this address is refused.
+            self.load_challenge(&id)?;
             return Ok(());
         }
         let json = self.to_evidence(record)?;
@@ -1040,6 +1052,11 @@ impl Store {
         }
         let path = self.reduction_path(&id)?;
         if path.exists() {
+            // Idempotent write: the object already exists — load + verify it
+            // IS this object (canonical document, id rederives from its
+            // fields) before declaring success; a corrupt or hand-edited
+            // record at this address is refused.
+            self.load_reduction(&id)?;
             return Ok(());
         }
         let json = self.to_evidence(record)?;
@@ -1142,7 +1159,12 @@ impl Store {
         }
         let path = self.series_path(&id)?;
         if path.exists() {
-            return Ok(()); // identical series already recorded — no-op
+            // Idempotent write: the object already exists — load + verify it
+            // IS this object (canonical document, id rederives from its
+            // fields) before declaring success; a corrupt or hand-edited
+            // record at this address is refused.
+            self.load_series(&id)?;
+            return Ok(());
         }
         let json = self.to_evidence(series)?;
         self.write_once(&path, &json)

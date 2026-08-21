@@ -285,8 +285,23 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
     let id = format!("receipt-{run}-{}", host::sha256_bytes(json.as_bytes()));
     let path = store.receipt_path(&id)?;
     if path.exists() {
-        // Content-addressed: identical body means identical id, so this is
-        // the same receipt; nothing to rewrite.
+        // Idempotent write, content-addressed discipline: a receipt's id IS
+        // the SHA-256 of its canonical bytes, so the existing file must
+        // hash to that id — a corrupt or hand-edited document at this
+        // address is refused, never silently "reused".
+        let existing = read(&path, "receipt")?;
+        let digest = id
+            .strip_prefix("receipt-")
+            .and_then(|rest| rest.rsplit_once('-'))
+            .map(|(_, d)| d.to_string())
+            .ok_or_else(|| FrfError::new("internal error: malformed receipt id"))?;
+        if host::sha256_bytes(&existing) != digest {
+            return Err(FrfError::new(format!(
+                "receipt {id} already exists but does not hash to its id ({} != {}); refusing to reuse a corrupt receipt",
+                &host::sha256_bytes(&existing)[..16],
+                &digest[..16]
+            )));
+        }
         eprintln!("receipt {id} already exists (identical evidence state); nothing rewritten");
         return Ok(id);
     }
