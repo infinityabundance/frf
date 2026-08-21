@@ -226,6 +226,35 @@ echo "witness statement: $WIT_ID"
 echo "-- the attested statement is content-addressed and re-verified on read:"
 head -c 400 "$ROOT"/witnesses/"$WIT_ID".json; echo
 
+step "9c. the claim under an admission policy — high-assurance"
+# The claim compiles under the TOP assurance tier: sensitivity coverage (the
+# step-2b challenges demonstrated the court can SEE the claimed exit
+# surface), a verified witness attestation of this receipt, and the
+# reference execution contract (profile + capture bounds). The compiled
+# claim CARRIES the capability evidence — challenge ids, witness id, replay
+# profile — so the admission re-derives from the claim alone; the bundles
+# are re-exported so they carry it too.
+echo "-- attest the receipt itself (the independently-witnessed tier):"
+WIT_RECEIPT_ID=$("$FRF_BIN" --root "$ROOT" witness attest receipt "$RECEIPT_FINAL" \
+  --id manual-review \
+  --relation independent-confirmation \
+  --program golden/witnesses/attest.py \
+  --statement "the resolution receipt binds a verified observation of the passing candidate (independent review)")
+echo "receipt witness statement: $WIT_RECEIPT_ID"
+if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL" --policy high-assurance; then
+  echo "FAIL: the high-assurance claim did not compile" >&2
+  exit 1
+fi
+echo "-- the claim's capability evidence (carried in the IR):"
+grep -o '"capability":\[[^]]*\]' "$ROOT"/claims/"$RECEIPT_FINAL".json
+BUNDLE=golden/work/portable.frf
+"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
+BUNDLE_SINGLE=golden/work/portable-single.frf
+"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE_SINGLE" --single
+(cd golden/work && \
+  "$FRF_BIN" bundle verify portable.frf && \
+  "$FRF_BIN" bundle verify portable-single.frf)
+
 step "7. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort
 

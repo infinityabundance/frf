@@ -292,6 +292,57 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             },
         );
         let parsed: ClaimRecord = store.parse_evidence(&claim_path)?;
+        // The capability evidence a sensitivity-backed claim was compiled
+        // under: every content-addressed challenge record it names, and the
+        // mutant run each challenge observed (the run traversal below picks
+        // up its capture, objects, and residuals).
+        for cap in &parsed.capability {
+            for chid in &cap.challenge_ids {
+                let ch = store.load_challenge(chid)?; // verified: content-addressed
+                let bytes = read(&store.challenge_path(chid)?, "challenge")?;
+                let rel = format!("challenges/{chid}.json");
+                entries.insert(
+                    rel.clone(),
+                    ClosureEntry {
+                        rel,
+                        sha256: host::sha256_bytes(&bytes),
+                        kind: "challenge",
+                    },
+                );
+                if !runs.contains(&ch.run) {
+                    runs.push(ch.run.clone());
+                }
+            }
+        }
+        // The witness evidence an independently-witnessed claim was compiled
+        // under: each verified statement (identity rederives, request +
+        // response hash to their cids) and its preserved documents.
+        for wid in &parsed.witness_statements {
+            let stmt = store.load_witness_statement(wid)?; // verified on read
+            let bytes = read(&store.witness_path(wid)?, "witness statement")?;
+            let rel = format!("witnesses/{wid}.json");
+            entries.insert(
+                rel.clone(),
+                ClosureEntry {
+                    rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "witness",
+                },
+            );
+            for f in ["request.json", "response.json"] {
+                let path = store.witness_dir(&stmt.id)?.join(f);
+                let bytes = read(&path, "witness evidence")?;
+                let rel = format!("witnesses/{}/{f}", stmt.id);
+                entries.insert(
+                    rel.clone(),
+                    ClosureEntry {
+                        rel,
+                        sha256: host::sha256_bytes(&bytes),
+                        kind: "witness-evidence",
+                    },
+                );
+            }
+        }
         for head in &parsed.knowledge_snapshot.residual_heads {
             let record = store.load_residual(&head.id)?;
             if !runs.contains(&record.run) {

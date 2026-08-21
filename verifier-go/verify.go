@@ -235,6 +235,10 @@ func verifyBundle(bundle string) ClaimIR {
 			}
 		}
 		ir = claimIR(body, bundle)
+		// The claim's admission policy re-derives from the bundle alone: the
+		// capability/witness evidence is referenced by content, never trusted
+		// from the claim file.
+		verifyClaimPolicy(bundle, obj(claim), body, receiptID)
 	} else {
 		ir = claimIR(body, bundle)
 	}
@@ -415,6 +419,115 @@ func scopesIntersect(a, b *jcs.Object) bool {
 		overlap(recVal(a, "environments"), recVal(b, "environments")) &&
 		overlap(recVal(a, "versions"), recVal(b, "versions")) &&
 		str(a, "fixture_family") == str(b, "fixture_family")
+}
+
+// verifyClaimPolicy re-derives a compiled claim's admission policy from the
+// bundle alone: the claim's capability / witness_statements / replay_profile
+// are evidence references, and each tier's requirements are checked against
+// the bundle's own objects — never trusted from the claim file.
+func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string) {
+	policy := str(claim, "policy")
+	switch policy {
+	case "baseline":
+		return
+	case "sensitivity-backed", "independently-witnessed", "high-assurance":
+	default:
+		fail("claim %s: unknown admission policy %s", receiptID, policy)
+	}
+
+	claimed := asStrArray(recVal(claim, "observable_scope"))
+	covered := make(map[string]bool)
+	for _, capV := range arr(recVal(claim, "capability")) {
+		cap := obj(capV)
+		axis := str(cap, "axis")
+		ids := asStrArray(recVal(cap, "challenge_ids"))
+		if len(ids) == 0 {
+			fail("claim %s: capability entry for axis %s names no challenge", receiptID, axis)
+		}
+		for _, cid := range ids {
+			ch := obj(loadEvidence(safeJoin(bundle, "challenges/"+cid+".json")))
+			if str(ch, "court") != str(obj(recVal(body, "court")), "id") {
+				fail("claim %s: challenge %s is not a challenge of the receipt's court", receiptID, cid)
+			}
+			if str(ch, "target_axis") != axis {
+				fail("claim %s: challenge %s targets %s not %s", receiptID, cid, str(ch, "target_axis"), axis)
+			}
+			if str(ch, "reference_sha256") != str(obj(recVal(body, "authority")), "identity_hash") {
+				fail("claim %s: challenge %s does not wrap the receipt's reference artifact", receiptID, cid)
+			}
+			chRun := str(ch, "run")
+			mutCap := obj(loadEvidence(safeJoin(bundle, "captures/"+chRun+"/capture.json")))
+			if str(mutCap, "court_semantic_identity") != str(obj(recVal(body, "court")), "semantic_identity") {
+				fail("claim %s: challenge %s did not run the same question", receiptID, cid)
+			}
+			onTarget, onUnaffected := false, false
+			for _, ridV := range arr(recVal(mutCap, "residuals")) {
+				rec := obj(loadEvidence(safeJoin(bundle, "residuals/"+ridV.(string)+".json")))
+				if str(rec, "axis") == axis {
+					onTarget = true
+				} else {
+					onUnaffected = true
+				}
+			}
+			if !onTarget || onUnaffected {
+				fail("claim %s: challenge %s does not demonstrate sensitivity on %s (recomputed: saw_defect=%v, specificity_clean=%v)", receiptID, cid, axis, onTarget, !onUnaffected)
+			}
+		}
+		covered[axis] = true
+	}
+	for _, axis := range claimed {
+		if !covered[axis] {
+			fail("claim %s: claimed axis %s has no capability coverage — the court never demonstrated it can see that surface", receiptID, axis)
+		}
+	}
+
+	if policy == "independently-witnessed" || policy == "high-assurance" {
+		witnesses := asStrArray(recVal(claim, "witness_statements"))
+		if len(witnesses) == 0 {
+			fail("claim %s: policy %s requires a witness attestation but names none", receiptID, policy)
+		}
+		affirmed := false
+		for _, wid := range witnesses {
+			stmt := obj(loadEvidence(safeJoin(bundle, "witnesses/"+wid+".json")))
+			subj := obj(recVal(stmt, "subject"))
+			if str(subj, "kind") != "receipt" || str(subj, "id") != receiptID {
+				fail("claim %s: witness %s does not attest this receipt", receiptID, wid)
+			}
+			for _, f := range []string{"request.json", "response.json"} {
+				b := readFile(safeJoin(bundle, "witnesses/"+wid+"/"+f))
+				cidField := "request_cid"
+				if f == "response.json" {
+					cidField = "response_cid"
+				}
+				if jcs.Sha256Hex(b) != str(stmt, cidField) {
+					fail("claim %s: witness %s preserved %s does not hash to its cid", receiptID, wid, f)
+				}
+			}
+			if str(obj(recVal(stmt, "attestation")), "outcome") == "affirm" {
+				affirmed = true
+			}
+		}
+		if !affirmed {
+			fail("claim %s: no named witness affirms the receipt", receiptID)
+		}
+	}
+
+	if policy == "high-assurance" {
+		if str(body, "execution_profile") != "frf-exec-linux-v1" {
+			fail("claim %s: high-assurance requires the reference execution profile", receiptID)
+		}
+		bounds := obj(recVal(body, "capture_bounds"))
+		if str(bounds, "timeout_ms") != "60000" ||
+			str(bounds, "max_stream_bytes") != "16777216" ||
+			str(bounds, "rlimit_as_mb") != "2048" ||
+			str(bounds, "rlimit_cpu_s") != "30" ||
+			str(bounds, "rlimit_nofile") != "1024" {
+			fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract)", receiptID)
+		}
+		if str(claim, "replay_profile") != "frf-exec-linux-v1" {
+			fail("claim %s: the claim's replay_profile does not record the reference profile", receiptID)
+		}
+	}
 }
 
 // verifyCorpus runs the conformance corpus: valid fixtures must canonicalize

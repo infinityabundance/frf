@@ -411,6 +411,36 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 }
             }
         }
+        // The capability evidence a sensitivity-backed claim names: each
+        // content-addressed challenge record and its mutant run (the run
+        // traversal picks up its capture, objects, residuals).
+        if let Some(capability) = claim["capability"].as_array() {
+            for cap in capability {
+                if let Some(ids) = cap["challenge_ids"].as_array() {
+                    for cid in ids {
+                        let cid = as_str(cid).to_string();
+                        needed.insert(format!("challenges/{cid}.json"));
+                        let ch =
+                            load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
+                        let chrun = as_str(&ch["run"]).to_string();
+                        if !seen_runs.contains(&chrun) && !runs.contains(&chrun) {
+                            runs.push(chrun);
+                        }
+                    }
+                }
+            }
+        }
+        // The witness evidence an independently-witnessed claim names: each
+        // verified statement + its preserved request/response.
+        if let Some(witnesses) = claim["witness_statements"].as_array() {
+            for wid in witnesses {
+                let wid = as_str(wid).to_string();
+                needed.insert(format!("witnesses/{wid}.json"));
+                for f in ["request.json", "response.json"] {
+                    needed.insert(format!("witnesses/{wid}/{f}"));
+                }
+            }
+        }
         // The v2 universe commits every other member as (kind, id, cid)
         // objects; reductions enter the closure through kind == "reduction".
         if let Some(objects) = claim["knowledge_snapshot"]["objects"].as_array() {
@@ -476,6 +506,163 @@ fn residual_lineage_of(bundle: &Path, record: &Value, cap: &Value) -> String {
 /// Verify a bundle against itself. Panics (exit 1) on the first violation;
 /// every check names what failed. `container` is how the bundle was opened
 /// (directory or single-tar) and must match the manifest's declaration.
+/// Re-derive a compiled claim's ADMISSION POLICY from the bundle alone — the
+/// claim's `capability` / `witness_statements` / `replay_profile` are
+/// evidence references, and each tier's requirements are checked against the
+/// bundle's own objects (never trusted from the claim file).
+fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &str) {
+    let policy = as_str(&claim["policy"]);
+    if ![
+        "baseline",
+        "sensitivity-backed",
+        "independently-witnessed",
+        "high-assurance",
+    ]
+    .contains(&policy)
+    {
+        panic!("claim {receipt_id}: unknown admission policy {policy:?}");
+    }
+    if matches!(policy, "baseline") {
+        return;
+    }
+
+    // The claimed axes: every one must be covered by a capability entry.
+    let claimed: Vec<String> = claim["observable_scope"]
+        .as_array()
+        .map(|a| a.iter().map(|v| as_str(v).to_string()).collect())
+        .unwrap_or_default();
+    let capability = claim["capability"].as_array().cloned().unwrap_or_default();
+    let mut covered: Vec<String> = Vec::new();
+    for cap in &capability {
+        let axis = as_str(&cap["axis"]).to_string();
+        let challenge_ids = cap["challenge_ids"].as_array().cloned().unwrap_or_default();
+        if challenge_ids.is_empty() {
+            panic!("claim {receipt_id}: capability entry for axis {axis} names no challenge");
+        }
+        for cid in challenge_ids {
+            let cid = as_str(&cid).to_string();
+            let ch = load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
+            if as_str(&ch["court"]) != as_str(&body["court"]["id"]) {
+                panic!(
+                    "claim {receipt_id}: challenge {cid} is not a challenge of the receipt's court"
+                );
+            }
+            if as_str(&ch["target_axis"]) != axis {
+                panic!(
+                    "claim {receipt_id}: challenge {cid} targets {} not {axis}",
+                    as_str(&ch["target_axis"])
+                );
+            }
+            // The mutant wraps the same reference artifact the receipt binds.
+            if as_str(&ch["reference_sha256"]) != as_str(&body["authority"]["identity_hash"]) {
+                panic!("claim {receipt_id}: challenge {cid} does not wrap the receipt's reference artifact");
+            }
+            // The mutant run answered the same question.
+            let chrun = as_str(&ch["run"]);
+            let mut_cap =
+                load_evidence(&safe_rel(bundle, &format!("captures/{chrun}/capture.json")));
+            if as_str(&mut_cap["court_semantic_identity"])
+                != as_str(&body["court"]["semantic_identity"])
+            {
+                panic!("claim {receipt_id}: challenge {cid} did not run the same question");
+            }
+            // The verdicts RECOMPUTE from the mutant run's residuals.
+            let mut on_target = false;
+            let mut on_unaffected = false;
+            if let Some(rids) = mut_cap["residuals"].as_array() {
+                for rid in rids {
+                    let rec = load_evidence(&safe_rel(
+                        bundle,
+                        &format!("residuals/{}.json", as_str(rid)),
+                    ));
+                    if as_str(&rec["axis"]) == axis {
+                        on_target = true;
+                    } else {
+                        on_unaffected = true;
+                    }
+                }
+            }
+            if !on_target || on_unaffected {
+                panic!(
+                    "claim {receipt_id}: challenge {cid} does not demonstrate sensitivity on {axis} (recomputed: saw_defect={on_target}, specificity_clean={})",
+                    !on_unaffected
+                );
+            }
+        }
+        covered.push(axis);
+    }
+    for axis in &claimed {
+        if !covered.contains(axis) {
+            panic!(
+                "claim {receipt_id}: claimed axis {axis} has no capability coverage — the court never demonstrated it can see that surface"
+            );
+        }
+    }
+
+    if matches!(policy, "independently-witnessed" | "high-assurance") {
+        let witnesses = claim["witness_statements"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if witnesses.is_empty() {
+            panic!(
+                "claim {receipt_id}: policy {policy} requires a witness attestation but names none"
+            );
+        }
+        let mut affirmed = false;
+        for wid in witnesses {
+            let wid = as_str(&wid).to_string();
+            let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
+            if as_str(&stmt["subject"]["kind"]) != "receipt"
+                || as_str(&stmt["subject"]["id"]) != receipt_id
+            {
+                panic!("claim {receipt_id}: witness {wid} does not attest this receipt");
+            }
+            // The preserved documents hash to their cids (the attestation is
+            // bound to the exact request/response evidence).
+            for f in ["request.json", "response.json"] {
+                let bytes = read(&safe_rel(bundle, &format!("witnesses/{wid}/{f}")));
+                let cid_field = if f == "request.json" {
+                    "request_cid"
+                } else {
+                    "response_cid"
+                };
+                if sha256_bytes(&bytes) != as_str(&stmt[cid_field]) {
+                    panic!(
+                        "claim {receipt_id}: witness {wid} preserved {f} does not hash to its cid"
+                    );
+                }
+            }
+            if as_str(&stmt["attestation"]["outcome"]) == "affirm" {
+                affirmed = true;
+            }
+        }
+        if !affirmed {
+            panic!("claim {receipt_id}: no named witness affirms the receipt");
+        }
+    }
+
+    if policy == "high-assurance" {
+        if as_str(&body["execution_profile"]) != "frf-exec-linux-v1" {
+            panic!("claim {receipt_id}: high-assurance requires the reference execution profile");
+        }
+        let bounds = &body["capture_bounds"];
+        let reference = serde_json::json!({
+            "timeout_ms": "60000",
+            "max_stream_bytes": "16777216",
+            "rlimit_as_mb": "2048",
+            "rlimit_cpu_s": "30",
+            "rlimit_nofile": "1024",
+        });
+        if bounds != &reference {
+            panic!("claim {receipt_id}: high-assurance requires the reference capture bounds (the exact-replay contract)");
+        }
+        if as_str(&claim["replay_profile"]) != "frf-exec-linux-v1" {
+            panic!("claim {receipt_id}: the claim's replay_profile does not record the reference profile");
+        }
+    }
+}
+
 fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     let manifest = load_json(&safe_rel(bundle, "manifest.json"));
     if as_str(&manifest["schema_version"]) != "frf-bundle-v3" {
@@ -1147,6 +1334,14 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 }
             }
         }
+        // 8. The claim's ADMISSION POLICY re-derives from the bundle alone:
+        //    a sensitivity-backed claim must name challenge records that
+        //    genuinely demonstrate sensitivity on every claimed axis, an
+        //    independently-witnessed claim must name verified attestations of
+        //    this receipt, and high-assurance must additionally be backed by
+        //    the reference execution contract. The capability is evidence,
+        //    never a boolean in the claim file.
+        verify_claim_policy(bundle, &claim, &body, &receipt_id);
     }
 
     let ir = claim_ir(&body, bundle);

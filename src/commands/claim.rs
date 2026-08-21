@@ -29,6 +29,7 @@
 //!   is one renderer (`--json` emits the same IR canonically).
 
 use crate::error::{FrfError, Result};
+use crate::host;
 use crate::model::*;
 use crate::scope;
 use crate::sentences;
@@ -104,7 +105,156 @@ pub fn store_blockers(
     Ok(blockers)
 }
 
-pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
+/// The challenge records in the store (ids of `challenges/*.json`).
+fn challenge_ids(store: &Store) -> Result<Vec<String>> {
+    let dir = store.root.join("challenges");
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut ids: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| FrfError::new(format!("cannot read challenges directory: {e}")))?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect();
+    ids.sort();
+    Ok(ids)
+}
+
+/// The witness statements in the store (ids of `witnesses/*.json`).
+fn witness_ids(store: &Store) -> Result<Vec<String>> {
+    let dir = store.root.join("witnesses");
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut ids: Vec<String> = std::fs::read_dir(&dir)
+        .map_err(|e| FrfError::new(format!("cannot read witnesses directory: {e}")))?
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect();
+    ids.sort();
+    Ok(ids)
+}
+
+/// The per-axis capability coverage a sensitivity-backed claim requires:
+/// every claimed (clean) observable axis must have a challenge record that
+/// demonstrated sensitivity on EXACTLY that axis — same court semantic
+/// identity (the mutant ran the same question), same reference artifact,
+/// the recomputed verdicts `saw_defect` AND `specificity_clean`. The claim
+/// carries the content-addressed challenge ids; this function refuses the
+/// claim, naming the axis and what would satisfy the tier, when coverage is
+/// missing.
+fn capability_coverage(
+    store: &Store,
+    receipt: &Receipt,
+    k: &ClaimScope,
+) -> Result<Vec<ClaimCapability>> {
+    let mut out = Vec::new();
+    let ids = challenge_ids(store)?;
+    // Each challenge's mutant run is verified ONCE (identity + derivation);
+    // the verdicts and the court-semantic-identity binding are recomputed
+    // from that verified run.
+    let mut challenges: Vec<(CourtChallenge, crate::verify::CaptureVerified)> = Vec::new();
+    for id in &ids {
+        let ch = store.load_challenge(id)?; // verified: content-addressed
+        challenges.push((
+            ch.clone(),
+            crate::verify::load_capture_verified(store, &ch.run)?,
+        ));
+    }
+    for axis in &k.observables {
+        let mut challenge_ids: Vec<String> = Vec::new();
+        for (ch, cv) in &challenges {
+            if ch.court != receipt.court.id {
+                continue;
+            }
+            if ch.target_axis != *axis {
+                continue;
+            }
+            // The mutant must wrap the SAME reference artifact the receipt
+            // binds.
+            if ch.reference_sha256 != receipt.authority.identity_hash {
+                continue;
+            }
+            // The mutant run must have answered the SAME question.
+            if cv.capture.court_semantic_identity != receipt.court.semantic_identity {
+                continue;
+            }
+            // The verdicts RECOMPUTE from the mutant run's residuals (derived
+            // facts are never trusted from the record file).
+            let mut on_target = false;
+            let mut on_unaffected = false;
+            for rid in &cv.capture.residuals {
+                let record = store.load_residual(rid)?;
+                if record.axis.as_str() == ch.target_axis {
+                    on_target = true;
+                } else {
+                    on_unaffected = true;
+                }
+            }
+            if on_target && !on_unaffected {
+                challenge_ids.push(ch.id.clone());
+            }
+        }
+        if challenge_ids.is_empty() {
+            return Err(FrfError::new(format!(
+                "claim refused under policy sensitivity-backed: the court has NOT demonstrated it can see the {axis} defect class — no challenge record (same court semantic identity, same reference artifact, targeted axis, saw_defect and specificity_clean recomputed from the mutant run) covers the claimed axis; run `frf court challenge` before compiling"
+            )));
+        }
+        challenge_ids.sort();
+        out.push(ClaimCapability {
+            axis: axis.clone(),
+            challenge_ids,
+        });
+    }
+    Ok(out)
+}
+
+/// The verified witness statements attesting this receipt (`outcome:
+/// affirm`) that an independently-witnessed claim requires. The statement
+/// loader verifies the identity rederives, the preserved request/response
+/// hash to their cids, and the response names its request — an attestation
+/// bound to the exact receipt content address, never a label.
+fn witness_coverage(store: &Store, receipt_id: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for id in witness_ids(store)? {
+        let stmt = store.load_witness_statement(&id)?;
+        if stmt.subject.kind == "receipt"
+            && stmt.subject.id == receipt_id
+            && stmt.attestation.outcome == "affirm"
+        {
+            out.push(id);
+        }
+    }
+    if out.is_empty() {
+        return Err(FrfError::new(format!(
+            "claim refused under policy independently-witnessed: no verified witness statement attests this receipt (subject kind=receipt, id={receipt_id}, outcome=affirm); attest the receipt before compiling"
+        )));
+    }
+    Ok(out)
+}
+
+pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<()> {
+    // The admission policy is one of the declared tiers (baseline through
+    // high-assurance); a tier the engine does not know is refused, never
+    // silently downgraded.
+    if !CLAIM_POLICIES.contains(&policy) {
+        return Err(FrfError::new(format!(
+            "unknown claim policy {policy:?}: the protocol admits {}",
+            CLAIM_POLICIES.join(", ")
+        )));
+    }
     // The semantic non-bypass rule, enforced structurally: claim compilation
     // accepts ONLY a ReceiptVerified — a receipt whose identity AND derivation
     // have been verified (content-addressed, semantically conformant, derived
@@ -206,6 +356,52 @@ pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
         )));
     }
 
+    // 4b. The admission policy (the assurance grade). Each tier above
+    //     `baseline` requires DEMONSTRATED capability evidence, and the
+    //     compiled claim carries the evidence that satisfied it — a
+    //     sensitivity-backed claim is not "challenge passed" as a boolean, it
+    //     names the exact content-addressed challenges that proved the court
+    //     can SEE each claimed surface.
+    let sensitivity_required = matches!(
+        policy,
+        CLAIM_POLICY_SENSITIVITY_BACKED
+            | CLAIM_POLICY_INDEPENDENTLY_WITNESSED
+            | CLAIM_POLICY_HIGH_ASSURANCE
+    );
+    let capability = if sensitivity_required {
+        capability_coverage(store, receipt, &k_scope)?
+    } else {
+        Vec::new()
+    };
+    let witness_required = matches!(
+        policy,
+        CLAIM_POLICY_INDEPENDENTLY_WITNESSED | CLAIM_POLICY_HIGH_ASSURANCE
+    );
+    let witness_statements = if witness_required {
+        witness_coverage(store, receipt_id)?
+    } else {
+        Vec::new()
+    };
+    let replay_profile = if policy == CLAIM_POLICY_HIGH_ASSURANCE {
+        // High assurance requires the exact-replay contract: the observation
+        // was made under the reference profile with the reference capture
+        // bounds (no permissive overrides). The claim records the contract.
+        if receipt.execution_profile != EXECUTION_PROFILE_LINUX {
+            return Err(FrfError::new(format!(
+                "claim refused under policy {policy:?}: this receipt's run was observed under execution profile {}; high-assurance requires the reference profile {EXECUTION_PROFILE_LINUX}",
+                receipt.execution_profile
+            )));
+        }
+        if receipt.capture_bounds != host::capture_bounds() {
+            return Err(FrfError::new(format!(
+                "claim refused under policy {policy:?}: this receipt's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile)",
+            )));
+        }
+        EXECUTION_PROFILE_LINUX.to_string()
+    } else {
+        receipt.execution_profile.clone()
+    };
+
     // 5. A claim IS licensed (scoped to the clean axes). Print the axis
     //    blockers as explicit non-claim boundaries, then the claim.
     for line in sentences::open_refusal_lines(&receipt.residuals, &family) {
@@ -255,6 +451,10 @@ pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
         excluded_evidence: receipt.residuals.iter().map(|r| r.id.clone()).collect(),
         requires: vec![receipt_id.to_string()],
         knowledge_snapshot,
+        policy: policy.to_string(),
+        capability,
+        witness_statements,
+        replay_profile,
         positive: vec![sentence.clone()],
         non_claims: sentences::non_claims(&family),
     };

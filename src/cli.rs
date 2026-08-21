@@ -194,6 +194,16 @@ pub enum ClaimCmd {
         /// one renderer of the IR)
         #[arg(long)]
         json: bool,
+        /// The admission policy (assurance grade): baseline (observation
+        /// evidence only), sensitivity-backed (every claimed axis must have
+        /// challenge coverage — the court demonstrated it can see the
+        /// surface's defect class), independently-witnessed (sensitivity
+        /// plus a verified witness attestation of the receipt),
+        /// high-assurance (independently witnessed, observed under the
+        /// reference execution profile + capture bounds). The compiled
+        /// claim carries the capability evidence that satisfied the tier
+        #[arg(long, default_value = "baseline")]
+        policy: String,
     },
 }
 

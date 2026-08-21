@@ -96,7 +96,11 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             }
         },
         Command::Claim { sub } => match sub {
-            ClaimCmd::Compile { receipt, json } => claim::run(store, &receipt, json),
+            ClaimCmd::Compile {
+                receipt,
+                json,
+                policy,
+            } => claim::run(store, &receipt, json, &policy),
         },
         Command::Replay { id, policy } => {
             // Tree replay: the sides execute from the invocation cwd, so the
