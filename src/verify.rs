@@ -201,6 +201,37 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     store.verified_object_bytes(&capture.candidate_artifact.sha256)?;
     store.verified_object_bytes(&capture.fixture_sha256)?;
 
+    // 6. External comparator evidence: every externally served axis must have
+    //    a verified invocation + result record bound to this run (identity
+    //    rederives, request/response documents hash to their cids, the
+    //    response names its request, the referenced residuals belong to the
+    //    run), and the exact instrument bytes must be intact under objects/.
+    for impl_ in &capture.provenance.comparator_implementations {
+        if let Some(artifact) = &impl_.artifact {
+            store.verified_object_bytes(&artifact.sha256)?;
+            let evidence = store.load_comparator_evidence(run, &impl_.id)?;
+            if evidence.invocation.axis.as_str() != impl_.id
+                || evidence.invocation.comparator_semantic_cid
+                    != capture
+                        .comparator_semantics
+                        .iter()
+                        .find(|s| s.id == impl_.id)
+                        .map(|s| s.specification_hash.clone())
+                        .ok_or_else(|| {
+                            FrfError::new(format!(
+                                "capture {run}: externally served axis {} has no comparator semantic in the capture",
+                                impl_.id
+                            ))
+                        })?
+            {
+                return Err(FrfError::new(format!(
+                    "capture {run}: comparator invocation for axis {} does not bind the recorded semantic identity",
+                    impl_.id
+                )));
+            }
+        }
+    }
+
     Ok(CaptureVerified {
         run: run.to_string(),
         capture,
@@ -467,23 +498,85 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         )));
     }
     for obs in &body.observables {
-        let axis = Axis::parse(&obs.axis).map_err(FrfError::new)?;
-        let (ref_h, cand_h) = match axis {
-            Axis::Exit => (&cap.reference.exit_sha256, &cap.candidate.exit_sha256),
-            Axis::Stderr => (
-                &cap.reference.stderr_first_line_sha256,
-                &cap.candidate.stderr_first_line_sha256,
-            ),
-            Axis::Stdout => (
-                &cap.reference.stdout_first_line_sha256,
-                &cap.candidate.stdout_first_line_sha256,
-            ),
-        };
-        if obs.raw_reference_hash != *ref_h || obs.raw_candidate_hash != *cand_h {
-            return Err(FrfError::new(format!(
-                "receipt {id}: observable {} raw hashes do not match the capture",
-                obs.axis
-            )));
+        ObservableId::parse(&obs.axis)?;
+        // The comparator that served this axis decides what the raw hashes
+        // are: an in-binary axis rederives its captured projections; an
+        // externally served axis binds the exact invocation + result records
+        // and its raw hashes are the canonical reference/candidate subtrees
+        // of the preserved request.
+        let implementation = cap
+            .provenance
+            .comparator_implementations
+            .iter()
+            .find(|i| i.id == obs.axis)
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "receipt {id}: observable {} has no comparator implementation in the capture",
+                    obs.axis
+                ))
+            })?;
+        match &implementation.artifact {
+            None => {
+                let builtin =
+                    crate::comparators::BuiltinKind::from_id(&obs.axis).ok_or_else(|| {
+                        FrfError::new(format!(
+                        "receipt {id}: observable {} was served by no known in-binary comparator",
+                        obs.axis
+                    ))
+                    })?;
+                let (ref_h, cand_h) = match builtin {
+                    crate::comparators::BuiltinKind::Exit => {
+                        (&cap.reference.exit_sha256, &cap.candidate.exit_sha256)
+                    }
+                    crate::comparators::BuiltinKind::Stderr => (
+                        &cap.reference.stderr_first_line_sha256,
+                        &cap.candidate.stderr_first_line_sha256,
+                    ),
+                    crate::comparators::BuiltinKind::Stdout => (
+                        &cap.reference.stdout_first_line_sha256,
+                        &cap.candidate.stdout_first_line_sha256,
+                    ),
+                };
+                if obs.raw_reference_hash != *ref_h || obs.raw_candidate_hash != *cand_h {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: observable {} raw hashes do not match the capture",
+                        obs.axis
+                    )));
+                }
+                if obs.comparator_request.is_some() || obs.comparator_result.is_some() {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: in-binary observable {} must not bind comparator request/result records",
+                        obs.axis
+                    )));
+                }
+            }
+            Some(_) => {
+                let evidence = store.load_comparator_evidence(run, &obs.axis)?;
+                if obs.comparator_request.as_deref()
+                    != Some(evidence.invocation.request_cid.as_str())
+                    || obs.comparator_result.as_deref() != Some(evidence.result.result_id.as_str())
+                {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: observable {} does not bind the recorded comparator request/result records",
+                        obs.axis
+                    )));
+                }
+                let dir = store.comparator_dir(run, &obs.axis)?;
+                let request_bytes = read_bytes(&dir.join("request.json"), "comparator request")?;
+                let request_value = crate::canon::parse_strict(&request_bytes)?;
+                let ref_h = host::sha256_bytes(
+                    crate::canon::encode(&request_value["reference"])?.as_bytes(),
+                );
+                let cand_h = host::sha256_bytes(
+                    crate::canon::encode(&request_value["candidate"])?.as_bytes(),
+                );
+                if obs.raw_reference_hash != ref_h || obs.raw_candidate_hash != cand_h {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: observable {} raw hashes do not match the canonical request subtrees",
+                        obs.axis
+                    )));
+                }
+            }
         }
     }
 
@@ -613,7 +706,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     // 5. Fixed closures must be backed by verifiable resolution evidence.
     for res in &body.residuals {
         if let (Some(resolution_run_id), Ok(axis)) =
-            (&res.resolution_run_id, Axis::parse(&res.axis))
+            (&res.resolution_run_id, ObservableId::parse(&res.axis))
         {
             if resolution_run_id == run {
                 return Err(FrfError::new(format!(
@@ -622,7 +715,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                 )));
             }
             store
-                .resolution_compatibility(run, resolution_run_id, axis)
+                .resolution_compatibility(run, resolution_run_id, &axis)
                 .map_err(|e| {
                     FrfError::new(format!(
                         "receipt {id}: the fixed closure of {} is not backed by verifiable resolution evidence: {e}",
@@ -644,7 +737,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
 
 impl Receipt {
     /// OpenReceipt SEMANTIC conformance: the cross-field, cross-object
-    /// invariants of `frf-receipt-v7`, checked on the document ALONE so any
+    /// invariants of `frf-receipt-v10`, checked on the document ALONE so any
     /// independent implementation can run the same algorithm (normative
     /// description in `spec/openreceipt.md`, corpus in
     /// `conformance/invalid-semantic/`). This is deliberately separate from
@@ -712,13 +805,13 @@ impl Receipt {
             ));
         }
 
-        // Declared observable axes: parseable and unique.
+        // Declared observable axes: valid protocol identifiers, and unique.
         let mut declared: Vec<&str> = Vec::new();
         for axis in &envelope.observables {
-            if Axis::parse(axis).is_err() {
+            if ObservableId::parse(axis).is_err() {
                 fail(
                     &mut violations,
-                    format!("undeclared observable axis {axis:?}"),
+                    format!("invalid observable axis identifier {axis:?}"),
                 );
             }
             if declared.contains(&axis.as_str()) {
@@ -731,13 +824,13 @@ impl Receipt {
             }
         }
 
-        // The observables block: parseable, unique, declared.
+        // The observables block: valid identifiers, unique, declared.
         let mut obs_axes: Vec<&str> = Vec::new();
         for obs in &self.observables {
-            if Axis::parse(&obs.axis).is_err() {
+            if ObservableId::parse(&obs.axis).is_err() {
                 fail(
                     &mut violations,
-                    format!("observable with undeclared axis {:?}", obs.axis),
+                    format!("observable with invalid axis identifier {:?}", obs.axis),
                 );
             }
             if !declared.contains(&obs.axis.as_str()) {
@@ -754,10 +847,37 @@ impl Receipt {
             } else {
                 obs_axes.push(&obs.axis);
             }
+            // An observable's comparator binding is all-or-nothing: an
+            // external verdict names BOTH the exact request and the exact
+            // result record that produced it; an in-binary verdict names
+            // neither.
+            match (&obs.comparator_request, &obs.comparator_result) {
+                (None, None) => {}
+                (Some(_), Some(_)) => {
+                    for (what, v) in [
+                        ("comparator_request", obs.comparator_request.as_deref().unwrap_or("")),
+                        ("comparator_result", obs.comparator_result.as_deref().unwrap_or("")),
+                    ] {
+                        if v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
+                            fail(
+                                &mut violations,
+                                format!("observable {} {what} must be a 64-hex content address", obs.axis),
+                            );
+                        }
+                    }
+                }
+                _ => fail(&mut violations, format!(
+                    "observable {} binds only one of comparator_request/comparator_result — an external verdict binds both, an in-binary verdict binds neither",
+                    obs.axis
+                )),
+            }
         }
 
         // Comparator semantics: exactly one per observable axis, no orphans,
-        // unique ids.
+        // unique ids, and every specification hash REDERIVES from the
+        // record's own fields (the record carries the full specification,
+        // so a receipt cannot claim a specification its semantics do not
+        // hash to).
         let mut sem_ids: Vec<&str> = Vec::new();
         for c in &self.comparator_semantics {
             if sem_ids.contains(&c.id.as_str()) {
@@ -773,6 +893,32 @@ impl Receipt {
                     &mut violations,
                     format!("comparator semantic {} serves no observable", c.id),
                 );
+            }
+            if c.relation_id.is_empty()
+                || c.extractor.is_empty()
+                || c.residual_classifier.is_empty()
+            {
+                fail(
+                    &mut violations,
+                    format!(
+                        "comparator semantic {} must carry a relation, an extractor, and a residual classifier",
+                        c.id
+                    ),
+                );
+            }
+            match crate::semantics::comparator_spec_hash_rederives(c) {
+                Ok(true) => {}
+                Ok(false) => fail(
+                    &mut violations,
+                    format!(
+                        "comparator semantic {}: the specification_hash does not rederive from its own fields",
+                        c.id
+                    ),
+                ),
+                Err(e) => fail(
+                    &mut violations,
+                    format!("comparator semantic {}: {e}", c.id),
+                ),
             }
         }
         for obs in &self.observables {
@@ -816,7 +962,7 @@ impl Receipt {
             }
         }
 
-        // Residuals: unique ids, declared + parseable axes, kind/axis
+        // Residuals: unique ids, declared + valid axes, kind/classifier
         // consistency, disposition cross-field rules, derived grammar_state,
         // v0 sign fields, and the reproducer binding.
         let family = &envelope.fixture_family;
@@ -827,13 +973,13 @@ impl Receipt {
             } else {
                 residual_ids.push(&r.id);
             }
-            let axis = match Axis::parse(&r.axis) {
-                Ok(a) => a,
-                Err(e) => {
-                    fail(&mut violations, format!("residual {}: {e}", r.id));
-                    continue;
-                }
-            };
+            if ObservableId::parse(&r.axis).is_err() {
+                fail(
+                    &mut violations,
+                    format!("residual {} has invalid axis identifier {:?}", r.id, r.axis),
+                );
+                continue;
+            }
             if !declared.contains(&r.axis.as_str()) {
                 fail(
                     &mut violations,
@@ -843,17 +989,30 @@ impl Receipt {
                     ),
                 );
             }
-            let kind_ok = matches!(
-                (&r.kind, axis),
-                (ResidualKind::Exit, Axis::Exit)
-                    | (ResidualKind::Text, Axis::Stderr | Axis::Stdout)
-            );
-            if !kind_ok {
+            if ResidualKind::parse(r.kind.as_str()).is_err() {
+                fail(
+                    &mut violations,
+                    format!("residual {} has invalid kind {:?}", r.id, r.kind.as_str()),
+                );
+            }
+            // The residual kind is the axis's comparator's residual
+            // classifier — the classifier is part of the question, so a
+            // residual whose kind disagrees with its comparator is
+            // inconsistent evidence.
+            let classifier = self
+                .comparator_semantics
+                .iter()
+                .find(|c| c.id == r.axis)
+                .map(|c| c.residual_classifier.as_str());
+            if classifier != Some(r.kind.as_str()) {
                 fail(
                     &mut violations,
                     format!(
-                        "residual {} kind {:?} is inconsistent with axis {}",
-                        r.id, r.kind, r.axis
+                        "residual {} kind {:?} is inconsistent with the {} axis's residual classifier {:?}",
+                        r.id,
+                        r.kind.as_str(),
+                        r.axis,
+                        classifier.unwrap_or("<none>")
                     ),
                 );
             }
@@ -1119,11 +1278,11 @@ impl Receipt {
                 );
                 continue;
             }
-            let axis = match Axis::parse(&r.axis) {
+            let axis = match ObservableId::parse(&r.axis) {
                 Ok(a) => a,
                 Err(_) => continue,
             };
-            let shape = kappa::token_shape(axis);
+            let shape = kappa::token_shape(&axis);
             let expected_token = format!(
                 "{}/{}/{}/{}",
                 r.kind.as_str(),
@@ -1149,7 +1308,7 @@ impl Receipt {
                     ),
                 );
             }
-            let expected_blocks = kappa::blocks_claims(axis, family);
+            let expected_blocks = kappa::blocks_claims(&axis, family);
             if t.blocks_claims != expected_blocks {
                 fail(
                     &mut violations,
@@ -1336,11 +1495,13 @@ mod tests {
                 comparator: "eq(exit-code)".into(),
                 normalization_rules: vec![],
                 verdict: ObservableVerdict::Residual,
+                comparator_request: None,
+                comparator_result: None,
             }],
             residuals: vec![ReceiptResidual {
                 id: "cli-exit-0001".into(),
                 axis: "exit".into(),
-                kind: ResidualKind::Exit,
+                kind: ResidualKind::exit(),
                 sign: ResidualSign {
                     norm: "single-run".into(),
                     drift: "not-observed".into(),
@@ -1453,7 +1614,7 @@ mod tests {
     fn residual_axis_must_be_declared() {
         let msg = violates(valid_receipt(), |b| {
             b.residuals[0].axis = "stdout".into();
-            b.residuals[0].kind = ResidualKind::Text;
+            b.residuals[0].kind = ResidualKind::text();
         });
         assert!(msg.contains("not a declared observable"), "{msg}");
     }

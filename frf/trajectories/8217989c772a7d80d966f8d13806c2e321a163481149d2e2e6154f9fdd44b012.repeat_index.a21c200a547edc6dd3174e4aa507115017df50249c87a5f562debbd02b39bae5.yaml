@@ -2,23 +2,23 @@ schema_version: frf-trajectory-v2
 subject: 8217989c772a7d80d966f8d13806c2e321a163481149d2e2e6154f9fdd44b012
 axis: stderr
 coordinate_system: repeat_index
-series: 9334b3682680a4d47aaf2be8f6879e66ce4380cd2f2467618bc8fbf19c5d2aff
+series: a21c200a547edc6dd3174e4aa507115017df50249c87a5f562debbd02b39bae5
 observations:
 - point_index: 1
   coordinate: '1'
-  run: run-cli-malformed-input-2af2c3a4f79b89bd949193b35e730c7588d6eb0836fdcb35d4cb1d1ab9eb2eae
+  run: run-cli-malformed-input-a7a5ca46fce1f418a1e83ffaf93439ecd5de83f562f6697bfbc2aa4322faeda2
   observed: true
   residual: cli-text-0001
   fingerprint: 5351ea22b5c26c9fa3627e6b4b095c761e6419b554c38e019507241cfca20f11
 - point_index: 2
   coordinate: '2'
-  run: run-cli-malformed-input-2af2c3a4f79b89bd949193b35e730c7588d6eb0836fdcb35d4cb1d1ab9eb2eae
+  run: run-cli-malformed-input-a7a5ca46fce1f418a1e83ffaf93439ecd5de83f562f6697bfbc2aa4322faeda2
   observed: true
   residual: cli-text-0001
   fingerprint: 5351ea22b5c26c9fa3627e6b4b095c761e6419b554c38e019507241cfca20f11
 - point_index: 3
   coordinate: '3'
-  run: run-cli-malformed-input-2af2c3a4f79b89bd949193b35e730c7588d6eb0836fdcb35d4cb1d1ab9eb2eae
+  run: run-cli-malformed-input-a7a5ca46fce1f418a1e83ffaf93439ecd5de83f562f6697bfbc2aa4322faeda2
   observed: true
   residual: cli-text-0001
   fingerprint: 5351ea22b5c26c9fa3627e6b4b095c761e6419b554c38e019507241cfca20f11

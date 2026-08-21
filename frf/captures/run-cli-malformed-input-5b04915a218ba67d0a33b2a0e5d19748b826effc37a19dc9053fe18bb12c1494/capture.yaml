@@ -1,5 +1,5 @@
-schema_version: frf-capture-v6
-run: run-cli-malformed-input-f329f175a48745f86cf1911c57b598af15d7509cfd81bb4aae09b441b8bd8c8b
+schema_version: frf-capture-v7
+run: run-cli-malformed-input-5b04915a218ba67d0a33b2a0e5d19748b826effc37a19dc9053fe18bb12c1494
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
@@ -42,25 +42,29 @@ court_spec:
 comparator_semantics:
 - id: exit
   relation_id: eq
-  relation_version: v1
-  specification_hash: 6dc642ecd6bfc62d228dc45ca3188b16ea7a3d5d19e60bff267ec1ff4eaf8587
+  extractor: exit-code
+  residual_classifier: exit
+  relation_version: v2
+  specification_hash: 1199a471cf91b3972ff58b6f2cd8e0e73e4f8507bb8d468fda0fd5e13cc15f1a
 - id: stderr
   relation_id: eq
-  relation_version: v1
-  specification_hash: d2f6f098a36e172a47b1b11cb11e934de5ddd071c31ba996e3413f9f28293022
+  extractor: stderr-first-line
+  residual_classifier: text
+  relation_version: v2
+  specification_hash: c55a3121b995cb2e230dbfc41a0ac44bb1871be1ca404f63083e816fffbd0490
 provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.22
-    frf_executable_hash: b1e6dea41288762c0c3fe9e9e401c7a686d0cfcea41fe0d40e01de251e2b5700
+    frf_version: 0.1.23
+    frf_executable_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
   comparator_implementations:
   - id: exit
-    implementation_hash: b1e6dea41288762c0c3fe9e9e401c7a686d0cfcea41fe0d40e01de251e2b5700
-    runner_hash: b1e6dea41288762c0c3fe9e9e401c7a686d0cfcea41fe0d40e01de251e2b5700
+    implementation_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
+    runner_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
   - id: stderr
-    implementation_hash: b1e6dea41288762c0c3fe9e9e401c7a686d0cfcea41fe0d40e01de251e2b5700
-    runner_hash: b1e6dea41288762c0c3fe9e9e401c7a686d0cfcea41fe0d40e01de251e2b5700
+    implementation_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
+    runner_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
@@ -83,7 +87,7 @@ candidate_artifact:
     downstream_interpreter:
       path: /usr/bin/bash
       sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
-court_semantic_identity: 28d09117629a52324fb337032cc91c1c7373f97a100260ed6b509bbd581cfb50
+court_semantic_identity: c26625152260680daa067e4d1727ff53204047824da55849718b4a553f84453b
 reference:
   exit: '2'
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
@@ -104,3 +108,13 @@ candidate:
   stderr_sha256: ee8bcc603017deafa72e8702594478bb9747916e3ca1adecfd251525a2b317f2
 residuals:
 - cli-text-0002
+evidence_refs:
+- role: authority-artifact
+  object_kind: object
+  cid: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+- role: candidate-artifact
+  object_kind: object
+  cid: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+- role: fixture-object
+  object_kind: object
+  cid: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21

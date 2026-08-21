@@ -28,6 +28,7 @@ use std::path::Path;
 
 mod jcs;
 mod rederive;
+mod regen;
 mod rules;
 
 use jcs::{encode, parse_strict};
@@ -103,13 +104,50 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             }
         }
         needed.insert(format!("authorities/{}.yaml", as_str(&cap["authority"])));
-        for key in ["authority_artifact", "candidate_artifact", "fixture_sha256"] {
-            let h = if key == "fixture_sha256" {
-                as_str(&cap[key]).to_string()
-            } else {
-                as_str(&cap[key]["sha256"]).to_string()
-            };
+        // Objects: walk the capture's typed evidence references (the generic
+        // graph traversal — comparator implementations included); fall back to
+        // the recorded artifact hashes for captures that carry no refs.
+        let refs: Vec<String> = cap["evidence_refs"]
+            .as_array()
+            .map(|rs| {
+                rs.iter()
+                    .filter(|r| as_str(&r["object_kind"]) == "object")
+                    .map(|r| as_str(&r["cid"]).to_string())
+                    .collect()
+            })
+            .filter(|rs: &Vec<String>| !rs.is_empty())
+            .unwrap_or_else(|| {
+                vec![
+                    as_str(&cap["authority_artifact"]["sha256"]).to_string(),
+                    as_str(&cap["candidate_artifact"]["sha256"]).to_string(),
+                    as_str(&cap["fixture_sha256"]).to_string(),
+                ]
+            });
+        for h in refs {
             needed.insert(format!("objects/sha256/{h}"));
+        }
+        // Comparator invocation evidence (externally served axes).
+        let comp_dir = bundle.join(format!("captures/{run}/comparator"));
+        if comp_dir.is_dir() {
+            let mut axes: Vec<String> = std::fs::read_dir(&comp_dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            axes.sort();
+            for axis in axes {
+                for f in [
+                    "request.json",
+                    "response.json",
+                    "invocation.json",
+                    "result.json",
+                ] {
+                    let p = comp_dir.join(&axis).join(f);
+                    if p.is_file() {
+                        needed.insert(format!("captures/{run}/comparator/{axis}/{f}"));
+                    }
+                }
+            }
         }
         for id in cap["residuals"].as_array().cloned().unwrap_or_default() {
             let id = as_str(&id).to_string();
@@ -669,18 +707,31 @@ fn sorted_names(dir: &Path) -> Vec<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 4 || args[1] != "verify" {
+    if args.len() < 4 {
         eprintln!(
             "xtask — the independent FRF verifier\n\n\
-             usage:\n  cargo xtask verify bundle <bundle.frf/>\n  cargo xtask verify corpus <conformance-dir>"
+             usage:\n  cargo xtask verify bundle <bundle.frf/>\n  cargo xtask verify corpus <conformance-dir>\n  cargo xtask regen corpus <conformance-dir>"
         );
         std::process::exit(2);
     }
-    let result = std::panic::catch_unwind(|| match args[2].as_str() {
-        "bundle" => {
-            let _ = verify_bundle(Path::new(&args[3]));
-        }
-        "corpus" => verify_corpus(Path::new(&args[3])),
+    let result = std::panic::catch_unwind(|| match args[1].as_str() {
+        "verify" => match args[2].as_str() {
+            "bundle" => {
+                let _ = verify_bundle(Path::new(&args[3]));
+            }
+            "corpus" => verify_corpus(Path::new(&args[3])),
+            other => {
+                eprintln!("unknown verify target {other:?}");
+                std::process::exit(2);
+            }
+        },
+        "regen" => match args[2].as_str() {
+            "corpus" => regen::regen_corpus(Path::new(&args[3])),
+            other => {
+                eprintln!("unknown regen target {other:?}");
+                std::process::exit(2);
+            }
+        },
         other => {
             eprintln!("unknown mode {other:?}");
             std::process::exit(2);
@@ -693,7 +744,7 @@ fn main() {
                 .downcast_ref::<String>()
                 .map(|s| s.as_str())
                 .or_else(|| panic.downcast_ref::<&str>().copied())
-                .unwrap_or("verification failed");
+                .unwrap_or("operation failed");
             eprintln!("xtask: {msg}");
             std::process::exit(1);
         }

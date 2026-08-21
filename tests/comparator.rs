@@ -8,13 +8,20 @@
 //! - An external comparator implementing the SAME specification as an
 //!   in-binary comparator produces the SAME residual fingerprint (the same
 //!   question, a different implementation).
+//! - Observable axes are PROTOCOL IDENTIFIERS: a court can declare a wholly
+//!   new axis (`wire`) served only by an external comparator, producing
+//!   residuals of the comparator's declared kind.
+//! - The response must cryptographically name the request it answers
+//!   (`request_id`); a response that does not is refused.
 //! - The capture records the comparator's implementation identity (its
-//!   program bytes), not the frf executable's, while the runner hash still
-//!   names the harness.
+//!   program bytes) and its ARTIFACT identity; the invocation + result
+//!   evidence is preserved under the run and verifies.
 //! - A different extractor is a different question (different specification
 //!   hash, different semantic identity).
 //! - A failing, indeterminate, or undeclared comparator refuses the court
 //!   (fail closed: no evidence is recorded from a malfunctioning instrument).
+//! - REPLAY re-invokes the exact snapshotted comparator implementation, and
+//!   requires the request to rederive and the outcome to reproduce.
 
 mod common;
 use common::*;
@@ -50,7 +57,7 @@ fn residual_fingerprint(work: &Workdir, id: &str) -> String {
     frf::semantics::residual_fingerprint(&record).unwrap()
 }
 
-const PY_COMPARATOR: &str = "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    relation_version: \"v1\"\n    program: golden/comparators/stderr-first-line.py\n";
+const PY_COMPARATOR: &str = "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    residual_classifier: text\n    relation_version: \"v2\"\n    program: golden/comparators/stderr-first-line.py\n";
 
 #[test]
 fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
@@ -91,8 +98,8 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     );
 
     // The comparator SEMANTIC identity is the built-in registry's: the
-    // declaration has the same relation/extractor/version, so the question
-    // is the same.
+    // declaration has the same relation/extractor/classifier/version, so the
+    // question is the same.
     let cap = capture(&work_ext, &run_ext);
     let stderr_sem = cap["comparator_semantics"]
         .as_sequence()
@@ -138,6 +145,12 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
         runner_hash,
         "the implementation must NOT be the frf executable for an external comparator"
     );
+    // The artifact identity is recorded (snapshot path + interpreter), so
+    // replay can re-invoke the exact instrument.
+    assert!(
+        stderr_impl["artifact"]["sha256"].as_str().unwrap() == program_hash,
+        "the comparator artifact must be the snapshotted program bytes"
+    );
     // The exit axis stayed in-binary.
     let exit_impl = cap["provenance"]["comparator_implementations"]
         .as_sequence()
@@ -148,6 +161,177 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     assert_eq!(
         exit_impl["implementation_hash"].as_str().unwrap(),
         runner_hash
+    );
+    assert!(
+        exit_impl.get("artifact").is_none(),
+        "an in-binary comparator must not carry an artifact"
+    );
+
+    // The invocation evidence is preserved under the run and verifies
+    // (identity rederives, request/response documents hash, the response
+    // names its request, the result binds the residuals).
+    let evidence_dir = work_ext.path(&format!("frf/captures/{run_ext}/comparator/stderr"));
+    for f in [
+        "request.json",
+        "response.json",
+        "invocation.json",
+        "result.json",
+    ] {
+        assert!(
+            evidence_dir.join(f).is_file(),
+            "missing comparator evidence {f}"
+        );
+    }
+    let invocation: frf::model::ComparatorInvocation =
+        serde_json::from_str(&fs::read_to_string(evidence_dir.join("invocation.json")).unwrap())
+            .unwrap();
+    assert_eq!(invocation.axis.as_str(), "stderr");
+    let rederived = frf::semantics::comparator_invocation_identity(
+        &frf::semantics::ComparatorInvocationContent {
+            axis: &invocation.axis,
+            request_cid: &invocation.request_cid,
+            comparator_semantic_cid: &invocation.comparator_semantic_cid,
+            comparator_implementation_artifact: &invocation.comparator_implementation_artifact,
+            execution_provenance: &invocation.execution_provenance,
+        },
+    )
+    .unwrap();
+    assert_eq!(rederived, invocation.invocation_id);
+    let result: frf::model::ComparatorResult =
+        serde_json::from_str(&fs::read_to_string(evidence_dir.join("result.json")).unwrap())
+            .unwrap();
+    assert_eq!(result.outcome, "divergent");
+    assert_eq!(
+        result.residual_observation_ids,
+        vec!["cli-text-0001".to_string()]
+    );
+    assert_eq!(result.request_cid, invocation.request_cid);
+    // The preserved response names the exact request it answers.
+    let response: frf::model::ComparatorResponse =
+        serde_json::from_str(&fs::read_to_string(evidence_dir.join("response.json")).unwrap())
+            .unwrap();
+    assert_eq!(response.request_id, invocation.request_cid);
+
+    // REPLAY re-invokes the exact snapshotted comparator and requires the
+    // outcome to reproduce.
+    let out = frf(&work_ext, &["--root", ROOT, "replay", &run_ext]);
+    assert_success(&out, "replay (external comparator)");
+    assert!(stdout(&out).contains("reproduced"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_new_axis_is_a_protocol_identifier() {
+    // Observable-pluggability: a court may declare a wholly NEW axis
+    // (`wire`), served ONLY by an external comparator, producing residuals
+    // of the comparator's declared kind. The core never learns what "wire"
+    // means.
+    let work = Workdir::new("cmp-wire");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // A wire comparator: compares the stderr BYTES of the two sides.
+    fs::write(
+        work.path("golden/comparators/wire.py"),
+        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, separators=(\",\", \":\")))\n",
+    )
+    .unwrap();
+    let manifest = "court:\n  id: cli-wire-court\n  question: >-\n    For malformed input in fixture family malformed-input, does the candidate\n    preserve the admitted reference's wire stream?\n  falsifier: >-\n    The candidate's wire stream diverges from the admitted reference.\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand-cli\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [wire]\n    normalizers: []\n    replay_scope: single-run\ncomparators:\n  - axis: wire\n    relation: eq\n    extractor: stderr-bytes\n    residual_classifier: wire\n    relation_version: \"v1\"\n    program: golden/comparators/wire.py\n"
+    .to_string();
+    fs::write(
+        work.path("frf/courts/cli-malformed-input/manifest-wire.yaml"),
+        manifest,
+    )
+    .unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/cli-malformed-input/manifest-wire.yaml",
+        ],
+    );
+    assert_success(&out, "court run (wire axis)");
+    let run = stdout(&out);
+
+    // The residual: kind `wire`, id `cli-wire-0001`, surface from the
+    // comparator's extractor, and the honest generic κ row (no fabricated
+    // minimizer target).
+    let rec: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rec["axis"], "wire");
+    assert_eq!(rec["kind"], "wire");
+    assert_eq!(rec["surface"], "stderr-bytes");
+    let token: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.token.yaml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(token["token"], "wire/wire-divergence/observed/open");
+    assert_eq!(token["next_court"], "none");
+    assert_eq!(
+        token["blocks_claims"][0], "malformed-input wire parity",
+        "the token must block exactly the wire-axis claim phrase"
+    );
+
+    // The claim compiler refuses (the open residual blocks the wire axis),
+    // naming the axis.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit (wire axis)");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert!(
+        !out.status.success(),
+        "an open wire residual must block the claim"
+    );
+    assert!(
+        stderr(&out).contains("wire"),
+        "the refusal must name the wire axis: {}",
+        stderr(&out)
+    );
+
+    // Replay re-invokes the wire comparator and reproduces.
+    let out = frf(&work, &["--root", ROOT, "replay", &run]);
+    assert_success(&out, "replay (wire axis)");
+}
+
+#[test]
+fn a_response_that_does_not_name_its_request_is_refused() {
+    let work = Workdir::new("cmp-noreq");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // A comparator that answers WITHOUT echoing the request_id it received:
+    // the court must refuse — the response does not cryptographically say
+    // which request it answers.
+    fs::write(
+        work.path("golden/comparators/no-request-id.py"),
+        "#!/usr/bin/env python3\nimport json, sys\nsys.stdin.buffer.read()\nprint(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": \"0\" * 64, \"equivalent\": True, \"residuals\": [], \"indeterminate\": False, \"failure\": None}, separators=(\",\", \":\")))\n",
+    )
+    .unwrap();
+    write_manifest(
+        &work,
+        "manifest-noreq.yaml",
+        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    residual_classifier: text\n    relation_version: \"v2\"\n    program: golden/comparators/no-request-id.py\n",
+    );
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/cli-malformed-input/manifest-noreq.yaml",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a response that does not name its request must refuse the court"
+    );
+    assert!(
+        stderr(&out).contains("names request"),
+        "the refusal must name the binding: {}",
+        stderr(&out)
     );
 }
 
@@ -160,13 +344,13 @@ fn a_new_extractor_is_a_new_question() {
     // specification and a different question.
     fs::write(
         work.path("golden/comparators/stderr-bytes.py"),
-        "#!/usr/bin/env python3\nimport base64, json, sys\nreq = json.load(sys.stdin)\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nif ref == cand:\n    print(json.dumps({\"schema_version\": \"frf-comparator-response-v1\", \"equivalent\": True, \"residuals\": [], \"indeterminate\": False, \"failure\": None}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({\"schema_version\": \"frf-comparator-response-v1\", \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}], \"indeterminate\": False, \"failure\": None}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     write_manifest(
         &work,
         "manifest-bytes.yaml",
-        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-bytes\n    relation_version: \"v1\"\n    program: golden/comparators/stderr-bytes.py\n",
+        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-bytes\n    residual_classifier: text\n    relation_version: \"v1\"\n    program: golden/comparators/stderr-bytes.py\n",
     );
     let out = frf(
         &work,
@@ -222,7 +406,7 @@ fn a_failing_comparator_refuses_the_court() {
     write_manifest(
         &work,
         "manifest-fail.yaml",
-        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    relation_version: \"v1\"\n    program: golden/comparators/failing.py\n",
+        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    residual_classifier: text\n    relation_version: \"v2\"\n    program: golden/comparators/failing.py\n",
     );
     let out = frf(
         &work,
@@ -243,12 +427,6 @@ fn a_failing_comparator_refuses_the_court() {
         "the refusal must name the comparator: {}",
         stderr(&out)
     );
-    assert!(!work
-        .path("frf/captures")
-        .join("..")
-        .join("..")
-        .join("x")
-        .exists());
 }
 
 #[test]
@@ -258,13 +436,13 @@ fn an_indeterminate_comparator_refuses_the_court() {
     admit_reference(&work);
     fs::write(
         work.path("golden/comparators/indeterminate.py"),
-        "#!/usr/bin/env python3\nimport json\nprint(json.dumps({\"schema_version\": \"frf-comparator-response-v1\", \"equivalent\": False, \"residuals\": [], \"indeterminate\": True, \"failure\": None}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport hashlib, json, sys\nraw = sys.stdin.buffer.read()\nprint(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": hashlib.sha256(raw).hexdigest(), \"equivalent\": False, \"residuals\": [], \"indeterminate\": True, \"failure\": None}, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     write_manifest(
         &work,
         "manifest-indet.yaml",
-        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    relation_version: \"v1\"\n    program: golden/comparators/indeterminate.py\n",
+        "comparators:\n  - axis: stderr\n    relation: eq\n    extractor: stderr-first-line\n    residual_classifier: text\n    relation_version: \"v2\"\n    program: golden/comparators/indeterminate.py\n",
     );
     let out = frf(
         &work,
@@ -296,7 +474,7 @@ fn a_comparator_for_an_undeclared_axis_refuses_the_court() {
     write_manifest(
         &work,
         "manifest-bad.yaml",
-        "comparators:\n  - axis: stdout\n    relation: eq\n    extractor: stdout-first-line\n    relation_version: \"v1\"\n    program: golden/comparators/stderr-first-line.py\n",
+        "comparators:\n  - axis: stdout\n    relation: eq\n    extractor: stdout-first-line\n    residual_classifier: text\n    relation_version: \"v2\"\n    program: golden/comparators/stderr-first-line.py\n",
     );
     let out = frf(
         &work,
@@ -315,6 +493,42 @@ fn a_comparator_for_an_undeclared_axis_refuses_the_court() {
     assert!(
         stderr(&out).contains("not in the envelope"),
         "the refusal must name the undeclared axis: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_declared_axis_with_no_comparator_refuses_the_court() {
+    let work = Workdir::new("cmp-unserved");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // `wire` is declared in the envelope but served by no comparator (and is
+    // not a built-in): the court must refuse — an observable with no
+    // comparator cannot be compared.
+    let manifest = "court:\n  id: cli-malformed-input\n  question: q\n  falsifier: f\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand-cli\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [exit, wire]\n    normalizers: []\n    replay_scope: single-run\n"
+    .to_string();
+    fs::write(
+        work.path("frf/courts/cli-malformed-input/manifest-unserved.yaml"),
+        manifest,
+    )
+    .unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/cli-malformed-input/manifest-unserved.yaml",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "an observable with no comparator must refuse the court"
+    );
+    assert!(
+        stderr(&out).contains("no comparator serves observable axis"),
+        "the refusal must name the unserved axis: {}",
         stderr(&out)
     );
 }

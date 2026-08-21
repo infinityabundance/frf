@@ -201,8 +201,8 @@ pub fn run_identity(p: &RunPreimage) -> Result<String> {
 /// residual's hashed projections, not the raw values.
 pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
     fingerprint_from_projections(
-        r.kind,
-        r.axis,
+        &r.kind,
+        &r.axis,
         r.surface.as_deref(),
         &r.raw_reference,
         &r.raw_candidate,
@@ -212,8 +212,8 @@ pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
 /// The fingerprint of a divergence, computed directly from raw projections
 /// (used by replay to re-derive what a fresh execution must reproduce).
 pub fn fingerprint_from_projections(
-    kind: ResidualKind,
-    axis: Axis,
+    kind: &ResidualKind,
+    axis: &ObservableId,
     surface: Option<&str>,
     raw_reference: &str,
     raw_candidate: &str,
@@ -242,8 +242,8 @@ pub fn fingerprint_from_projections(
 /// minimization will introduce its own preservation predicate rather than
 /// silently changing the lineage.)
 pub fn residual_lineage(
-    kind: ResidualKind,
-    axis: Axis,
+    kind: &ResidualKind,
+    axis: &ObservableId,
     surface: Option<&str>,
     fixture_family: &str,
     authority_name: &str,
@@ -265,8 +265,8 @@ pub fn residual_lineage(
 pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Result<String> {
     let authority = store.load_authority(&record.authority)?;
     residual_lineage(
-        record.kind,
-        record.axis,
+        &record.kind,
+        &record.axis,
         record.surface.as_deref(),
         &record.scope,
         &authority.name,
@@ -381,6 +381,69 @@ pub fn disposition_event_identity(c: &DispositionEventContent) -> Result<String>
         "evidence_refs": c.evidence_refs,
     });
     hash_preimage("FRF/DISPOSITION-EVENT/v1", &doc)
+}
+
+/// Does a recorded comparator SEMANTIC rederive its own specification hash?
+/// The semantic record carries the full specification (id, relation,
+/// extractor, residual classifier) next to its hash, so the receipt-side
+/// validator can prove a receipt's comparator semantics are what they claim
+/// to be.
+pub fn comparator_spec_hash_rederives(c: &ComparatorSemantic) -> Result<bool> {
+    Ok(crate::comparators::specification_hash(
+        &c.id,
+        &c.relation_id,
+        &c.extractor,
+        &c.residual_classifier,
+    )? == c.specification_hash)
+}
+
+/// The content-addressable inputs of one comparator INVOCATION record: the
+/// record's identity is computed over these (the `invocation_id` itself is
+/// excluded — an object cannot contain its own address).
+pub struct ComparatorInvocationContent<'a> {
+    pub axis: &'a ObservableId,
+    pub request_cid: &'a str,
+    pub comparator_semantic_cid: &'a str,
+    pub comparator_implementation_artifact: &'a ArtifactIdentity,
+    pub execution_provenance: &'a RunnerIdentity,
+}
+
+/// The identity of a comparator invocation record: SHA-256 of
+/// `FRF/COMPARATOR-INVOCATION/v1` over its content. Rederivable from the
+/// record's own recorded fields — a name is a claim until recomputed.
+pub fn comparator_invocation_identity(c: &ComparatorInvocationContent) -> Result<String> {
+    let doc = json!({
+        "axis": c.axis.as_str(),
+        "request_cid": c.request_cid,
+        "comparator_semantic_cid": c.comparator_semantic_cid,
+        "comparator_implementation_artifact":
+            serde_json::to_value(c.comparator_implementation_artifact)
+                .map_err(|e| FrfError::new(format!("cannot serialize the comparator implementation artifact: {e}")))?,
+        "execution_provenance":
+            serde_json::to_value(c.execution_provenance)
+                .map_err(|e| FrfError::new(format!("cannot serialize the execution provenance: {e}")))?,
+    });
+    hash_preimage("FRF/COMPARATOR-INVOCATION/v1", &doc)
+}
+
+/// The content-addressable inputs of one comparator RESULT record.
+pub struct ComparatorResultContent<'a> {
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+    pub outcome: &'a str,
+    pub residual_observation_ids: &'a [String],
+}
+
+/// The identity of a comparator result record: SHA-256 of
+/// `FRF/COMPARATOR-RESULT/v1` over its content.
+pub fn comparator_result_identity(c: &ComparatorResultContent) -> Result<String> {
+    let doc = json!({
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+        "outcome": c.outcome,
+        "residual_observation_ids": c.residual_observation_ids,
+    });
+    hash_preimage("FRF/COMPARATOR-RESULT/v1", &doc)
 }
 
 /// The first semantic dimension on which two captures differ, phrased for an
@@ -560,8 +623,8 @@ mod tests {
             id: "cli-text-0001".into(),
             court: "c".into(),
             run: "r".into(),
-            axis: Axis::Stderr,
-            kind: ResidualKind::Text,
+            axis: ObservableId::stderr(),
+            kind: ResidualKind::text(),
             surface,
             authority: "a".into(),
             scope: "s".into(),
@@ -643,6 +706,7 @@ mod tests {
                 stderr_sha256: "0".repeat(64),
             },
             residuals: vec![],
+            evidence_refs: vec![],
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

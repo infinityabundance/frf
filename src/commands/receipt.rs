@@ -15,6 +15,12 @@ use crate::host;
 use crate::kappa;
 use crate::model::*;
 use crate::store::Store;
+use std::fs;
+use std::path::Path;
+
+fn read(path: &Path, what: &str) -> Result<Vec<u8>> {
+    fs::read(path).map_err(|e| FrfError::new(format!("cannot read {what} {}: {e}", path.display())))
+}
 
 pub fn run(store: &Store, run: &str) -> Result<String> {
     let capture = store.load_capture(run)?;
@@ -34,36 +40,82 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         .observables
         .iter()
         .map(|o| {
-            let axis = Axis::parse(o).expect("validated at court run");
-            let (raw_reference_hash, raw_candidate_hash) = match axis {
-                Axis::Exit => (
-                    capture.reference.exit_sha256.clone(),
-                    capture.candidate.exit_sha256.clone(),
-                ),
-                Axis::Stderr => (
-                    capture.reference.stderr_first_line_sha256.clone(),
-                    capture.candidate.stderr_first_line_sha256.clone(),
-                ),
-                Axis::Stdout => (
-                    capture.reference.stdout_first_line_sha256.clone(),
-                    capture.candidate.stdout_first_line_sha256.clone(),
-                ),
-            };
+            let axis = ObservableId::parse(o).expect("validated at court run");
+            let semantic = capture
+                .comparator_semantics
+                .iter()
+                .find(|s| s.id == axis.as_str())
+                .expect("validated at court run");
+            let implementation = capture
+                .provenance
+                .comparator_implementations
+                .iter()
+                .find(|i| i.id == axis.as_str())
+                .expect("validated at court run");
             let has_residual = residuals.iter().any(|r| r.axis == axis);
-            ReceiptObservable {
+            // For an in-binary axis the raw hashes are the captured
+            // projections; for an externally served axis they are the
+            // canonical `reference`/`candidate` subtrees of the preserved
+            // comparator request, and the observable binds the exact
+            // invocation + result records that produced its verdict.
+            let (raw_reference_hash, raw_candidate_hash, comparator_request, comparator_result) =
+                match &implementation.artifact {
+                    None => {
+                        let builtin = crate::comparators::BuiltinKind::from_id(axis.as_str())
+                            .expect("validated at court run");
+                        let (ref_h, cand_h) = match builtin {
+                            crate::comparators::BuiltinKind::Exit => (
+                                capture.reference.exit_sha256.clone(),
+                                capture.candidate.exit_sha256.clone(),
+                            ),
+                            crate::comparators::BuiltinKind::Stderr => (
+                                capture.reference.stderr_first_line_sha256.clone(),
+                                capture.candidate.stderr_first_line_sha256.clone(),
+                            ),
+                            crate::comparators::BuiltinKind::Stdout => (
+                                capture.reference.stdout_first_line_sha256.clone(),
+                                capture.candidate.stdout_first_line_sha256.clone(),
+                            ),
+                        };
+                        (ref_h, cand_h, None, None)
+                    }
+                    Some(_) => {
+                        let evidence = store.load_comparator_evidence(run, axis.as_str())?;
+                        let dir = store.comparator_dir(run, axis.as_str())?;
+                        let request_value = crate::canon::parse_strict(&read(
+                            &dir.join("request.json"),
+                            "request",
+                        )?)?;
+                        let ref_h = host::sha256_bytes(
+                            crate::canon::encode(&request_value["reference"])?.as_bytes(),
+                        );
+                        let cand_h = host::sha256_bytes(
+                            crate::canon::encode(&request_value["candidate"])?.as_bytes(),
+                        );
+                        (
+                            ref_h,
+                            cand_h,
+                            Some(evidence.invocation.request_cid.clone()),
+                            Some(evidence.result.result_id.clone()),
+                        )
+                    }
+                };
+            Ok(ReceiptObservable {
                 axis: axis.as_str().to_string(),
                 raw_reference_hash,
                 raw_candidate_hash,
-                comparator: axis.comparator().to_string(),
+                comparator: semantic.relation_label(),
                 normalization_rules: vec![],
                 verdict: if has_residual {
                     ObservableVerdict::Residual
                 } else {
                     ObservableVerdict::Pass
                 },
-            }
+                comparator_request,
+                comparator_result,
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     let receipt_residuals: Vec<ReceiptResidual> = residuals
         .iter()
@@ -92,7 +144,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             Ok(ReceiptResidual {
                 id: r.id.clone(),
                 axis: r.axis.as_str().to_string(),
-                kind: r.kind,
+                kind: r.kind.clone(),
                 sign,
                 grammar_state: kappa::grammar_state(&disposition).to_string(),
                 raw_reference_hash: r.raw_reference_sha256.clone(),

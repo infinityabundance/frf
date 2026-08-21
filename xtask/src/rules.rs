@@ -51,14 +51,22 @@ fn unknown_keys(obj: &Value, allowed: &[&str]) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_valid_identifier(s: &str) -> bool {
+    crate::rederive::is_valid_identifier(s)
+}
+
 pub fn structural_violations(doc: &Value) -> Vec<String> {
     let mut v = Vec::new();
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v9" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v10" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v9",
+            "schema_version is {:?}, expected frf-receipt-v10",
             doc["schema_version"]
         ));
     }
@@ -106,6 +114,18 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
                     "unknown property {k:?} on comparator_implementations[{i}]"
                 ));
             }
+            if let Some(artifact) = c.get("artifact") {
+                for k in unknown_keys(artifact, ARTIFACT_KEYS) {
+                    v.push(format!(
+                        "unknown property {k:?} on comparator_implementations[{i}].artifact"
+                    ));
+                }
+                if !hex64(as_str(&artifact["sha256"])) {
+                    v.push(format!(
+                        "comparator_implementations[{i}].artifact.sha256 must be 64 hex"
+                    ));
+                }
+            }
         }
     }
     if let Some(sems) = doc["comparator_semantics"].as_array() {
@@ -113,6 +133,11 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             for k in unknown_keys(c, COMPARATOR_SEMANTIC_KEYS) {
                 v.push(format!(
                     "unknown property {k:?} on comparator_semantics[{i}]"
+                ));
+            }
+            if !hex64(as_str(&c["specification_hash"])) {
+                v.push(format!(
+                    "comparator_semantics[{i}].specification_hash must be 64 hex"
                 ));
             }
         }
@@ -128,6 +153,15 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
         for (i, o) in obs.iter().enumerate() {
             for k in unknown_keys(o, OBSERVABLE_KEYS) {
                 v.push(format!("unknown property {k:?} on observables[{i}]"));
+            }
+            for what in ["comparator_request", "comparator_result"] {
+                if let Some(cid) = o.get(what) {
+                    if !hex64(as_str(cid)) {
+                        v.push(format!(
+                            "observables[{i}].{what} must be a 64-hex content address"
+                        ));
+                    }
+                }
             }
         }
     }
@@ -163,6 +197,12 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             }
             for k in unknown_keys(&r["sign"], SIGN_KEYS) {
                 v.push(format!("unknown property {k:?} on residuals[{i}].sign"));
+            }
+            if !is_valid_identifier(as_str(&r["kind"])) {
+                v.push(format!(
+                    "residual {:?} has invalid kind {:?}",
+                    r["id"], r["kind"]
+                ));
             }
             let d = as_str(&r["disposition"]);
             if !DISPOSITIONS.contains(&d) {
@@ -200,10 +240,13 @@ const ENVELOPE_KEYS: &[&str] = &[
 ];
 const PROVENANCE_KEYS: &[&str] = &["schema_version", "runner", "comparator_implementations"];
 const RUNNER_KEYS: &[&str] = &["schema_version", "frf_version", "frf_executable_hash"];
-const COMPARATOR_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash"];
+const COMPARATOR_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash", "artifact"];
+const ARTIFACT_KEYS: &[&str] = &["path", "sha256", "interpreter"];
 const COMPARATOR_SEMANTIC_KEYS: &[&str] = &[
     "id",
     "relation_id",
+    "extractor",
+    "residual_classifier",
     "relation_version",
     "specification_hash",
 ];
@@ -245,6 +288,8 @@ const OBSERVABLE_KEYS: &[&str] = &[
     "comparator",
     "normalization_rules",
     "verdict",
+    "comparator_request",
+    "comparator_result",
 ];
 const RESIDUAL_KEYS: &[&str] = &[
     "id",
@@ -271,9 +316,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v9" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v10" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v9",
+            "schema_version is {:?}, expected frf-receipt-v10",
             rec["schema_version"]
         ));
     }
@@ -299,8 +344,8 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         .unwrap_or_default()
     {
         let axis = as_str(&axis).to_string();
-        if !["exit", "stderr", "stdout"].contains(&axis.as_str()) {
-            v.push(format!("undeclared observable axis {axis:?}"));
+        if !is_valid_identifier(&axis) {
+            v.push(format!("invalid observable axis identifier {axis:?}"));
         }
         if declared.contains(&axis) {
             v.push(format!("duplicate declared observable axis {axis:?}"));
@@ -312,13 +357,32 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut obs_axes: Vec<String> = Vec::new();
     for obs in rec["observables"].as_array().cloned().unwrap_or_default() {
         let axis = as_str(&obs["axis"]).to_string();
+        if !is_valid_identifier(&axis) {
+            v.push(format!("observable with invalid axis identifier {axis:?}"));
+        }
         if !declared.contains(&axis) {
             v.push(format!("observable {axis} is not declared in the envelope"));
         }
         if obs_axes.contains(&axis) {
             v.push(format!("duplicate observable block for axis {axis}"));
         } else {
-            obs_axes.push(axis);
+            obs_axes.push(axis.clone());
+        }
+        // An observable's comparator binding is all-or-nothing.
+        let req = obs.get("comparator_request").map(as_str);
+        let res = obs.get("comparator_result").map(as_str);
+        match (req, res) {
+            (None, None) => {}
+            (Some(r), Some(r2)) => {
+                if !hex64(r) || !hex64(r2) {
+                    v.push(format!(
+                        "observable {axis} comparator_request/comparator_result must be 64-hex content addresses"
+                    ));
+                }
+            }
+            _ => v.push(format!(
+                "observable {axis} binds only one of comparator_request/comparator_result — an external verdict binds both, an in-binary verdict binds neither"
+            )),
         }
     }
 
@@ -336,6 +400,18 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         }
         if !obs_axes.contains(&id) {
             v.push(format!("comparator semantic {id} serves no observable"));
+        }
+        // The specification hash REDERIVES from the record's own fields.
+        let expected = comparator_spec_hash(
+            &id,
+            as_str(&c["relation_id"]),
+            as_str(&c["extractor"]),
+            as_str(&c["residual_classifier"]),
+        );
+        if expected != as_str(&c["specification_hash"]) {
+            v.push(format!(
+                "comparator semantic {id}: the specification_hash does not rederive from its own fields"
+            ));
         }
     }
     for obs in rec["observables"].as_array().cloned().unwrap_or_default() {
@@ -384,13 +460,17 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                 as_str(&r["axis"])
             ));
         }
-        let kind_ok = (as_str(&r["kind"]) == "exit" && as_str(&r["axis"]) == "exit")
-            || (as_str(&r["kind"]) == "text" && matches!(as_str(&r["axis"]), "stderr" | "stdout"));
-        if !kind_ok {
+        // The residual kind is the axis's comparator's residual classifier.
+        let classifier = semantics
+            .iter()
+            .find(|c| as_str(&c["id"]) == as_str(&r["axis"]))
+            .map(|c| as_str(&c["residual_classifier"]).to_string());
+        if classifier.as_deref() != Some(as_str(&r["kind"])) {
             v.push(format!(
-                "residual {rid} kind {:?} is inconsistent with axis {}",
+                "residual {rid} kind {:?} is inconsistent with the {} axis's residual classifier {:?}",
                 r["kind"],
-                as_str(&r["axis"])
+                as_str(&r["axis"]),
+                classifier.unwrap_or_else(|| "<none>".to_string())
             ));
         }
         let d = as_str(&r["disposition"]).to_string();

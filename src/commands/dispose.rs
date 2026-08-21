@@ -44,7 +44,7 @@ pub fn run(
             // compatible envelope; everything but the candidate is held
             // stable. The candidate is exactly what a fix is allowed to
             // change, and both runs record their artifact hashes.
-            store.resolution_compatibility(&record.run, &run, record.axis)?;
+            store.resolution_compatibility(&record.run, &run, &record.axis)?;
             DispositionEvent::fixed(
                 id,
                 reason.to_string(),

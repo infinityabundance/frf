@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v9` (this document).*
+*Version: `frf-receipt-v10` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that
@@ -98,8 +98,40 @@ not an event: it is the projection of no events, so open entries carry
 ## 4. Schema
 
 `spec/openreceipt.schema.json` (JSON Schema draft-07) is the normative
-machine-readable definition. `schema_version` MUST be `frf-receipt-v9`; a
+machine-readable definition. `schema_version` MUST be `frf-receipt-v10`; a
 conformant parser refuses any other version.
+
+### 4.1 Observable axes and residual kinds — protocol identifiers
+
+Observable axis ids and residual kinds are **open protocol identifiers**, not
+closed enums. The grammar is: lowercase ASCII letter first, then lowercase
+letters, digits, `.`, `_`, `-`; 1..=64 characters. The reference engine ships
+three in-binary comparators (`exit`, `stderr`, `stdout`) whose residual
+classifiers are `exit` and `text`; any other axis (`dns.wire`,
+`filesystem.tree`, …) is served by an external comparator via the extension
+protocol (`spec/comparator.md`), and the comparator's declared
+`residual_classifier` names the kind every divergence on the axis is
+recorded as. The kind is part of the residual fingerprint, the lineage, and
+the residual id, so a new kind is a new residual class, never a silent
+reinterpretation of an old one.
+
+Each `comparator_semantics[]` entry carries its full specification
+(`relation_id`, `extractor`, `residual_classifier`) next to its
+`specification_hash`, so the hash REDERIVES from the entry's own fields — a
+receipt cannot claim a specification its own semantics do not hash to.
+
+### 4.2 Externally served observables
+
+An observable served by an external comparator binds the exact instrument
+that produced its verdict: `comparator_request` (the content address of the
+canonical request the comparator received) and `comparator_result` (the
+content address of its result record) are both present, and the observable's
+`raw_reference_hash`/`raw_candidate_hash` are the SHA-256s of the canonical
+`reference`/`candidate` subtrees of that request. An in-binary observable
+binds neither, and its raw hashes rederive from the captured projections.
+The invocation/result evidence is preserved under the run, verified on every
+read (identities rederive, documents hash to their cids, the response names
+its request), carried by the bundle closure, and re-invoked by replay.
 
 ## 5. Conformance — two levels
 
@@ -136,30 +168,39 @@ corpus is `conformance/invalid-semantic/`, one document per violated rule
    it); every other disposition (`intentional`, `environmental`,
    `oracle_version`, `harness`, `unknown`) carries a `reason` and a
    `disposition_event_id`, and nothing else.
-2. **Declared axes** are parseable and unique; every `observables[]` block
-   is declared and unique.
+2. **Declared axes** are valid protocol identifiers and unique; every
+   `observables[]` block is declared, a valid identifier, and unique.
 3. **Comparator semantics** are a bijection with the observable axes, each
-   with exactly one implementation in `provenance`.
-4. **Residuals** have unique ids, declared axes, kind/axis consistency
-   (`exit`↔exit, `text`↔stderr/stdout), a `grammar_state` that rederives
-   from the disposition, v0 `sign` fields, and a `reproducer` equal to the
-   receipt's run.
-5. **Verdict consistency.** `verdict: residual` iff a residual exists on the
+   with exactly one implementation in `provenance`, and every
+   `specification_hash` REDERIVES from its entry's own
+   relation/extractor/residual-classifier fields.
+4. **Residuals** have unique ids, valid + declared axes, a `kind` equal to
+   the axis's comparator's `residual_classifier`, a `grammar_state` that
+   rederives from the disposition, v0 `sign` fields, and a `reproducer`
+   equal to the receipt's run.
+5. **Observable comparator bindings** are all-or-nothing: an externally
+   served observable carries BOTH `comparator_request` and
+   `comparator_result` (64-hex content addresses); an in-binary observable
+   carries neither.
+6. **Verdict consistency.** `verdict: residual` iff a residual exists on the
    axis; `verdict: pass` excludes one.
-6. **Environment digest rederives** as
+7. **Environment digest rederives** as
    `sha256("os={os}\narch={arch}\nkernel={kernel}")`.
-7. **Court semantic identity rederives** from the document (declared
+8. **Court semantic identity rederives** from the document (declared
    arguments, authority artifact hash, fixture, envelope, comparators).
-8. **Replay target.** `program == "frf"`, `expected_run_identity == run`,
+9. **Replay target.** `program == "frf"`, `expected_run_identity == run`,
    `argv` is a court-run invocation.
-9. **Endoduction tokens** mirror residuals one-to-one and each rederives
-   from kind/axis/disposition via the κ table.
-10. **Interpreter chains** are internally consistent: an `env` resolver must
+10. **Endoduction tokens** mirror residuals one-to-one and each rederives
+    from kind/axis/disposition via the κ table (built-in rows as in Section
+    12; any other axis gets the deterministic generic row: surface
+    `{axis}-divergence`, magnitude `observed`, `next_court: none`, blocked
+    phrase `{scope} {axis} parity`).
+11. **Interpreter chains** are internally consistent: an `env` resolver must
     BE the kernel interpreter it resolved through; without a resolver the
     kernel must BE the downstream interpreter.
-11. **Resolved argv** corresponds to the declared arguments: every resolved
+12. **Resolved argv** corresponds to the declared arguments: every resolved
     argument is either the declared argument or a `{fixture}` substitution.
-12. **Claims.** v0 receipts never carry positive claims; the claim compiler
+13. **Claims.** v0 receipts never carry positive claims; the claim compiler
     writes `claims/` from a verified receipt.
 
 ### 5.3 Evidentiary verification (reference engine)
@@ -215,14 +256,18 @@ canonical-JSON manifest:
 
 ```text
 bundle.frf/
-  manifest.json        frf-bundle-v1: schema_version, receipt_id, run,
+  manifest.json        frf-bundle-v2: schema_version, receipt_id, run,
                        created_by, and the content-addressed inventory
                        (path, sha256, kind per file)
   receipts/<id>.json
   captures/<run>/      capture.yaml + raw side files, for the receipt's run
                        and — transitively — every resolution run its
-                       disposition events reference
-  objects/sha256/<H>   content-addressed execution snapshots
+                       disposition events reference, plus
+                       comparator/<axis>/{request,response,invocation,
+                       result}.json for every externally served axis
+  objects/sha256/<H>   content-addressed execution snapshots — the executed
+                       artifacts AND the comparator instrumentation, walked
+                       via the capture's typed evidence references
   residuals/           residual records + <id>.events/ event chains
   claims/<id>.yaml     the compiled claim, when present
 ```

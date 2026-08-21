@@ -86,11 +86,11 @@ fn audit(schema: &Value, where_: &str) {
         }
     }
     if let Some(p) = schema.get("pattern") {
-        // The corpus only uses this one pattern. Any future pattern must be
+        // The corpus only uses these two patterns. Any future pattern must be
         // implemented here before it may appear in the schema.
-        assert_eq!(
-            p.as_str().expect("pattern must be a string"),
-            "^[0-9a-f]{64}$",
+        let p = p.as_str().expect("pattern must be a string");
+        assert!(
+            matches!(p, "^[0-9a-f]{64}$" | "^[a-z][a-z0-9._-]*$"),
             "{where_}: unsupported pattern — implement it before using it"
         );
     }
@@ -111,6 +111,20 @@ fn hex64(s: &str) -> bool {
     s.len() == 64
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// The protocol identifier grammar: lowercase letter first, then lowercase
+/// letters, digits, `.`, `_`, `-`; 1..=64 characters.
+fn is_ident(s: &str) -> bool {
+    if s.is_empty() || s.len() > 64 {
+        return false;
+    }
+    let mut chars = s.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
 }
 
 fn validate(schema: &Value, defs: &Value, instance: &Value) -> Result<(), String> {
@@ -203,13 +217,20 @@ fn validate(schema: &Value, defs: &Value, instance: &Value) -> Result<(), String
             return Err(format!("value does not equal const {c}"));
         }
     }
-    if let Some(_p) = schema.get("pattern") {
-        // `audit` has already proven the only reachable pattern is
-        // ^[0-9a-f]{64}$, implemented by `hex64` below. Per JSON Schema,
-        // pattern applies to strings only; other types (null) pass.
+    if schema.get("pattern").is_some() {
+        // `audit` has already proven the only reachable patterns are the hex
+        // digest and the protocol identifier; both are implemented below.
+        let p = schema["pattern"]
+            .as_str()
+            .expect("pattern must be a string");
         if let Some(s) = instance.as_str() {
-            if !hex64(s) {
-                return Err(format!("{s:?} does not match ^[0-9a-f]{{64}}$"));
+            let ok = match p {
+                "^[0-9a-f]{64}$" => hex64(s),
+                "^[a-z][a-z0-9._-]*$" => is_ident(s),
+                other => panic!("unsupported pattern {other:?}"),
+            };
+            if !ok {
+                return Err(format!("{s:?} does not match {p}"));
             }
         }
     }
