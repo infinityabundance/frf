@@ -102,6 +102,9 @@ jobs:
       - name: The external empirical program — real historical defects across domains
         run: |
           cargo xtask external-experiment golden/work/external-experiment.json
+      - name: The external empirical program v2 — version ladders, environment matrices, authority transitions
+        run: |
+          cargo xtask external-experiment-v2 golden/work/external-experiment-v2.json
 
   go-verifier:
     name: "Go verifier: the third triangle point"

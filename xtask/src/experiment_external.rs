@@ -48,7 +48,7 @@ fn as_str(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
-fn run_frf(frf: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
+pub(crate) fn run_frf(frf: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
     let out = Command::new(frf)
         .args(args)
         .current_dir(cwd)
@@ -61,14 +61,14 @@ fn run_frf(frf: &Path, cwd: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn copy_to(src_root: &Path, dst_root: &Path, rel: &str, executable: bool) {
+pub(crate) fn copy_to(src_root: &Path, dst_root: &Path, rel: &str, executable: bool) {
     let src = src_root.join(rel);
     let bytes =
         std::fs::read(&src).unwrap_or_else(|e| panic!("cannot read {}: {e}", src.display()));
     write_bytes(dst_root, &format!("scripts/{rel}"), &bytes, executable);
 }
 
-fn write_bytes(root: &Path, rel: &str, bytes: &[u8], executable: bool) {
+pub(crate) fn write_bytes(root: &Path, rel: &str, bytes: &[u8], executable: bool) {
     let path = root.join(rel);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -85,7 +85,7 @@ fn write_bytes(root: &Path, rel: &str, bytes: &[u8], executable: bool) {
     }
 }
 
-fn admit(frf: &Path, cwd: &Path, path: &str, name: &str, version: &str) {
+pub(crate) fn admit(frf: &Path, cwd: &Path, path: &str, name: &str, version: &str) {
     let (ok, out, err) = run_frf(
         frf,
         cwd,

@@ -1,0 +1,23 @@
+court:
+  id: env-import-check
+  question: >-
+    For the environment-import family, does the candidate import function
+    definitions with the same behavior as the reference?
+  falsifier: >-
+    The candidate's import executes code the reference leaves inert.
+  authority: ref-shellshock-2014
+  candidate:
+    name: cand
+    version_or_commit: "1.0"
+    build_profile: debug
+    path: scripts/candidate-buggy.sh
+  fixture:
+    id: import.conf
+    path: fixtures/defect.import
+    arguments: ["{fixture}"]
+  admissibility_envelope:
+    fixture_family: env-import
+    platforms: ["x86_64-linux"]
+    observables: [stdout, exit]
+    normalizers: []
+    replay_scope: single-run

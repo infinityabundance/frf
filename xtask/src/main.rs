@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 mod experiment;
 mod experiment_external;
+mod experiment_external_v2;
 mod jcs;
 mod rederive;
 mod regen;
@@ -1610,7 +1611,8 @@ fn main() {
                cargo xtask verify corpus <conformance-dir>\n\
                cargo xtask regen corpus <conformance-dir>\n\
                cargo xtask experiment [OUT.json] [--no-check]\n\
-               cargo xtask external-experiment [OUT.json] [--no-check]\n"
+               cargo xtask external-experiment [OUT.json] [--no-check]\n\
+               cargo xtask external-experiment-v2 [OUT.json] [--no-check]\n"
         );
         std::process::exit(2);
     }
@@ -1690,6 +1692,24 @@ fn main() {
                 }
             }
             experiment_external::run(repo_root, &out, check);
+        }
+        "external-experiment-v2" => {
+            // The EXTERNAL empirical program v2: the trajectory axes on real
+            // historical defects — version ladders, environment matrices,
+            // and authority transitions (--no-check disables the gates).
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let mut out = repo_root
+                .join("golden")
+                .join("work")
+                .join("external-experiment-v2.json");
+            let mut check = true;
+            for a in &args[2..] {
+                match a.as_str() {
+                    "--no-check" => check = false,
+                    other => out = PathBuf::from(other),
+                }
+            }
+            experiment_external_v2::run(repo_root, &out, check);
         }
         other => {
             eprintln!("unknown mode {other:?}");
