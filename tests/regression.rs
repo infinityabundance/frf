@@ -1193,7 +1193,7 @@ fn claim_json_renderer_emits_the_ir_canonically() {
     let first = stdout(&out);
     let value: serde_json::Value = serde_json::from_str(&first).unwrap();
     assert_eq!(value["receipt"], receipt);
-    assert_eq!(value["schema_version"], "frf-claim-v2");
+    assert_eq!(value["schema_version"], "frf-claim-v3");
     assert_eq!(value["scope"]["observables"][0], "exit");
     // Determinism: a second emission is byte-identical (canonical form).
     let out = frf(
@@ -1416,11 +1416,13 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
         &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v1");
+    assert_eq!(rec["schema_version"], "frf-reduction-v2");
     assert_eq!(rec["residual_id"], "cli-exit-0001");
     assert_eq!(rec["axis"], "exit");
     assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");
-    assert_eq!(rec["derivation"]["minimal"], true);
+    assert_eq!(rec["derivation"]["minimality"]["kind"], "one-minimal");
+    assert_eq!(rec["derivation"]["minimality"]["granularity"], "line");
+    assert_eq!(rec["derivation"]["minimality"]["proven"], true);
     assert!(
         rec["derivation"]["final_lines"].as_u64().unwrap()
             < rec["derivation"]["original_lines"].as_u64().unwrap(),
@@ -1429,12 +1431,14 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
     // The content address rederives from the record's own fields.
     let attempts = rec["attempts"].as_sequence().unwrap();
     assert!(!attempts.is_empty(), "every attempt is recorded");
-    // The FINAL attempt is the court verification: the reproducer fixture
-    // still produces the divergence (preserved) and was kept.
+    // Attempts carry their role/outcome/acceptance: the FIRST is the
+    // baseline (never accepted), the LAST is the final court verification.
+    assert_eq!(attempts[0]["role"], "baseline");
+    assert_eq!(attempts[0]["accepted"], false);
     let last = attempts.last().unwrap();
     assert_eq!(last["fixture_sha256"], rec["final_fixture_sha256"]);
-    assert_eq!(last["preserved"], true);
-    assert_eq!(last["kept"], true);
+    assert_eq!(last["outcome"], "preserved");
+    assert_eq!(last["accepted"], true);
     // The reproducer object exists (content-addressed, sealed).
     let final_sha = rec["final_fixture_sha256"].as_str().unwrap();
     let reproducer =
@@ -1484,5 +1488,145 @@ fn minimize_refuses_a_non_text_fixture() {
         stderr(&out).contains("not UTF-8 text"),
         "refusal must name the reason: {}",
         stderr(&out)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge snapshot — a claim is admissible relative to a committed universe
+// ---------------------------------------------------------------------------
+
+#[test]
+fn claims_bind_the_evidence_universe_they_were_admissible_under() {
+    // The review's P0 for claims, executed: claim admissibility is relative
+    // to an explicitly committed state of knowledge. The compiled claim
+    // carries the universe (its residual heads + dispositions + content
+    // address), so the negative search is portable — and a later store
+    // mutation is a NEW universe, not a silent rewrite of the old claim.
+    let work = Workdir::new("claim-universe");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    run_court(&work);
+    let resolution_run = run_resolution_court(&work);
+    for (id, disposition, reason, resolution) in [
+        (
+            "cli-exit-0001",
+            "fixed",
+            "candidate patched to preserve reference exit class",
+            Some(resolution_run.as_str()),
+        ),
+        (
+            "cli-text-0001",
+            "intentional",
+            "clearer diagnostic wording",
+            None,
+        ),
+        (
+            "cli-text-0002",
+            "intentional",
+            "re-observed wording divergence",
+            None,
+        ),
+    ] {
+        let mut args = vec![
+            "--root".to_string(),
+            ROOT.to_string(),
+            "residual".to_string(),
+            "dispose".to_string(),
+            id.to_string(),
+            "--disposition".to_string(),
+            disposition.to_string(),
+            "--reason".to_string(),
+            reason.to_string(),
+        ];
+        if let Some(run) = resolution {
+            args.push("--resolution-run".to_string());
+            args.push(run.to_string());
+        }
+        let out = frf(&work, &args.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        assert_success(&out, &format!("dispose {id}"));
+    }
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &resolution_run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert_success(&out, "claim compile (universe U1)");
+    let claim1: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    let snapshot1 = claim1["knowledge_snapshot"].clone();
+    let cid1 = snapshot1["cid"].as_str().unwrap().to_string();
+    // The snapshot's cid rederives from its own fields.
+    let snapshot1_typed: frf::model::KnowledgeSnapshot =
+        serde_yaml::from_value(snapshot1.clone()).unwrap();
+    assert_eq!(
+        frf::semantics::knowledge_snapshot_identity(&snapshot1_typed).unwrap(),
+        cid1
+    );
+    // The universe records cli-text-0001 as INTENTIONAL at compile time.
+    let head_1 = snapshot1["residual_heads"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|h| h["id"] == "cli-text-0001")
+        .unwrap();
+    assert_eq!(head_1["disposition"], "intentional");
+
+    // Mutate the universe: RE-DISPOSE an unrelated residual (cli-text-0001
+    // intentional -> environmental: a new event, a new head, a new universe).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-text-0001",
+            "--disposition",
+            "environmental",
+            "--reason",
+            "reclassified later",
+        ],
+    );
+    assert_success(&out, "re-dispose cli-text-0001 (universe mutation)");
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert_success(&out, "claim recompile (universe U2)");
+    let claim2: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    let snapshot2 = claim2["knowledge_snapshot"].clone();
+    let cid2 = snapshot2["cid"].as_str().unwrap().to_string();
+    assert_ne!(
+        cid1, cid2,
+        "a different knowledge universe is a different claim"
+    );
+    let head_1_new = snapshot2["residual_heads"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|h| h["id"] == "cli-text-0001")
+        .unwrap();
+    assert_eq!(head_1_new["disposition"], "environmental");
+
+    // The OLD universe is still self-consistent and still admissible: the
+    // blocker scan over the OLD snapshot (the negative search, reproduced)
+    // finds no blocker intersecting the claim's scope K — the mutation did
+    // not retroactively change what the old claim meant.
+    let store = frf::store::Store::new(work.path("frf"));
+    let receipt_doc: frf::model::Receipt = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/receipts/{receipt}.json"))).unwrap(),
+    )
+    .unwrap();
+    let k = frf::scope::claim_scope(&receipt_doc);
+    let blockers_old = frf::commands::claim::store_blockers(&store, &k, &snapshot1_typed).unwrap();
+    assert!(
+        blockers_old.is_empty(),
+        "the claim's own universe carries no blocker for its scope"
+    );
+    let snapshot2_typed: frf::model::KnowledgeSnapshot = serde_yaml::from_value(snapshot2).unwrap();
+    assert_eq!(
+        frf::semantics::knowledge_snapshot_identity(&snapshot2_typed).unwrap(),
+        cid2
     );
 }

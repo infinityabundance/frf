@@ -585,7 +585,11 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             "attempts": record["attempts"].as_array().map(|a| a.len()).unwrap_or(0),
             "original_lines": record["derivation"]["original_lines"],
             "final_lines": record["derivation"]["final_lines"],
-            "minimal": record["derivation"]["minimal"],
+            "minimality": {
+                "kind": record["derivation"]["minimality"]["kind"],
+                "granularity": record["derivation"]["minimality"]["granularity"],
+                "proven": record["derivation"]["minimality"]["proven"],
+            },
         }));
     }
 
@@ -694,13 +698,15 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             );
         } else {
             println!(
-                "  minimization {}/{}: {} attempt(s), {} -> {} lines (minimal {})",
+                "  minimization {}/{}: {} attempt(s), {} -> {} lines (minimality {}/{}, proven {})",
                 m["court"],
                 m["axis"],
                 m["attempts"],
                 m["original_lines"],
                 m["final_lines"],
-                m["minimal"]
+                m["minimality"]["kind"],
+                m["minimality"]["granularity"],
+                m["minimality"]["proven"]
             );
         }
     }

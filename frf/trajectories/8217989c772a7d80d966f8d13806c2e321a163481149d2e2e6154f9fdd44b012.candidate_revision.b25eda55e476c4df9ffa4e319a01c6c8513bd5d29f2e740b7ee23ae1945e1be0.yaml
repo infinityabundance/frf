@@ -2,17 +2,17 @@ schema_version: frf-trajectory-v2
 subject: 8217989c772a7d80d966f8d13806c2e321a163481149d2e2e6154f9fdd44b012
 axis: stderr
 coordinate_system: candidate_revision
-series: 2c92c808bc45567a9ed6c076bd849900e43d0e6a2646b909625832019abe2e14
+series: b25eda55e476c4df9ffa4e319a01c6c8513bd5d29f2e740b7ee23ae1945e1be0
 observations:
 - point_index: 1
   coordinate: golden/candidate.sh
-  run: run-cli-malformed-input-6db7b32ad1ad6fd9a4d2140f750818105e9fb7eca8d3f0d9cd6fba0bda0a009f
+  run: run-cli-malformed-input-b8522eb8930bceb356bca2cc364dc46e19292a32b997c16b136f337f7c04bc40
   observed: true
   residual: cli-text-0001
   fingerprint: 5351ea22b5c26c9fa3627e6b4b095c761e6419b554c38e019507241cfca20f11
 - point_index: 2
   coordinate: golden/work/candidate-fixed.sh
-  run: run-cli-malformed-input-db8e6ced4993755b7743fc717bfdae507b3b3d5263621a2baa1156ccfd46b366
+  run: run-cli-malformed-input-59f52a54d44d6d0dc5b2241e6d3a2224eef99ed6580205581f7f42f3be40187b
   observed: true
   residual: cli-text-0005
   fingerprint: 5351ea22b5c26c9fa3627e6b4b095c761e6419b554c38e019507241cfca20f11

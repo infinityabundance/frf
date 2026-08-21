@@ -272,6 +272,47 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         },
     );
 
+    // The compiled claim, when present — and the EVIDENCE UNIVERSE its
+    // knowledge snapshot names (the negative search is as portable as the
+    // premises: the verifier must be able to rehash every residual head, its
+    // events, its run, and the reduction records the claim's absence search
+    // ran over). The snapshot's residual heads are pushed as runs into the
+    // traversal below (a head's record + its run's capture + authority +
+    // objects + series all enter the closure that way).
+    let claim_path = store.claim_path(receipt_id)?;
+    if claim_path.is_file() {
+        let bytes = read(&claim_path, "claim")?;
+        let rel = format!("claims/{receipt_id}.yaml");
+        entries.insert(
+            rel.clone(),
+            ClosureEntry {
+                rel,
+                sha256: host::sha256_bytes(&bytes),
+                kind: "claim",
+            },
+        );
+        let parsed: ClaimRecord = store.parse_yaml(&claim_path)?;
+        for head in &parsed.knowledge_snapshot.residual_heads {
+            let record = store.load_residual(&head.id)?;
+            if !runs.contains(&record.run) {
+                runs.push(record.run.clone());
+            }
+        }
+        for rid in &parsed.knowledge_snapshot.reductions {
+            let r_path = store.reduction_path(rid)?;
+            let bytes = read(&r_path, "reduction")?;
+            let rel = format!("reductions/{rid}.yaml");
+            entries.insert(
+                rel.clone(),
+                ClosureEntry {
+                    rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "reduction",
+                },
+            );
+        }
+    }
+
     while let Some(run) = runs.pop() {
         if !seen_runs.insert(run.clone()) {
             continue;
@@ -550,21 +591,8 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         }
     }
 
-    // The compiled claim, when present.
-    let claim_path = store.claim_path(receipt_id)?;
-    if claim_path.is_file() {
-        let bytes = read(&claim_path, "claim")?;
-        let rel = format!("claims/{receipt_id}.yaml");
-        entries.insert(
-            rel.clone(),
-            ClosureEntry {
-                rel,
-                sha256: host::sha256_bytes(&bytes),
-                kind: "claim",
-            },
-        );
-    }
-
+    // The claim (if any) and its knowledge universe were added up front; the
+    // closure is complete.
     Ok(Closure {
         run: body.run.clone(),
         entries: entries.into_values().collect(),

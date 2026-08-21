@@ -267,94 +267,114 @@ fn fail(violations: &mut Vec<String>, msg: impl Into<String>) {
     violations.push(msg.into());
 }
 
-/// The sign a receipt entry MUST carry for a residual record: single-run
-/// courts honestly record `not-observed` drift/slew (one run cannot observe
-/// drift or slew); a residual whose run belongs to an [`ExecutionSeries`]
-/// derives its sign from the series' trajectory for the residual's LINEAGE
-/// and PINs the series snapshot it derived from. One function, shared by
-/// receipt emission and the verification suite; the receipt verifier uses
-/// [`verify_sign`], which replays the pinned series.
+/// The sign a receipt entry MUST carry for a residual record: the
+/// trajectory evidence PER COORDINATE SYSTEM. A single-run court (no series
+/// membership at emit time) honestly records NO entries — one run cannot
+/// observe drift or slew. A run that belongs to an [`ExecutionSeries`]
+/// derives one entry per coordinate system, each PINNING the exact series
+/// snapshot the drift/slew were derived from (the NEWEST snapshot containing
+/// the run — the immutable head of the chain at the time; a later experiment
+/// referencing the same content-addressed run can never change what an
+/// emitted receipt means, because the receipt points at a fixed node).
+/// One function, shared by receipt emission and the verification suite.
 pub fn sign_for(
     store: &Store,
     _capture: &CaptureManifest,
     record: &ResidualRecord,
 ) -> Result<ResidualSign> {
-    let series = store.series_containing_run(&record.run)?;
     let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
+    let series = store.series_containing_run(&record.run)?;
+    // Candidates per coordinate system: the series snapshots that contain the
+    // run AND have a trajectory for this lineage.
+    let mut candidates: std::collections::BTreeMap<String, Vec<String>> = Default::default();
     for s in &series {
-        // Deterministic: series sorted by id. The trajectory exists iff the
-        // lineage was observed in the series.
         let path = store.trajectory_path(&lineage, &s.coordinate_system, &s.id)?;
         if !path.is_file() {
             continue;
         }
-        let t: TrajectoryRecord = store.parse_yaml(&path)?;
-        return Ok(ResidualSign {
-            norm: "repeated-run".to_string(),
+        candidates
+            .entry(s.coordinate_system.clone())
+            .or_default()
+            .push(s.id.clone());
+    }
+    let mut evidence: Vec<TrajectoryEvidence> = Vec::new();
+    for (coordinate_system, mut ids) in candidates {
+        // The NEWEST snapshot among the candidates: the one that is a
+        // descendant of every other candidate (chain position, not length or
+        // directory order). Incomparable candidates (a branch) fall back to
+        // id order — deterministic, and the verifier replays the PINNED node.
+        ids.sort();
+        let newest = ids
+            .iter()
+            .find(|a| {
+                ids.iter()
+                    .all(|b| store.series_is_descendant_of(a, b).unwrap_or(false))
+            })
+            .cloned()
+            .unwrap_or_else(|| ids[0].clone());
+        let t = store.load_trajectory(&lineage, &coordinate_system, &newest)?;
+        evidence.push(TrajectoryEvidence {
+            coordinate_system: coordinate_system.clone(),
+            series: newest,
             drift: t.derivation.drift.as_str().to_string(),
             slew: t.derivation.slew.as_str().to_string(),
-            series: Some(s.id.clone()),
         });
     }
     Ok(ResidualSign {
-        norm: "single-run".to_string(),
-        drift: "not-observed".to_string(),
-        slew: "not-observed".to_string(),
-        series: None,
+        trajectory_evidence: evidence,
     })
 }
 
-/// Verify a receipt entry's sign against the evidence it PINNED. The sign's
-/// `series` names the exact ExecutionSeries snapshot the drift/slew were
-/// derived from; the verifier replays THAT series (it must exist, contain
-/// the run, and its trajectory for the residual's lineage must yield the
-/// recorded drift/slew). A `single-run` sign pins nothing: the absence of a
-/// series at emit time is not reconstructible, so the snapshot is accepted
-/// as-is — a later experiment referencing the same run does not rewrite an
-/// emitted receipt.
+/// Verify a receipt entry's sign against the evidence it PINNED. Every entry
+/// names the exact ExecutionSeries snapshot the drift/slew were derived
+/// from; the verifier replays THAT series (it must exist, contain the run,
+/// and its trajectory for the residual's lineage must yield the recorded
+/// drift/slew). An empty `trajectory_evidence` is a single-run snapshot: the
+/// absence of a series at emit time is not reconstructible, so it is
+/// accepted as-is — a later experiment referencing the same content-addressed
+/// run does not rewrite an emitted receipt.
 pub fn verify_sign(store: &Store, record: &ResidualRecord, sign: &ResidualSign) -> Result<()> {
     let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
-    match sign.norm.as_str() {
-        "single-run" => {
-            if sign.drift != "not-observed" || sign.slew != "not-observed" {
-                return Err(FrfError::new(format!(
-                    "residual {}: single-run sign must carry not-observed drift/slew",
-                    record.id
-                )));
-            }
-            if sign.series.is_some() {
-                return Err(FrfError::new(format!(
-                    "residual {}: single-run sign carries a series pin",
-                    record.id
-                )));
-            }
-        }
-        "repeated-run" => {
-            let sid = sign.series.as_deref().ok_or_else(|| {
-                FrfError::new(format!(
-                    "residual {}: repeated-run sign without a pinned series",
-                    record.id
-                ))
-            })?;
-            let series = store.load_series(sid)?;
-            if !series.points.iter().any(|p| p.run == record.run) {
-                return Err(FrfError::new(format!(
-                    "residual {}: the pinned series {sid} does not contain run {}",
-                    record.id, record.run
-                )));
-            }
-            let t = store.load_trajectory(&lineage, &series.coordinate_system, sid)?;
-            if sign.drift != t.derivation.drift.as_str() || sign.slew != t.derivation.slew.as_str()
-            {
-                return Err(FrfError::new(format!(
-                    "residual {}: drift/slew do not match the pinned series' trajectory",
-                    record.id
-                )));
-            }
-        }
-        other => {
+    let mut seen_coordinate_systems: Vec<&str> = Vec::new();
+    for entry in &sign.trajectory_evidence {
+        if !matches!(
+            entry.coordinate_system.as_str(),
+            "repeat_index" | "candidate_revision" | "authority_version" | "environment" | "time"
+        ) {
             return Err(FrfError::new(format!(
-                "residual {}: invalid sign norm {other:?}",
+                "residual {}: trajectory evidence names unknown coordinate system {:?}",
+                record.id, entry.coordinate_system
+            )));
+        }
+        if seen_coordinate_systems.contains(&entry.coordinate_system.as_str()) {
+            return Err(FrfError::new(format!(
+                "residual {}: trajectory evidence repeats coordinate system {}",
+                record.id, entry.coordinate_system
+            )));
+        }
+        seen_coordinate_systems.push(&entry.coordinate_system);
+        let series = store.load_series(&entry.series).map_err(|e| {
+            FrfError::new(format!(
+                "residual {}: the pinned series {} does not exist: {e}",
+                record.id, entry.series
+            ))
+        })?;
+        if series.coordinate_system != entry.coordinate_system {
+            return Err(FrfError::new(format!(
+                "residual {}: the pinned series {} is a {} experiment, not {}",
+                record.id, entry.series, series.coordinate_system, entry.coordinate_system
+            )));
+        }
+        if !series.points.iter().any(|p| p.run == record.run) {
+            return Err(FrfError::new(format!(
+                "residual {}: the pinned series {} does not contain run {}",
+                record.id, entry.series, record.run
+            )));
+        }
+        let t = store.load_trajectory(&lineage, &series.coordinate_system, &entry.series)?;
+        if entry.drift != t.derivation.drift.as_str() || entry.slew != t.derivation.slew.as_str() {
+            return Err(FrfError::new(format!(
+                "residual {}: drift/slew do not match the pinned series' trajectory",
                 record.id
             )));
         }
@@ -766,7 +786,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
 
 impl Receipt {
     /// OpenReceipt SEMANTIC conformance: the cross-field, cross-object
-    /// invariants of `frf-receipt-v10`, checked on the document ALONE so any
+    /// invariants of `frf-receipt-v12`, checked on the document ALONE so any
     /// independent implementation can run the same algorithm (normative
     /// description in `spec/openreceipt.md`, corpus in
     /// `conformance/invalid-semantic/`). This is deliberately separate from
@@ -1157,42 +1177,66 @@ impl Receipt {
                     );
                 }
             }
-            // The sign: a single-run court honestly records that drift/slew
-            // were not observed; a repeated-run court derives them from the
-            // residual's trajectory.
-            match r.sign.norm.as_str() {
-                "single-run" => {
-                    if r.sign.drift != "not-observed" || r.sign.slew != "not-observed" {
-                        fail(&mut violations, format!(
-                            "single-run residual {} must carry drift/slew not-observed — one run cannot observe them",
+            // The sign: the trajectory evidence per coordinate system. A
+            // single-run receipt honestly carries NO entries — one run
+            // cannot observe drift or slew. Every entry names a valid
+            // coordinate system with a pinned series and a well-formed
+            // drift/slew, and a coordinate system appears at most once.
+            let mut seen_coordinate_systems: Vec<&str> = Vec::new();
+            for entry in &r.sign.trajectory_evidence {
+                if !matches!(
+                    entry.coordinate_system.as_str(),
+                    "repeat_index"
+                        | "candidate_revision"
+                        | "authority_version"
+                        | "environment"
+                        | "time"
+                ) {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} names unknown trajectory coordinate system {:?}",
+                            r.id, entry.coordinate_system
+                        ),
+                    );
+                }
+                if seen_coordinate_systems.contains(&entry.coordinate_system.as_str()) {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} names coordinate system {} twice in its trajectory evidence",
+                            r.id, entry.coordinate_system
+                        ),
+                    );
+                }
+                seen_coordinate_systems.push(&entry.coordinate_system);
+                if entry.series.is_empty() {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} has trajectory evidence without a pinned series",
                             r.id
-                        ));
-                    }
+                        ),
+                    );
                 }
-                "repeated-run" => {
-                    if TrajectoryDrift::parse(&r.sign.drift).is_none() {
-                        fail(
-                            &mut violations,
-                            format!(
-                                "repeated-run residual {} has invalid drift {:?}",
-                                r.id, r.sign.drift
-                            ),
-                        );
-                    }
-                    if TrajectorySlew::parse(&r.sign.slew).is_none() {
-                        fail(
-                            &mut violations,
-                            format!(
-                                "repeated-run residual {} has invalid slew {:?}",
-                                r.id, r.sign.slew
-                            ),
-                        );
-                    }
+                if TrajectoryDrift::parse(&entry.drift).is_none() {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} has invalid drift {:?} in its trajectory evidence",
+                            r.id, entry.drift
+                        ),
+                    );
                 }
-                other => fail(
-                    &mut violations,
-                    format!("residual {} has invalid sign norm {other:?}", r.id),
-                ),
+                if TrajectorySlew::parse(&entry.slew).is_none() {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} has invalid slew {:?} in its trajectory evidence",
+                            r.id, entry.slew
+                        ),
+                    );
+                }
             }
             if r.reproducer != self.run {
                 fail(
@@ -1567,10 +1611,7 @@ mod tests {
                 axis: "exit".into(),
                 kind: ResidualKind::exit(),
                 sign: ResidualSign {
-                    norm: "single-run".into(),
-                    drift: "not-observed".into(),
-                    slew: "not-observed".into(),
-                    series: None,
+                    trajectory_evidence: vec![],
                 },
                 grammar_state: "violation".into(),
                 raw_reference_hash: "e".repeat(64),

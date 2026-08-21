@@ -1,11 +1,11 @@
 schema_version: frf-challenge-v1
-id: c010c8de6a39f8687690b75868e0a0fd7df35ba8cc27e9b5a79990eb26101c43
+id: 5d51ec4d541edabcea76ae70b6a1747a55d7192cd2b03a6fb48eeaa32c06704d
 court: cli-malformed-input
 operator: stderr-first-line
 target_axis: stderr
 reference_sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
 mutant_candidate_sha256: fa1fdb59f4080911e695b4c3b5ff8e0b90907da074af19e23224f836c1b8d971
-run: run-cli-malformed-input-7c085ad17ae9273b783fe3f25845627996119fc807451604c4bb3e07f62d9851
+run: run-cli-malformed-input-58c75dd03b1fa4a7cd9e94a0eb2b512c330572625cbf777a3665015a9ea7e85b
 observed_residuals:
 - cli-text-0002
 unaffected_axes:
@@ -14,5 +14,5 @@ saw_defect: true
 specificity_clean: true
 created_by:
   schema_version: frf-runner-v1
-  frf_version: 0.1.28
-  frf_executable_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+  frf_version: 0.1.29
+  frf_executable_hash: c48fdaf032b768715959d112365726ff63c6dbdb1f7fb6e37101171bb0338486

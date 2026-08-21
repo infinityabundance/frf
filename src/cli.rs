@@ -116,6 +116,11 @@ pub enum CourtCmd {
         /// the given coordinate label (the series accumulates)
         #[arg(long, value_name = "LABEL")]
         time_point: Option<String>,
+        /// Explicitly choose the branch to extend when appending to an
+        /// environment/time experiment that has branched (its head is
+        /// ambiguous); the parent series snapshot id
+        #[arg(long, value_name = "SERIES_ID")]
+        series_parent: Option<String>,
     },
     /// Minimize a residual: the routed minimizer (its κ token's next_court)
     /// reduces the fixture with deterministic ddmin while holding the

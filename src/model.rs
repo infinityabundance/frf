@@ -57,7 +57,8 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// disposition (`disposition_event_id`) — a receipt points at an immutable
 /// event in the hash-chained history, it does not merely copy state. v9
 /// pins each residual's sign to the exact ExecutionSeries snapshot it was
-/// derived from (`sign.series`), so later experiments that reference the
+/// derived from (per coordinate system — `sign.trajectory_evidence`), so
+/// later experiments that reference the
 /// same content-addressed run can never change what a receipt means. v10
 /// makes the comparator layer OBSERVABLE-PLUGGABLE: observable ids and
 /// residual kinds become open protocol identifiers (no closed enum), each
@@ -69,14 +70,26 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// execution contract observed the run and the exact capture bounds that
 /// applied (timeout, stream caps, resource limits) — an observation is
 /// made under a declared harness contract, and exact replay requires the
-/// same one. The body is serialized as canonical JSON (RFC 8785) and its
-/// identity is the full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v11";
+/// same one. v12 replaces the single drift/slew/series sign with
+/// TRAJECTORY EVIDENCE: a residual does not have one universal drift — it
+/// has a trajectory with respect to a coordinate system, and the receipt
+/// entry carries one entry per coordinate system the run participates in
+/// (`sign.trajectory_evidence`), each pinning the exact ExecutionSeries
+/// snapshot the drift/slew were derived from. The body is serialized as
+/// canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
+/// bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v12";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
-/// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`, implemented literally.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v2";
+/// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`, implemented literally. v3 binds the
+/// EVIDENCE UNIVERSE the claim's absence search ran over
+/// ([`KnowledgeSnapshot`]): a claim is admissible relative to an explicitly
+/// committed state of knowledge — no unresolved residual IN U intersects K —
+/// and the compiled claim carries U's content address, so the negative
+/// search (not merely the positive premises) is portable and reproducible
+/// by any implementation.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v3";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 /// Environment identity block recorded in every capture at court time. v2
@@ -216,12 +229,18 @@ pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 /// never knows which experiment references it.
 pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v2";
 
-/// The ExecutionSeries protocol object: the experiment. One series per
+/// The ExecutionSeries protocol object: the experiment. One chain per
 /// (court, coordinate system); points are appended by series courts
 /// (`--repeat`, `--candidate-revisions`, `--authority-versions`,
-/// `--environment-point`, `--time-point`). A run never carries series
-/// membership — the series references the runs.
-pub const SCHEMA_SERIES: &str = "frf-series-v1";
+/// `--environment-point`, `--time-point`). v2 makes series snapshots
+/// content-addressed and parent-linked: every snapshot carries its own
+/// content address (`FRF/SERIES/v2`), its stable `experiment_id`, and its
+/// `parent_series_id` — an immutable append history, so an append can never
+/// silently fork the experiment, and branching becomes visible (a second
+/// head refuses an implicit append). A run never carries series membership
+/// — the series references the runs, and multiple coordinates may reference
+/// the same content-addressed run.
+pub const SCHEMA_SERIES: &str = "frf-series-v2";
 
 /// The comparator extension protocol (spec/comparator.md): a canonical
 /// JSON request a court writes to an external comparator program's stdin,
@@ -1633,20 +1652,127 @@ pub struct TrajectoryRecord {
 }
 
 /// The reduction protocol object: a minimization experiment on one residual
-/// (`frf court minimize`). Every ddmin attempt is recorded; the final
-/// reproducer is court-verified (the lineage survives) and carries
-/// provenance back to the original residual.
-pub const SCHEMA_REDUCTION: &str = "frf-reduction-v1";
+/// (`frf court minimize`). Every executable attempt is recorded; the final
+/// reproducer is court-verified (the lineage survives) and carries the full
+/// transform declaration: what the reduction permitted to move (the fixture)
+/// and what it required to stay (candidate, authority, comparator,
+/// environment — each bound by identity, not label).
+pub const SCHEMA_REDUCTION: &str = "frf-reduction-v2";
+
+/// The general evidence-transform description — one frame for all six
+/// evidence operations (observation, resolution, replay, trajectory,
+/// reduction, claim): every operation that produces new evidence from old
+/// evidence declares what it permits to move and what it requires to stay.
+/// The transforms differ only in which dimensions may vary; the comparison
+/// relation and the success predicate are the same protocol objects the
+/// rest of the evidence graph uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceTransform {
+    /// `observation` | `resolution` | `replay` | `trajectory` | `reduction`.
+    pub kind: String,
+    /// The source evidence this transform consumes (run id / residual id).
+    pub source: String,
+    /// Dimensions that MAY change under this transform (e.g. `fixture` for a
+    /// reduction, `candidate` for a resolution).
+    pub varying_dimensions: Vec<String>,
+    /// Dimensions that MUST NOT change (each bound by identity in the
+    /// producing record).
+    pub invariant_dimensions: Vec<String>,
+    /// The evaluation relation governing the comparison: the observable axis
+    /// and its specification hash — the same identity the court bound.
+    pub observation_relation: String,
+    /// How success is decided: `lineage-survives` (reduction),
+    /// `axis-closes` (resolution), `observation-reproduces` (replay),
+    /// `divergence-observed` (observation).
+    pub success_predicate: String,
+}
+
+impl EvidenceTransform {
+    /// The transform a court OBSERVATION is: nothing may change.
+    pub fn observation(run: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "observation".to_string(),
+            source: run.to_string(),
+            varying_dimensions: vec![],
+            invariant_dimensions: vec![],
+            observation_relation: relation.to_string(),
+            success_predicate: "divergence-observed".to_string(),
+        }
+    }
+
+    /// The transform a RESOLUTION is: only the candidate artifact may change.
+    pub fn resolution(run: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "resolution".to_string(),
+            source: run.to_string(),
+            varying_dimensions: vec!["candidate".to_string()],
+            invariant_dimensions: vec![
+                "question".to_string(),
+                "authority".to_string(),
+                "fixture".to_string(),
+                "environment".to_string(),
+                "comparator".to_string(),
+            ],
+            observation_relation: relation.to_string(),
+            success_predicate: "axis-closes".to_string(),
+        }
+    }
+
+    /// The transform a REPLAY is: nothing may change; the observation must
+    /// reproduce.
+    pub fn replay(run: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "replay".to_string(),
+            source: run.to_string(),
+            varying_dimensions: vec![],
+            invariant_dimensions: vec![],
+            observation_relation: relation.to_string(),
+            success_predicate: "observation-reproduces".to_string(),
+        }
+    }
+
+    /// The transform a REDUCTION is: only the fixture may change; the
+    /// candidate, authority, comparator, and environment must stay.
+    pub fn reduction(residual: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "reduction".to_string(),
+            source: residual.to_string(),
+            varying_dimensions: vec!["fixture".to_string()],
+            invariant_dimensions: vec![
+                "candidate".to_string(),
+                "authority".to_string(),
+                "comparator".to_string(),
+                "environment".to_string(),
+            ],
+            observation_relation: relation.to_string(),
+            success_predicate: "lineage-survives".to_string(),
+        }
+    }
+}
+
+/// One series snapshot: the ordered points of ONE experiment at ONE moment
+/// of its history. v2: content-addressed and parent-linked — `id` is the
+/// SHA-256 of `FRF/SERIES/v2` over the snapshot's own fields, `experiment_id`
+/// is the stable experiment key, and `parent_series_id` chains the snapshot
+/// to its predecessor, so an append is a NEW immutable node and branching is
+/// visible (a second head refuses an implicit append).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionSeries {
     pub schema_version: String,
-    /// The experiment key: `{court}-{coordinate_system}` (the series file
-    /// name).
+    /// Content address: `FRF/SERIES/v2` over this snapshot's fields.
     pub id: String,
+    /// The stable experiment key: `{court}-{coordinate_system}`.
+    pub experiment_id: String,
+    /// The id of the previous snapshot in this experiment's history, or
+    /// `None` for the first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_series_id: Option<String>,
     pub court: String,
     pub coordinate_system: String,
-    /// The ordered points (appended in observation order).
+    /// The ordered points (appended in observation order; multiple
+    /// coordinates may reference the same content-addressed run).
     pub points: Vec<SeriesPoint>,
 }
 
@@ -1665,21 +1791,83 @@ pub struct SeriesPoint {
 // Reduction (minimization) protocol
 // ---------------------------------------------------------------------------
 
-/// One ddmin attempt: the reduced fixture tried, whether the residual
-/// lineage survived it, and whether the reduction was kept.
+/// The role of one recorded executable attempt in a minimization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReductionAttemptRole {
+    /// The ORIGINAL fixture checked before the search started (a reduction
+    /// cannot begin if the original does not reproduce).
+    Baseline,
+    /// A ddmin candidate tried during the search.
+    Candidate,
+    /// The final confirmation run of the accepted reproducer.
+    FinalVerification,
+}
+
+impl ReductionAttemptRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReductionAttemptRole::Baseline => "baseline",
+            ReductionAttemptRole::Candidate => "candidate",
+            ReductionAttemptRole::FinalVerification => "final_verification",
+        }
+    }
+}
+
+/// The outcome of one recorded executable attempt in a minimization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReductionAttemptOutcome {
+    /// The residual's lineage survived (the preservation predicate held).
+    Preserved,
+    /// The lineage was lost.
+    Lost,
+    /// The attempt could not be evaluated (execution refused — timeout,
+    /// overflow, missing artifact). The minimization is aborted, never
+    /// silently skipped.
+    HarnessFailure,
+}
+
+impl ReductionAttemptOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReductionAttemptOutcome::Preserved => "preserved",
+            ReductionAttemptOutcome::Lost => "lost",
+            ReductionAttemptOutcome::HarnessFailure => "harness_failure",
+        }
+    }
+}
+
+/// One recorded executable attempt: the fixture tried, its role, its
+/// outcome, and whether the reduction was ACCEPTED (preserved AND the
+/// fixture is a strict subset of the current best — a baseline is never
+/// accepted, and re-verifying an already-accepted fixture is not a new
+/// reduction).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionAttempt {
     pub attempt: u32,
-    /// SHA-256 of the reduced fixture tried (content-addressed under
-    /// `objects/`).
+    pub role: ReductionAttemptRole,
+    /// SHA-256 of the fixture tried (content-addressed under `objects/`).
     pub fixture_sha256: String,
-    /// Whether the residual's LINEAGE survived the reduction (the
-    /// preservation predicate: the same kind/axis/surface divergence is
-    /// still observed).
-    pub preserved: bool,
-    /// Whether the reduction was kept (preserved AND the fixture shrank).
-    pub kept: bool,
+    pub outcome: ReductionAttemptOutcome,
+    pub accepted: bool,
+}
+
+/// The minimality claim of a minimization, stated precisely: classic ddmin
+/// establishes 1-minimality at the declared granularity (no single line can
+/// be removed while preserving the lineage) — not global cardinality
+/// minimality.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReductionMinimality {
+    /// `one-minimal` in this version.
+    pub kind: String,
+    /// The granularity of removal (`line`).
+    pub granularity: String,
+    /// Whether the search completed within the attempt budget (a cut short
+    /// search cannot claim minimality).
+    pub proven: bool,
 }
 
 /// The derivation of a minimization experiment.
@@ -1690,36 +1878,56 @@ pub struct ReductionDerivation {
     pub strategy: String,
     pub original_lines: u32,
     pub final_lines: u32,
-    /// Whether minimality was PROVEN (the deterministic ddmin search
-    /// completed within the attempt budget).
-    pub minimal: bool,
+    pub minimality: ReductionMinimality,
 }
 
 /// A minimization experiment: the record of reducing one residual's fixture
 /// until the divergence lineage stops surviving. Content-addressed
-/// (`FRF/REDUCTION/v1`); the final reproducer is court-verified and carries
-/// provenance back to the original residual.
+/// (`FRF/REDUCTION/v2`); the final reproducer is court-verified and carries
+/// the full transform declaration — the fixed dimensions bound by identity
+/// (authority artifact, candidate artifact, environment digest, comparator
+/// semantic + implementation), so the record itself proves the reduction
+/// held what it claims to have held.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionRecord {
     pub schema_version: String,
-    /// Content address: `FRF/REDUCTION/v1` over the record's own fields.
+    /// Content address: `FRF/REDUCTION/v2` over the record's own fields.
     pub id: String,
     /// The residual being minimized.
     pub residual_id: String,
+    /// The run that observed the residual (the source evidence).
+    pub source_run: String,
     pub axis: String,
     pub kind: ResidualKind,
-    pub authority: String,
+    /// The court semantic identity of the question the reduction held fixed.
+    pub court_semantic_identity: String,
+    /// The authority artifact the residual was observed against.
+    pub authority_artifact_sha256: String,
     /// The exact candidate artifact the residual was observed against (the
     /// minimizer holds the candidate fixed).
-    pub candidate_sha256: String,
+    pub candidate_artifact_sha256: String,
+    /// The environment the residual was observed under.
+    pub environment_digest: String,
+    /// The comparator SEMANTIC identity governing the preservation predicate
+    /// (specification hash).
+    pub comparator_semantic_id: String,
+    pub comparator_semantic_hash: String,
+    /// The comparator IMPLEMENTATION identity that observed the residual.
+    pub comparator_implementation_hash: String,
+    /// The resolved argv template the sides executed under (the fixture slot
+    /// is the reduced object's path).
+    pub argv_template: Vec<String>,
     pub original_fixture_sha256: String,
     /// The minimal reproducer: the smallest fixture (at line granularity)
     /// still producing the lineage, court-verified.
     pub final_fixture_sha256: String,
-    /// Every reduction attempt, in order.
+    /// Every executable attempt, in order.
     pub attempts: Vec<ReductionAttempt>,
     pub derivation: ReductionDerivation,
+    /// The transform declaration: fixture varies; candidate, authority,
+    /// comparator, and environment must stay.
+    pub transform: EvidenceTransform,
 }
 
 // ---------------------------------------------------------------------------
@@ -2118,28 +2326,38 @@ pub enum ObservableVerdict {
     Residual,
 }
 
-/// The sign a receipt entry MUST carry for a residual record: single-run
-/// courts honestly record `not-observed` drift/slew (one run cannot observe
-/// drift or slew); a residual whose run belongs to an [`ExecutionSeries`]
-/// derives its sign from the series' trajectory for the residual's LINEAGE.
-///
-/// The receipt PINs the derivation basis: `series` names the exact
-/// [`ExecutionSeries`] snapshot the drift/slew were derived from, so later
-/// experiments that reference the same content-addressed run can never
-/// change what an emitted receipt means — the receipt is a snapshot, and the
-/// verifier replays the pinned series.
+/// One coordinate system's trajectory evidence for a residual: the pinned
+/// ExecutionSeries snapshot the drift/slew were derived from. A residual
+/// does not have one universal drift — it has a trajectory with respect to a
+/// coordinate system — so a receipt entry carries one of these per
+/// coordinate system the run participates in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrajectoryEvidence {
+    /// One of: `repeat_index`, `candidate_revision`, `authority_version`,
+    /// `environment`, `time`.
+    pub coordinate_system: String,
+    /// The exact ExecutionSeries snapshot (content address) the drift/slew
+    /// were derived from — an immutable node in the experiment's history.
+    pub series: String,
+    pub drift: String,
+    pub slew: String,
+}
+
+/// The sign a receipt entry MUST carry for a residual record: the
+/// trajectory evidence per coordinate system. A single-run receipt (no
+/// series membership at emit time) honestly carries NO entries — drift and
+/// slew are not-observed; one run cannot observe movement. A run that
+/// belongs to an [`ExecutionSeries`] carries one entry per coordinate
+/// system, each PINNING the exact series snapshot the drift/slew were
+/// derived from, so later experiments that reference the same
+/// content-addressed run can never change what an emitted receipt means —
+/// the receipt is a snapshot, and the verifier replays each pinned series.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResidualSign {
-    pub norm: String,
-    pub drift: String,
-    pub slew: String,
-    /// The ExecutionSeries the drift/slew were derived from, present when
-    /// `norm == "repeated-run"`. `None` = single-run (no series membership
-    /// at emit time; the absence of a later experiment is not something an
-    /// immutable snapshot can be held responsible for).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub series: Option<String>,
+    #[serde(default)]
+    pub trajectory_evidence: Vec<TrajectoryEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2297,33 +2515,53 @@ impl ClaimScope {
             && superset(&self.versions, &other.versions)
             && (other.fixture_family.is_empty() || self.fixture_family == other.fixture_family)
     }
+}
 
-    /// Union of two premise scopes (the P₁ ∪ … ∪ Pₙ of the admission rule),
-    /// merged set-wise per dimension.
-    pub fn union(&self, other: &ClaimScope) -> ClaimScope {
-        let merge = |a: &[String], b: &[String]| {
-            let mut v = a.to_vec();
-            for x in b {
-                if !v.contains(x) {
-                    v.push(x.clone());
-                }
-            }
-            v
-        };
-        ClaimScope {
-            authority: merge(&self.authority, &other.authority),
-            candidate: merge(&self.candidate, &other.candidate),
-            fixtures: merge(&self.fixtures, &other.fixtures),
-            fixture_family: if self.fixture_family.is_empty() {
-                other.fixture_family.clone()
-            } else {
-                self.fixture_family.clone()
-            },
-            observables: merge(&self.observables, &other.observables),
-            environments: merge(&self.environments, &other.environments),
-            versions: merge(&self.versions, &other.versions),
-            temporal: merge(&self.temporal, &other.temporal),
+/// A region of the evidence space as a union of scope CELLS (disjunctive
+/// normal form). This is the honest representation of the premise union
+/// `P₁ ∪ … ∪ Pₙ` in the admission rule: a union of Cartesian products is NOT
+/// generally the Cartesian product of dimension-wise unions, so merging
+/// dimension sets would INVENT unsupported evidence points. The region keeps
+/// the cells separate, and containment `Scope(K) ⊆ region` is existential:
+/// every point of K must lie in SOME cell.
+///
+/// The single-premise compiler of today produces a one-cell region; the
+/// multi-premise compiler (future) appends one cell per premise receipt
+/// without ever merging dimensions.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceRegion {
+    /// The cells, each a product of dimension sets. The region is the union
+    /// of these cells — a cell list, never a merged product.
+    pub cells: Vec<ClaimScope>,
+}
+
+impl EvidenceRegion {
+    /// The empty region (no premises).
+    pub fn empty() -> EvidenceRegion {
+        EvidenceRegion { cells: vec![] }
+    }
+
+    /// A region containing exactly one cell.
+    pub fn cell(scope: ClaimScope) -> EvidenceRegion {
+        EvidenceRegion { cells: vec![scope] }
+    }
+
+    /// Add one premise cell to the region (deduplicated). The union is the
+    /// cell LIST — no dimension merging, so no invented points.
+    pub fn push(&mut self, cell: ClaimScope) {
+        if !self.cells.contains(&cell) {
+            self.cells.push(cell);
         }
+    }
+
+    /// The admission rule, implemented without inflation: `other` (the claim
+    /// scope K) is contained in the region iff EVERY point of K lies in SOME
+    /// cell. Because a `ClaimScope` is itself a product of dimension sets,
+    /// `cell.contains(k)` is the dimension-wise check; the region check is
+    /// existential over cells.
+    pub fn contains(&self, k: &ClaimScope) -> bool {
+        self.cells.iter().any(|cell| cell.contains(k))
     }
 }
 
@@ -2350,6 +2588,11 @@ pub struct ClaimCandidate {
 ///   cover (residuals outside K's surface);
 /// - `requires` are the premise receipts, and admission is
 ///   `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`;
+/// - `knowledge_snapshot` is the EVIDENCE UNIVERSE the absence search ran
+///   over: no unresolved residual IN that universe intersects K. A claim is
+///   admissible relative to an explicitly committed state of knowledge —
+///   the compiled claim carries the universe, so the negative search (not
+///   merely the positive premises) is portable and reproducible;
 /// - prose (`positive`) is ONE renderer of the IR; `--json` emits the same
 ///   IR canonically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2382,8 +2625,61 @@ pub struct ClaimRecord {
     /// Claim IR — the premise receipts: admission is
     /// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` over these.
     pub requires: Vec<String>,
+    /// The evidence universe the blocker search ran over (the negative
+    /// search is as portable as the premises).
+    pub knowledge_snapshot: KnowledgeSnapshot,
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge snapshot — the evidence universe of a claim's absence search
+// ---------------------------------------------------------------------------
+
+/// One residual head in the knowledge universe: the residual id and its
+/// CURRENT disposition (as an event projection, with the exact event that
+/// supplied it). This is what the blocker scan actually reads — a claim's
+/// absence is relative to these heads, and a later disposition change is a
+/// NEW universe, not a silent rewrite of the old one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResidualHead {
+    pub id: String,
+    pub disposition: String,
+    /// The disposition event that supplied the disposition, or `None` for
+    /// `open` (the projection of no events).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disposition_event_id: Option<String>,
+}
+
+/// The evidence universe a claim's absence search ran over: the committed
+/// state of knowledge at compile time. A claim is admissible relative to U —
+/// no unresolved residual IN U intersects K — and the compiled claim carries
+/// U, so the negative search is reproducible by any implementation from the
+/// claim alone, and a store mutation after compile time does not silently
+/// change what the claim means.
+///
+/// Identity: SHA-256 of `FRF/KNOWLEDGE/v1` over the canonical document of
+/// the snapshot's fields — the snapshot is content-addressed, and a claim
+/// binding a different universe is a different claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeSnapshot {
+    pub schema_version: String,
+    /// Content address: `FRF/KNOWLEDGE/v1` over this snapshot's fields.
+    pub cid: String,
+    /// Every residual present in the universe, with its head disposition.
+    pub residual_heads: Vec<ResidualHead>,
+    /// The receipts present in the universe.
+    pub receipts: Vec<String>,
+    /// The runs (captures) present in the universe.
+    pub runs: Vec<String>,
+    /// The admitted authorities present in the universe.
+    pub authorities: Vec<String>,
+    /// The series snapshots present in the universe.
+    pub series: Vec<String>,
+    /// The reduction records present in the universe.
+    pub reductions: Vec<String>,
 }
 
 #[cfg(test)]

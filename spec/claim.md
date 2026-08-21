@@ -5,41 +5,58 @@ by `frf claim compile` from a verified receipt (`ReceiptVerified`) — the only
 code path that can emit a positive claim sentence — and written to
 `claims/<receipt-id>.yaml` (or rendered canonically with `--json`).
 
-The claim schema is `frf-claim-v2`. The core of the protocol is the paper's
-admission rule:
+The claim schema is `frf-claim-v3`. The core of the protocol is the paper's
+admission rule, made RELATIVE to an explicitly committed state of knowledge:
 
 ```text
-Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)
+Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)     and     no unresolved residual in U intersects K
 ```
 
 A claim K is licensed by its premises P₁..Pₙ (the receipts it `requires`)
 only when every dimension of K's scope was actually observed by the union of
 the premises — and it is blocked by exactly the residuals whose surface
-intersects K's scope.
+intersects K's scope. The absence of blockers is established by a scan over
+U, the EVIDENCE UNIVERSE committed at compile time, and the compiled claim
+CARRIES U: the negative search is as portable as the premises.
 
 ## 1. The Claim IR
 
 ```text
 ClaimRecord {
-    schema_version    frf-claim-v2
-    receipt           the premise receipt (v0: exactly one premise)
-    authority         prose id of the admitted reference
-    candidate         { name, version_or_commit, identity_hash } — the
-                      EXACT artifact the run executed
-    court             the executed court id
+    schema_version     frf-claim-v3
+    receipt            the premise receipt (v0: exactly one premise)
+    authority          prose id of the admitted reference
+    candidate          { name, version_or_commit, identity_hash } — the
+                       EXACT artifact the run executed
+    court              the executed court id
     fixture_family
-    environment       prose label (arch-os + digest prefix)
-    relation          the comparators asserted (the clean axes', e.g.
-                      eq(exit-code))
-    proposition       the machine-readable proposition
-    scope             K — the structured scope (below)
-    observable_scope  projection of scope.observables
-    blockers          residuals that refuse this claim
-    excluded_evidence observed divergences outside K's surface
-    requires          premise receipt ids
-    positive          prose renderer output
-    non_claims        the non-claim renderer output
+    environment        prose label (arch-os + digest prefix)
+    relation           the comparators asserted (the clean axes', e.g.
+                       eq(exit-code))
+    proposition        the machine-readable proposition
+    scope              K — the structured scope (below)
+    observable_scope   projection of scope.observables
+    blockers           residuals that refuse this claim
+    excluded_evidence  observed divergences outside K's surface
+    requires           premise receipt ids
+    knowledge_snapshot U — the evidence universe the absence search ran over
+    positive           prose renderer output
+    non_claims         the non-claim renderer output
 }
+
+KnowledgeSnapshot {
+    schema_version     frf-claim-v3
+    cid                SHA-256 of FRF/KNOWLEDGE/v1 over the snapshot's fields
+    residual_heads     every residual present in U, with its head disposition
+                       (id + disposition + the disposition event that
+                       supplied it)
+    receipts           receipt ids present in U
+    runs               run ids present in U
+    authorities        admitted authority ids present in U
+    series             series snapshot ids present in U
+    reductions         reduction record ids present in U
+}
+```
 
 ClaimScope {
     authority        admitted authority ids
@@ -63,7 +80,15 @@ ClaimScope {
   and must still block.
 - **Containment** is dimension-wise subset: `Scope(P) ⊇ Scope(K)` when every
   point of K is a point of P.
-- **Union** merges dimension sets (the P₁ ∪ … ∪ Pₙ of the admission rule).
+- **Union is a union of scope CELLS, never a merge of dimension sets.** A
+  union of Cartesian products is not generally the product of dimension-wise
+  unions — merging dimension sets would INVENT unsupported evidence points
+  (evidence-space inflation). The premise union `P₁ ∪ … ∪ Pₙ` is therefore
+  an [`EvidenceRegion`]: a list of cells, and the admission rule is
+  existential containment — every point of K must lie in SOME cell. The
+  single-premise compiler produces a one-cell region; the multi-premise
+  compiler appends one cell per premise receipt without ever merging
+  dimensions.
 
 ## 3. Blocking
 
@@ -71,10 +96,11 @@ ClaimScope {
   `requires` includes a harness run, whatever the axes.
 - `open` / `unknown` residuals block exactly the claims whose scope
   intersects their surface — WHEREVER the divergence was recorded. The
-  compiler scans the whole store: an unexplained divergence about the
-  claimed candidate artifact, axis, fixture, environment, authority, and
-  version blocks the claim even when a later run passed (a later observation
-  never rewrites an earlier one; only evidence-backed closure does).
+  compiler scans the EVIDENCE UNIVERSE U (committed before the scan): an
+  unexplained divergence about the claimed candidate artifact, axis,
+  fixture, environment, authority, and version blocks the claim even when a
+  later run passed (a later observation never rewrites an earlier one; only
+  evidence-backed closure does).
 - A residual about a different candidate, axis, fixture, or environment does
   not block — the claim about the passing surface compiles.
 - An axis THIS receipt's run observed diverging is never parity from this
@@ -87,9 +113,24 @@ ClaimScope {
 `frf claim compile` verifies the receipt (identity over the raw document —
 strict I-JSON, duplicate property names and unknown properties refused —
 then structural, semantic, and evidentiary conformance), derives K from the
-clean axes, checks `Scope(K) ⊆ Scope(P)` literally, scans the store for
-intersecting `open`/`unknown` residuals, and refuses on any blocker. Prose is
-ONE renderer of the IR; `--json` emits the same IR canonically (RFC 8785).
+clean axes, checks `Scope(K) ⊆ Scope(P)` literally (existential containment
+over the premise region), commits the evidence universe U (every residual
+head with its disposition, every receipt, run, authority, series snapshot,
+and reduction present), scans U for intersecting `open`/`unknown` residuals,
+and refuses on any blocker. The compiled claim CARRIES U (content-addressed):
+
+- a store mutation after compile time is a NEW universe — it does not
+  silently change what the claim means (re-compiling under the new universe
+  produces a new claim with a new snapshot cid);
+- the negative search is portable: any implementation can re-run the scan
+  over the claim's own snapshot — which is why an OpenReceipt bundle
+  carrying a claim also carries the snapshot's residual heads, their events
+  and runs, and the referenced reductions (the verifier rehashes every
+  object the absence search depended on).
+
+Prose is ONE renderer of the IR; `--json` emits the same IR canonically
+(RFC 8785).
 
 A multi-premise compiler (admission against the UNION of several receipts'
-scopes) is future work; the algebra above already defines it.
+scopes) is future work; the cell-region algebra above already defines it
+without inflation.

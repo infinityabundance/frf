@@ -294,6 +294,47 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             }
         }
     }
+    // The compiled claim, when present — and the EVIDENCE UNIVERSE its
+    // knowledge snapshot names: every residual head's record + events + run
+    // (the negative search must be reproducible from the bundle), plus the
+    // reduction records it references.
+    let claim_rel = format!("claims/{receipt_id}.yaml");
+    if bundle.join(&claim_rel).is_file() {
+        needed.insert(claim_rel.clone());
+        let claim = load_yaml(&safe_rel(bundle, &claim_rel));
+        if let Some(heads) = claim["knowledge_snapshot"]["residual_heads"].as_array() {
+            for h in heads {
+                let hid = as_str(&h["id"]);
+                needed.insert(format!("residuals/{hid}.yaml"));
+                let ev_dir = bundle.join(format!("residuals/{hid}.events"));
+                if ev_dir.is_dir() {
+                    let mut names: Vec<String> = std::fs::read_dir(&ev_dir)
+                        .unwrap()
+                        .flatten()
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .filter(|n| n.ends_with(".yaml"))
+                        .collect();
+                    names.sort();
+                    for n in names {
+                        needed.insert(format!("residuals/{hid}.events/{n}"));
+                    }
+                }
+                // The head's run enters the traversal: its capture, sides,
+                // objects, authority, residuals, and series all become
+                // required closure.
+                let record = load_yaml(&safe_rel(bundle, &format!("residuals/{hid}.yaml")));
+                let hrun = as_str(&record["run"]).to_string();
+                if !seen_runs.contains(&hrun) && !runs.contains(&hrun) {
+                    runs.push(hrun);
+                }
+            }
+        }
+        if let Some(reductions) = claim["knowledge_snapshot"]["reductions"].as_array() {
+            for rid in reductions {
+                needed.insert(format!("reductions/{}.yaml", as_str(rid)));
+            }
+        }
+    }
     needed
 }
 
@@ -579,33 +620,45 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             }
         }
 
+        // v12: the sign is TRAJECTORY EVIDENCE per coordinate system. Each
+        // entry PINs the exact ExecutionSeries snapshot the drift/slew were
+        // derived from; the verifier replays that series (later experiments
+        // that reference the same run can never change what a receipt means).
         let sign = &r["sign"];
-        if as_str(&sign["norm"]) == "single-run" {
-            if as_str(&sign["drift"]) != "not-observed"
-                || as_str(&sign["slew"]) != "not-observed"
-                || sign.get("series").and_then(|v| v.as_str()).is_some()
-            {
-                panic!("single-run residual {rid} must carry not-observed drift/slew and no series pin");
+        let entries = sign["trajectory_evidence"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut seen_coordinates: Vec<String> = Vec::new();
+        for entry in &entries {
+            let coord = as_str(&entry["coordinate_system"]).to_string();
+            if seen_coordinates.contains(&coord) {
+                panic!("residual {rid} names coordinate system {coord} twice");
             }
-        } else if as_str(&sign["norm"]) == "repeated-run" {
-            // The sign PINs the exact ExecutionSeries snapshot it was derived
-            // from; the verifier replays that series (later experiments that
-            // reference the same run can never change what a receipt means).
-            let sid = as_str(&sign["series"]);
+            seen_coordinates.push(coord.clone());
+            let sid = as_str(&entry["series"]);
             if sid.is_empty() {
-                panic!("repeated-run residual {rid} without a pinned series");
+                panic!("residual {rid} has trajectory evidence without a pinned series");
             }
             let series = load_yaml(&safe_rel(bundle, &format!("series/{sid}.yaml")));
             if as_str(&series["id"]) != sid {
                 panic!("series {sid} is not content-addressed");
             }
             if rederive::series_identity(
+                as_str(&series["experiment_id"]),
+                series.get("parent_series_id").and_then(|v| v.as_str()),
                 as_str(&series["court"]),
                 as_str(&series["coordinate_system"]),
                 &series["points"],
             ) != sid
             {
                 panic!("series {sid}: the recorded fields do not hash to the id");
+            }
+            if as_str(&series["coordinate_system"]) != coord {
+                panic!(
+                    "residual {rid}: the pinned series {sid} is a {} experiment, not {coord}",
+                    as_str(&series["coordinate_system"])
+                );
             }
             if !series["points"]
                 .as_array()
@@ -617,7 +670,6 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             {
                 panic!("residual {rid}: the pinned series {sid} does not contain its run");
             }
-            let coord = as_str(&series["coordinate_system"]);
             let lineage = residual_lineage_of(bundle, record, &cap);
             let t = load_yaml(&safe_rel(
                 bundle,
@@ -651,7 +703,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             {
                 panic!("residual {rid} trajectory derivation does not rederive");
             }
-            if drift != as_str(&sign["drift"]) || slew != as_str(&sign["slew"]) {
+            if drift != as_str(&entry["drift"]) || slew != as_str(&entry["slew"]) {
                 panic!("residual {rid} sign does not match its pinned trajectory");
             }
             // The trajectory observations must match the series points.
@@ -660,8 +712,6 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             {
                 panic!("residual {rid} trajectory does not mirror its series");
             }
-        } else {
-            panic!("residual {rid} has invalid sign norm {:?}", sign["norm"]);
         }
 
         let family = as_str(&cap["court_spec"]["admissibility_envelope"]["fixture_family"]);
@@ -719,6 +769,80 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     for rel in needed_closure(bundle, &receipt_id) {
         if !inventory.contains_key(&rel) {
             panic!("bundle closure incomplete: {rel} is missing");
+        }
+    }
+
+    // 7. The compiled claim, when the bundle carries one: its EVIDENCE
+    //    UNIVERSE (the knowledge snapshot the absence search ran over) must
+    //    be self-consistent — the snapshot cid rederives from its own
+    //    fields, every residual head exists in the bundle with the recorded
+    //    disposition, and every referenced reduction exists with a rederived
+    //    identity. The negative search is as portable as the premises.
+    let claim_rel = format!("claims/{receipt_id}.yaml");
+    if inventory.contains_key(&claim_rel) {
+        let claim = load_yaml(&safe_rel(bundle, &claim_rel));
+        let snapshot = &claim["knowledge_snapshot"];
+        let expected_cid = rederive::knowledge_snapshot_identity(snapshot);
+        if as_str(&snapshot["cid"]) != expected_cid {
+            panic!("claim {receipt_id}: the knowledge snapshot cid does not rederive");
+        }
+        let mut head_ids: Vec<String> = Vec::new();
+        if let Some(heads) = snapshot["residual_heads"].as_array() {
+            for h in heads {
+                let hid = as_str(&h["id"]).to_string();
+                head_ids.push(hid.clone());
+                let record = load_yaml(&safe_rel(bundle, &format!("residuals/{hid}.yaml")));
+                if as_str(&record["id"]) != hid {
+                    panic!("claim {receipt_id}: snapshot residual head {hid} is missing from the bundle");
+                }
+                // The head disposition must be the bundle's projected
+                // disposition for that residual (the events are verified
+                // elsewhere in this walk).
+                if projected_disposition(bundle, &hid) != as_str(&h["disposition"]) {
+                    panic!(
+                        "claim {receipt_id}: snapshot head {hid} disposition does not match its events"
+                    );
+                }
+            }
+        }
+        head_ids.sort();
+        let mut snapshot_ids = head_ids.clone();
+        snapshot_ids.dedup();
+        if snapshot_ids.len() != head_ids.len() {
+            panic!("claim {receipt_id}: duplicate residual heads in the knowledge snapshot");
+        }
+        if let Some(reductions) = snapshot["reductions"].as_array() {
+            for rid in reductions {
+                let rid = as_str(rid);
+                let reduction = load_yaml(&safe_rel(bundle, &format!("reductions/{rid}.yaml")));
+                if as_str(&reduction["id"]) != rid {
+                    panic!(
+                        "claim {receipt_id}: snapshot reduction {rid} is missing from the bundle"
+                    );
+                }
+                let expected = rederive::reduction_identity(
+                    as_str(&reduction["residual_id"]),
+                    as_str(&reduction["source_run"]),
+                    as_str(&reduction["axis"]),
+                    as_str(&reduction["kind"]),
+                    as_str(&reduction["court_semantic_identity"]),
+                    as_str(&reduction["authority_artifact_sha256"]),
+                    as_str(&reduction["candidate_artifact_sha256"]),
+                    as_str(&reduction["environment_digest"]),
+                    as_str(&reduction["comparator_semantic_id"]),
+                    as_str(&reduction["comparator_semantic_hash"]),
+                    as_str(&reduction["comparator_implementation_hash"]),
+                    &reduction["argv_template"],
+                    as_str(&reduction["original_fixture_sha256"]),
+                    as_str(&reduction["final_fixture_sha256"]),
+                    &reduction["attempts"],
+                    &reduction["derivation"],
+                    &reduction["transform"],
+                );
+                if expected != rid {
+                    panic!("claim {receipt_id}: reduction {rid} is not content-addressed");
+                }
+            }
         }
     }
 

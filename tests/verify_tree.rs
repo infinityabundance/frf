@@ -805,34 +805,36 @@ fn receipts_are_self_consistent() {
             // A residual reproduces by replaying the run that observed it.
             assert_eq!(res.reproducer, rec.run);
             assert!(res.invariant.is_empty(), "v0 has no invariants");
-            // The sign verifies against the evidence it PINNED: a
-            // repeated-run sign names the exact ExecutionSeries snapshot it
-            // was derived from (replayed by the verifier); a single-run sign
-            // is a snapshot of emit time and is accepted as such — a later
-            // experiment referencing the same run does not rewrite a receipt.
+            // The sign verifies against the evidence it PINNED: every
+            // trajectory-evidence entry names the exact ExecutionSeries
+            // snapshot the drift/slew were derived from (replayed by the
+            // verifier). An empty entry list is a single-run snapshot of emit
+            // time — a later experiment referencing the same run does not
+            // rewrite a receipt.
             let record = store.load_residual(&res.id).unwrap();
             frf::verify::verify_sign(&store, &record, &res.sign)
                 .unwrap_or_else(|e| panic!("sign of {} fails pinned verification: {e}", res.id));
-            match res.sign.norm.as_str() {
-                "single-run" => {
-                    assert_eq!(res.sign.drift, "not-observed");
-                    assert_eq!(res.sign.slew, "not-observed");
-                }
-                "repeated-run" => {
-                    assert!(
-                        frf::model::TrajectoryDrift::parse(&res.sign.drift).is_some(),
-                        "invalid drift {:?} for {}",
-                        res.sign.drift,
-                        res.id
-                    );
-                    assert!(
-                        frf::model::TrajectorySlew::parse(&res.sign.slew).is_some(),
-                        "invalid slew {:?} for {}",
-                        res.sign.slew,
-                        res.id
-                    );
-                }
-                other => panic!("invalid sign norm {other:?} on {}", res.id),
+            let mut seen_coordinate_systems: Vec<&str> = Vec::new();
+            for entry in &res.sign.trajectory_evidence {
+                assert!(
+                    frf::model::TrajectoryDrift::parse(&entry.drift).is_some(),
+                    "invalid drift {:?} for {}",
+                    entry.drift,
+                    res.id
+                );
+                assert!(
+                    frf::model::TrajectorySlew::parse(&entry.slew).is_some(),
+                    "invalid slew {:?} for {}",
+                    entry.slew,
+                    res.id
+                );
+                assert!(
+                    !seen_coordinate_systems.contains(&entry.coordinate_system.as_str()),
+                    "duplicate coordinate system {} in the sign of {}",
+                    entry.coordinate_system,
+                    res.id
+                );
+                seen_coordinate_systems.push(&entry.coordinate_system);
             }
             if res.disposition == "fixed" {
                 // Receipts are snapshots: the resolution edge is bound only
@@ -1036,12 +1038,18 @@ fn series_are_self_consistent() {
         // The content address rederives.
         assert_eq!(
             frf::semantics::series_identity(
+                &series.experiment_id,
+                series.parent_series_id.as_deref(),
                 &series.court,
                 &series.coordinate_system,
                 &series.points
             )
             .unwrap(),
             series.id
+        );
+        assert_eq!(
+            series.experiment_id,
+            format!("{}-{}", series.court, series.coordinate_system)
         );
         assert!([
             "repeat_index",
@@ -1051,6 +1059,17 @@ fn series_are_self_consistent() {
             "time"
         ]
         .contains(&series.coordinate_system.as_str()));
+        // Every parent link resolves to a series of the SAME experiment, and
+        // the chain contains the parent's points as a prefix (an append only
+        // extends).
+        if let Some(parent_id) = &series.parent_series_id {
+            let parent = store.load_series(parent_id).unwrap();
+            assert_eq!(parent.experiment_id, series.experiment_id);
+            assert!(
+                parent.points.len() <= series.points.len(),
+                "a series append must not shrink the experiment"
+            );
+        }
         // Points are dense, ordered, and reference existing runs.
         for (i, p) in series.points.iter().enumerate() {
             assert_eq!(p.point_index, (i + 1) as u32, "dense point series");
@@ -1085,18 +1104,55 @@ fn reductions_are_self_consistent() {
         assert_eq!(
             frf::semantics::reduction_identity(
                 &r.residual_id,
+                &r.source_run,
                 &r.axis,
                 r.kind.clone(),
-                &r.authority,
-                &r.candidate_sha256,
+                &r.court_semantic_identity,
+                &r.authority_artifact_sha256,
+                &r.candidate_artifact_sha256,
+                &r.environment_digest,
+                &r.comparator_semantic_id,
+                &r.comparator_semantic_hash,
+                &r.comparator_implementation_hash,
+                &r.argv_template,
                 &r.original_fixture_sha256,
                 &r.final_fixture_sha256,
                 &r.attempts,
-                &r.derivation
+                &r.derivation,
+                &r.transform
             )
             .unwrap(),
             r.id
         );
+        // The bound identities match the residual's run's capture: the
+        // reduction held the candidate, authority, environment, and
+        // comparator fixed — and the record proves it by binding them.
+        let capture = store.load_capture(&r.source_run).unwrap();
+        assert_eq!(r.court_semantic_identity, capture.court_semantic_identity);
+        assert_eq!(
+            r.authority_artifact_sha256,
+            capture.authority_artifact.sha256
+        );
+        assert_eq!(
+            r.candidate_artifact_sha256,
+            capture.candidate_artifact.sha256
+        );
+        assert_eq!(r.environment_digest, capture.environment.digest);
+        assert!(capture
+            .comparator_semantics
+            .iter()
+            .any(|s| s.id == r.comparator_semantic_id
+                && s.specification_hash == r.comparator_semantic_hash));
+        assert!(capture
+            .provenance
+            .comparator_implementations
+            .iter()
+            .any(|i| i.id == r.comparator_semantic_id
+                && i.implementation_hash == r.comparator_implementation_hash));
+        // The transform declares the reduction's frame.
+        assert_eq!(r.transform.kind, "reduction");
+        assert_eq!(r.transform.varying_dimensions, vec!["fixture"]);
+        assert_eq!(r.transform.success_predicate, "lineage-survives");
         // The referenced artifacts exist (content-addressed).
         for sha in [&r.original_fixture_sha256, &r.final_fixture_sha256] {
             assert!(
@@ -1104,15 +1160,29 @@ fn reductions_are_self_consistent() {
                 "reduction {id}: object {sha} missing"
             );
         }
-        // The residual it minimizes exists and is on the same axis/kind.
+        // The residual it minimizes exists, belongs to the source run, and is
+        // on the same axis/kind.
         let record = store.load_residual(&r.residual_id).unwrap();
+        assert_eq!(record.run, r.source_run);
         assert_eq!(record.axis.as_str(), r.axis);
         assert_eq!(record.kind, r.kind);
-        assert_eq!(record.candidate_sha256, r.candidate_sha256);
+        assert_eq!(record.candidate_sha256, r.candidate_artifact_sha256);
         // The final reproducer is genuinely smaller or equal, and every
-        // attempt recorded a fixture that exists.
+        // attempt recorded a fixture that exists. Attempts are numbered in
+        // order, and only candidates that were preserved AND shrank (or the
+        // final verification) are accepted.
         assert!(r.derivation.final_lines <= r.derivation.original_lines);
         assert!(!r.attempts.is_empty());
+        assert_eq!(
+            r.attempts[0].role,
+            frf::model::ReductionAttemptRole::Baseline
+        );
+        assert!(!r.attempts[0].accepted, "a baseline is never accepted");
+        assert!(matches!(
+            r.attempts.last().unwrap().role,
+            frf::model::ReductionAttemptRole::FinalVerification
+        ));
+        assert!(r.attempts.last().unwrap().accepted);
         for a in &r.attempts {
             assert!(
                 store.object_path(&a.fixture_sha256).unwrap().is_file(),
@@ -1120,12 +1190,14 @@ fn reductions_are_self_consistent() {
                 a.attempt
             );
         }
-        // A minimal-proven reduction is exactly the deterministic ddmin
+        // A minimality-proven reduction is exactly the deterministic ddmin
         // outcome; the budget-cut case must say so honestly.
-        if r.derivation.minimal {
+        assert_eq!(r.derivation.minimality.kind, "one-minimal");
+        assert_eq!(r.derivation.minimality.granularity, "line");
+        if r.derivation.minimality.proven {
             assert!(
                 r.attempts.len() < 256,
-                "reduction {id}: minimal-proven but the attempt budget was exhausted"
+                "reduction {id}: minimality proven but the attempt budget was exhausted"
             );
         }
         found += 1;
@@ -1273,8 +1345,18 @@ fn claims_are_re_derivable_from_receipts() {
         assert_eq!(claim.observable_scope, k.observables);
         // A claim exists only when NO blocking residual (open/unknown)
         // intersects K — the compiler refuses otherwise, so every compiled
-        // claim must re-derive an empty blocker set with the SAME scan.
-        let blockers = frf::commands::claim::store_blockers(&store, &k).unwrap();
+        // claim must re-derive an empty blocker set with the SAME scan over
+        // the SAME committed knowledge universe the claim carries. The
+        // snapshot is self-consistent (its cid rederives from its own
+        // fields); a later store mutation is a NEW universe and does not
+        // change what the claim means.
+        let universe = &claim.knowledge_snapshot;
+        assert_eq!(
+            frf::semantics::knowledge_snapshot_identity(universe).unwrap(),
+            universe.cid,
+            "claim {receipt_id}: the knowledge snapshot cid must rederive"
+        );
+        let blockers = frf::commands::claim::store_blockers(&store, &k, universe).unwrap();
         assert!(
             blockers.is_empty(),
             "claim {receipt_id} exists while {} blocking residual(s) intersect its scope",

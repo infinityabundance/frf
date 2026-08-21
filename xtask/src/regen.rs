@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_V11: &str = "frf-receipt-v11";
+const RECEIPT_V12: &str = "frf-receipt-v12";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -77,7 +77,25 @@ fn bump_semantic(c: &mut Value) {
 /// keeps its wrong hash so the corpus isolates exactly one rule per
 /// document.
 fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
-    doc["schema_version"] = json!(RECEIPT_V11);
+    doc["schema_version"] = json!(RECEIPT_V12);
+    // v12: the sign is TRAJECTORY EVIDENCE per coordinate system. Corpus
+    // receipts are single-run snapshots: no trajectory evidence (drift/slew
+    // honestly not-observed). A fixture carrying the old single-run shape is
+    // normalized; a fixture carrying an intentional trajectory-evidence
+    // violation keeps its own (the corpus isolates one rule per document).
+    if let Some(rs) = doc.get_mut("residuals").and_then(|r| r.as_array_mut()) {
+        for r in rs.iter_mut() {
+            let sign = r.get_mut("sign");
+            if let Some(sign) = sign {
+                if sign.get("norm").is_some() && sign.get("trajectory_evidence").is_none() {
+                    *sign = json!({"trajectory_evidence": []});
+                }
+                if sign.get("trajectory_evidence").is_none() {
+                    sign["trajectory_evidence"] = json!([]);
+                }
+            }
+        }
+    }
     if let Some(sems) = doc["comparator_semantics"].as_array_mut() {
         for c in sems.iter_mut() {
             bump_semantic(c);
@@ -164,7 +182,7 @@ fn wire_fixture(golden: &Value) -> Value {
         "id": "cli-wire-0001",
         "axis": "wire",
         "kind": "wire",
-        "sign": {"norm": "single-run", "drift": "not-observed", "slew": "not-observed"},
+        "sign": {"trajectory_evidence": []},
         "grammar_state": "violation",
         "raw_reference_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "raw_candidate_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -267,6 +285,45 @@ pub fn regen_corpus(dir: &Path) {
             // Observable axes are protocol identifiers: `bad axis!` is
             // outside the grammar (and consequently undeclared).
             d["observables"][0]["axis"] = json!("bad axis!");
+        }),
+        ("20-bad-trajectory-coordinate.json", |d| {
+            // Trajectory evidence names a coordinate system outside the
+            // closed vocabulary (`drift` is not a coordinate system).
+            d["residuals"][0]["sign"]["trajectory_evidence"] = json!([{
+                "coordinate_system": "drift",
+                "series": "0".repeat(64),
+                "drift": "persistent",
+                "slew": "stable",
+            }]);
+        }),
+        ("21-duplicate-trajectory-coordinate.json", |d| {
+            // The same coordinate system appears twice in one residual's
+            // trajectory evidence — a residual has at most one trajectory
+            // per coordinate system.
+            d["residuals"][0]["sign"]["trajectory_evidence"] = json!([
+                {
+                    "coordinate_system": "repeat_index",
+                    "series": "1".repeat(64),
+                    "drift": "persistent",
+                    "slew": "stable",
+                },
+                {
+                    "coordinate_system": "repeat_index",
+                    "series": "2".repeat(64),
+                    "drift": "transient",
+                    "slew": "abrupt",
+                },
+            ]);
+        }),
+        ("22-bad-sign-drift.json", |d| {
+            // Trajectory evidence with an invalid drift vocabulary value
+            // (drift/slew come from the closed classification sets).
+            d["residuals"][0]["sign"]["trajectory_evidence"] = json!([{
+                "coordinate_system": "repeat_index",
+                "series": "3".repeat(64),
+                "drift": "wobbly",
+                "slew": "stable",
+            }]);
         }),
     ];
     for (name, mutate) in new_fixtures {

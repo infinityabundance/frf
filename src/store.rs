@@ -286,6 +286,91 @@ impl Store {
         Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
     }
 
+    /// The EVIDENCE UNIVERSE of the store right now: every residual head
+    /// (id + projected disposition + the event that supplied it), receipt,
+    /// run, authority, series snapshot, and reduction record present — sorted
+    /// and content-addressed. A claim compiled now is admissible relative to
+    /// THIS universe: no unresolved residual in it intersects the claim's
+    /// scope, and the compiled claim carries the snapshot, so the negative
+    /// search is portable and a later store mutation cannot silently change
+    /// what the claim means.
+    pub fn knowledge_snapshot(&self) -> Result<KnowledgeSnapshot> {
+        let mut snapshot = KnowledgeSnapshot {
+            schema_version: crate::model::SCHEMA_CLAIM.to_string(),
+            cid: String::new(),
+            residual_heads: Vec::new(),
+            receipts: Vec::new(),
+            runs: Vec::new(),
+            authorities: Vec::new(),
+            series: Vec::new(),
+            reductions: Vec::new(),
+        };
+
+        // Residual heads: every residual record with its projected head
+        // disposition (the event chain is verified on load).
+        let residuals_dir = self.root.join("residuals");
+        if residuals_dir.is_dir() {
+            let mut names: Vec<String> = std::fs::read_dir(&residuals_dir)
+                .map_err(|e| FrfError::new(format!("cannot read residuals directory: {e}")))?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+                .collect();
+            names.sort();
+            for name in names {
+                let id = name.trim_end_matches(".yaml").to_string();
+                let events = self.disposition_events(&id)?;
+                let disposition = events
+                    .last()
+                    .map(|e| e.disposition.clone())
+                    .unwrap_or(Disposition::Open);
+                snapshot.residual_heads.push(ResidualHead {
+                    id,
+                    disposition: disposition.as_str().to_string(),
+                    disposition_event_id: events.last().map(|e| e.event_id.clone()),
+                });
+            }
+            snapshot.residual_heads.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+
+        // Receipts, runs, authorities, series, reductions: deterministic
+        // sorted listings. Runs are the capture directories; the rest are
+        // record files.
+        let listing = |sub: &str| -> Result<Vec<String>> {
+            let dir = self.root.join(sub);
+            let mut out = Vec::new();
+            if dir.is_dir() {
+                for entry in std::fs::read_dir(&dir)
+                    .map_err(|e| FrfError::new(format!("cannot read {sub}: {e}")))?
+                {
+                    let entry =
+                        entry.map_err(|e| FrfError::new(format!("cannot read {sub}: {e}")))?;
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        out.push(name);
+                    } else if name.ends_with(".json") || name.ends_with(".yaml") {
+                        out.push(
+                            name.trim_end_matches(".json")
+                                .trim_end_matches(".yaml")
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            out.sort();
+            Ok(out)
+        };
+        snapshot.receipts = listing("receipts")?;
+        snapshot.runs = listing("captures")?;
+        snapshot.authorities = listing("authorities")?;
+        snapshot.series = listing("series")?;
+        snapshot.reductions = listing("reductions")?;
+
+        let cid = crate::semantics::knowledge_snapshot_identity(&snapshot)?;
+        snapshot.cid = cid;
+        Ok(snapshot)
+    }
+
     /// `reductions/<id>.yaml` — the content-addressed reduction record.
     pub fn reduction_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("reduction", id)?;
@@ -376,14 +461,22 @@ impl Store {
         }
         let expected = crate::semantics::reduction_identity(
             &record.residual_id,
+            &record.source_run,
             &record.axis,
             record.kind.clone(),
-            &record.authority,
-            &record.candidate_sha256,
+            &record.court_semantic_identity,
+            &record.authority_artifact_sha256,
+            &record.candidate_artifact_sha256,
+            &record.environment_digest,
+            &record.comparator_semantic_id,
+            &record.comparator_semantic_hash,
+            &record.comparator_implementation_hash,
+            &record.argv_template,
             &record.original_fixture_sha256,
             &record.final_fixture_sha256,
             &record.attempts,
             &record.derivation,
+            &record.transform,
         )?;
         if expected != id {
             return Err(FrfError::new(format!(
@@ -397,14 +490,22 @@ impl Store {
     pub fn write_reduction(&self, record: &ReductionRecord) -> Result<()> {
         let id = crate::semantics::reduction_identity(
             &record.residual_id,
+            &record.source_run,
             &record.axis,
             record.kind.clone(),
-            &record.authority,
-            &record.candidate_sha256,
+            &record.court_semantic_identity,
+            &record.authority_artifact_sha256,
+            &record.candidate_artifact_sha256,
+            &record.environment_digest,
+            &record.comparator_semantic_id,
+            &record.comparator_semantic_hash,
+            &record.comparator_implementation_hash,
+            &record.argv_template,
             &record.original_fixture_sha256,
             &record.final_fixture_sha256,
             &record.attempts,
             &record.derivation,
+            &record.transform,
         )?;
         if id != record.id {
             return Err(FrfError::new(format!(
@@ -485,6 +586,8 @@ impl Store {
             )));
         }
         let expected = crate::semantics::series_identity(
+            &series.experiment_id,
+            series.parent_series_id.as_deref(),
             &series.court,
             &series.coordinate_system,
             &series.points,
@@ -500,6 +603,8 @@ impl Store {
     /// Write an ExecutionSeries (content-addressed, write-once).
     pub fn write_series(&self, series: &ExecutionSeries) -> Result<()> {
         let id = crate::semantics::series_identity(
+            &series.experiment_id,
+            series.parent_series_id.as_deref(),
             &series.court,
             &series.coordinate_system,
             &series.points,
@@ -516,6 +621,108 @@ impl Store {
         }
         let yaml = self.to_yaml(series)?;
         self.write_once(&path, &yaml)
+    }
+
+    /// The experiments in the store: every distinct (court, coordinate
+    /// system) key that has at least one series snapshot.
+    pub fn experiment_ids(&self) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        let dir = self.root.join("series");
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(&dir)
+            .map_err(|e| FrfError::new(format!("cannot read series directory: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".yaml") {
+                continue;
+            }
+            let id = name.trim_end_matches(".yaml").to_string();
+            let series = self.load_series(&id)?;
+            if !out.contains(&series.experiment_id) {
+                out.push(series.experiment_id.clone());
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    /// The HEAD snapshots of one experiment: the series records no other
+    /// snapshot points to as their parent (the newest nodes of the
+    /// experiment's history). A single unique head is the append target; two
+    /// heads mean the experiment BRANCHED, and an implicit append must be
+    /// refused (the caller chooses which branch to extend).
+    pub fn experiment_heads(&self, experiment_id: &str) -> Result<Vec<ExecutionSeries>> {
+        let dir = self.root.join("series");
+        if !dir.is_dir() {
+            return Ok(vec![]);
+        }
+        let mut snapshots: Vec<ExecutionSeries> = Vec::new();
+        let mut children: std::collections::HashSet<String> = Default::default();
+        for entry in fs::read_dir(&dir)
+            .map_err(|e| FrfError::new(format!("cannot read series directory: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".yaml") {
+                continue;
+            }
+            let id = name.trim_end_matches(".yaml").to_string();
+            let series = self.load_series(&id)?;
+            if series.experiment_id != experiment_id {
+                continue;
+            }
+            if let Some(parent) = &series.parent_series_id {
+                children.insert(parent.clone());
+            }
+            snapshots.push(series);
+        }
+        snapshots.retain(|s| !children.contains(&s.id));
+        snapshots.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(snapshots)
+    }
+
+    /// The chain depth of a series snapshot: the number of ancestors it has
+    /// (0 for the first snapshot of an experiment). A later snapshot of the
+    /// same experiment has a strictly greater depth than its ancestors.
+    pub fn series_depth(&self, id: &str) -> Result<u32> {
+        let mut depth = 0u32;
+        let mut current = self.load_series(id)?;
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        while let Some(parent) = current.parent_series_id.clone() {
+            if !seen.insert(parent.clone()) {
+                return Err(FrfError::new(format!(
+                    "series chain cycle detected at {parent}; the series history is corrupt"
+                )));
+            }
+            current = self.load_series(&parent)?;
+            depth += 1;
+        }
+        Ok(depth)
+    }
+
+    /// True when `descendant` is the same as `ancestor` or reachable from it
+    /// through parent links (i.e. `ancestor` is an ancestor of `descendant`).
+    pub fn series_is_descendant_of(&self, descendant: &str, ancestor: &str) -> Result<bool> {
+        if descendant == ancestor {
+            return Ok(true);
+        }
+        let mut current = self.load_series(descendant)?;
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        while let Some(parent) = current.parent_series_id.clone() {
+            if !seen.insert(parent.clone()) {
+                return Err(FrfError::new(format!(
+                    "series chain cycle detected at {parent}; the series history is corrupt"
+                )));
+            }
+            if parent == ancestor {
+                return Ok(true);
+            }
+            current = self.load_series(&parent)?;
+        }
+        Ok(false)
     }
 
     /// Every series record that references `run` (the runs an experiment
@@ -965,7 +1172,9 @@ impl Store {
 
         // Was the axis served by an external comparator? Its recorded result
         // must say `equivalent` (the exact instrument that observed the
-        // resolution run is part of that run's verified evidence).
+        // resolution run is part of that run's verified evidence — the
+        // recorded result IS the evaluate() verdict of that run; verification
+        // must not require execution).
         let external = resolution
             .provenance
             .comparator_implementations
@@ -983,15 +1192,30 @@ impl Store {
             }
             true
         } else {
-            let builtin =
-                crate::comparators::BuiltinKind::from_id(axis.as_str()).ok_or_else(|| {
-                    FrfError::new(format!(
-                        "the {} axis was served by no known comparator in the resolution run",
-                        axis.as_str()
-                    ))
-                })?;
-            let divergences = builtin.compare(&resolution.reference, &resolution.candidate);
-            divergences.is_empty()
+            // A built-in axis is evaluated IN-PROCESS through the ONE
+            // evaluation operation — the same implementation that observed
+            // the resolution run, applied to its verified captures. The raw
+            // stdout bytes are rebuilt from the run's captured files (the
+            // domain comparators parse them; the serialized SideCapture
+            // carries only the hash).
+            let reference = self.side_capture_with_raw_stdout(resolution_run, &resolution, true)?;
+            let candidate =
+                self.side_capture_with_raw_stdout(resolution_run, &resolution, false)?;
+            let plan = crate::comparators::EvaluationPlan::from_capture(&resolution, axis)?;
+            let context = crate::comparators::EvaluationContext {
+                fixture_sha256: &resolution.fixture_sha256,
+                arguments: &resolution.arguments,
+                environment_digest: &resolution.environment.digest,
+                produced: reference.produced.as_ref().zip(candidate.produced.as_ref()),
+                cwd: std::path::Path::new("."),
+                raw: None,
+            };
+            let evaluation =
+                crate::comparators::evaluate(self, &plan, &reference, &candidate, &context)?;
+            matches!(
+                evaluation.result,
+                crate::comparators::EvaluationResult::Pass
+            )
         };
         if !closes {
             return Err(FrfError::new(format!(
@@ -1000,6 +1224,35 @@ impl Store {
             )));
         }
         Ok(())
+    }
+
+    /// Rebuild a side capture with its raw stdout bytes filled from the run's
+    /// captured `{side}.stdout` file (the serialized capture carries only the
+    /// hash; the domain comparators parse the bytes). The bytes are verified
+    /// against the recorded hash — a drifted side file is refused.
+    fn side_capture_with_raw_stdout(
+        &self,
+        run: &str,
+        capture: &CaptureManifest,
+        reference: bool,
+    ) -> Result<SideCapture> {
+        let mut side = if reference {
+            capture.reference.clone()
+        } else {
+            capture.candidate.clone()
+        };
+        let dir = self.run_dir(run)?;
+        let name = if reference { "reference" } else { "candidate" };
+        let bytes = fs::read(dir.join(format!("{name}.stdout")))
+            .map_err(|e| FrfError::new(format!("cannot read {name}.stdout: {e}")))?;
+        let actual = crate::host::sha256_bytes(&bytes);
+        if actual != side.stdout_sha256 {
+            return Err(FrfError::new(format!(
+                "{name}.stdout of run {run} does not hash to the recorded value; refusing to evaluate a drifted capture"
+            )));
+        }
+        side.stdout_bytes = bytes;
+        Ok(side)
     }
 }
 

@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v10` (this document).*
+*Version: `frf-receipt-v12` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that
@@ -98,7 +98,7 @@ not an event: it is the projection of no events, so open entries carry
 ## 4. Schema
 
 `spec/openreceipt.schema.json` (JSON Schema draft-07) is the normative
-machine-readable definition. `schema_version` MUST be `frf-receipt-v10`; a
+machine-readable definition. `schema_version` MUST be `frf-receipt-v12`; a
 conformant parser refuses any other version.
 
 ### 4.1 Observable axes and residual kinds — protocol identifiers
@@ -363,10 +363,14 @@ Five coordinate systems are executable:
 - `time` — `--time-point LABEL`: the same, over time.
 
 A series court writes an ExecutionSeries record (`series/<id>.yaml`,
-`frf-series-v1`), content-addressed over the experiment (court, coordinate
-system, ordered points) — every append is a NEW immutable snapshot, so the
-growth of a series is itself evidence. A run NEVER knows its experiments:
-the series references the runs. Trajectories (`frf-trajectory-v2`, under
+`frf-series-v2`), content-addressed over the experiment (experiment key,
+parent snapshot, court, coordinate system, ordered points) — every append is
+a NEW immutable, PARENT-LINKED snapshot, so the growth of a series is itself
+evidence, identical evidence shares the content-addressed run while every
+observation COORDINATE is still a point, and a branched experiment (two
+heads) refuses an implicit append (`--series-parent` chooses the branch). A
+run NEVER knows its experiments: the series references the runs.
+Trajectories (`frf-trajectory-v2`, under
 `trajectories/<lineage>.<coordinate-system>.<series>.yaml`) are DERIVED from
 a series snapshot and reference it:
 
@@ -403,14 +407,16 @@ executable; `gradual` needs a magnitude dimension (presence is binary) and
 is deliberately not claimed.
 
 A single-run court cannot observe drift or slew, and its receipts honestly
-say so (`sign: {norm: single-run, drift: not-observed, slew:
-not-observed}` — the paper's restraint, kept). A receipt entry whose run
-belongs to a series derives its sign from the series' trajectory for the
-lineage and PINs the exact series snapshot it was derived from
-(`sign.series`, OpenReceipt v9): the verifier replays the pinned series
-(it must exist, contain the run, and its trajectory must yield the recorded
-drift/slew), so later experiments that reference the same content-addressed
-run can never change what an emitted receipt means. Claim semantics are
+carry NO trajectory evidence (`sign: {trajectory_evidence: []}` — the
+paper's restraint, kept). A receipt entry whose run belongs to a series
+derives ONE trajectory-evidence entry per coordinate system the run
+participates in, and each entry PINs the exact series snapshot its drift/
+slew were derived from (`sign.trajectory_evidence`, OpenReceipt v12): the
+verifier replays each pinned series (it must exist, contain the run, and its
+trajectory must yield the recorded drift/slew), so later experiments that
+reference the same content-addressed run can never change what an emitted
+receipt means. A residual does not have one universal drift — it has a
+trajectory with respect to a coordinate system. Claim semantics are
 unchanged: a divergence observed at ANY point is still an observation.
 
 Trajectories are derived projections (regenerable from the immutable runs);

@@ -38,6 +38,10 @@ pub struct SeriesOptions {
     /// `--time-point LABEL`: the `time` axis — this run is one point of the
     /// time experiment at the given coordinate.
     pub time_point: Option<String>,
+    /// `--series-parent SERIES_ID`: explicitly choose the branch to extend
+    /// when appending to an environment/time experiment (required when the
+    /// experiment has branched into multiple heads).
+    pub series_parent: Option<String>,
 }
 
 impl SeriesOptions {
@@ -112,6 +116,9 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
     // -- build the ordered points -------------------------------------------
     let mut points: Vec<SeriesPoint> = Vec::new();
     let mut first_run: Option<String> = None;
+    // The parent snapshot of the new series record (environment/time
+    // experiments accumulate; the one-shot axes write a fresh snapshot).
+    let mut parent_series_id: Option<String> = None;
     match coordinate_system {
         "repeat_index" => {
             let n = opts.repeat.unwrap();
@@ -174,43 +181,56 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
             };
             let run = run_once(store, manifest_path, None, None, true)?;
             first_run = Some(run.clone());
-            // Accumulate: the previous series snapshot for this experiment
-            // (court, coordinate system), if any, then append this point.
-            let mut prior: Vec<SeriesPoint> = Vec::new();
-            let mut max_index = 0u32;
-            let dir = store.root.join("series");
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if !name.ends_with(".yaml") {
-                        continue;
-                    }
-                    let series = store.load_series(name.trim_end_matches(".yaml"))?;
-                    if series.court != court_id || series.coordinate_system != coordinate_system {
-                        continue;
-                    }
-                    // The latest snapshot: the one with the most points.
-                    if series.points.len() > prior.len() {
-                        prior = series.points.clone();
-                        max_index = series
-                            .points
+            // Accumulate: the experiment's history is a parent-linked chain
+            // of immutable series snapshots. The append target is the unique
+            // HEAD of the experiment; a branched experiment (two heads) has
+            // no unambiguous append target and an implicit append is
+            // refused — the caller must choose the branch with
+            // `--series-parent`.
+            let experiment_id = format!("{court_id}-{coordinate_system}");
+            let heads = store.experiment_heads(&experiment_id)?;
+            let parent: Option<String> = match (heads.as_slice(), opts.series_parent.as_deref()) {
+                ([], None) => None,
+                ([head], None) => Some(head.id.clone()),
+                (heads, None) => {
+                    return Err(FrfError::new(format!(
+                        "the experiment {experiment_id} has branched: {} head(s) ({}) — an implicit append has no unambiguous target; pass --series-parent <series-id> to choose the branch",
+                        heads.len(),
+                        heads
                             .iter()
-                            .map(|p| p.point_index)
-                            .max()
-                            .unwrap_or(0);
-                    }
+                            .map(|h| &h.id[..16])
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
                 }
-            }
-            let index = max_index + 1;
-            // The same run must not be appended twice (identical evidence).
-            if prior.iter().all(|p| p.run != run) {
-                prior.push(SeriesPoint {
-                    point_index: index,
-                    coordinate: label.clone(),
-                    run: run.clone(),
-                });
-            }
+                (_, Some(chosen)) => {
+                    let series = store.load_series(chosen)?;
+                    if series.experiment_id != experiment_id {
+                        return Err(FrfError::new(format!(
+                            "--series-parent {chosen} belongs to experiment {} not {experiment_id}; refusing to append across experiments",
+                            series.experiment_id
+                        )));
+                    }
+                    Some(chosen.to_string())
+                }
+            };
+            let prior: Vec<SeriesPoint> = match &parent {
+                Some(p) => store.load_series(p)?.points.clone(),
+                None => Vec::new(),
+            };
+            let index = prior.iter().map(|p| p.point_index).max().unwrap_or(0) + 1;
+            // Every observation event is a point: multiple coordinates may
+            // reference the SAME content-addressed run (identical evidence
+            // shares the run, but each coordinate at which an observation
+            // occurred is recorded — deduplicating would destroy the
+            // persistence information precisely when the system is stable).
             points = prior;
+            points.push(SeriesPoint {
+                point_index: index,
+                coordinate: label.clone(),
+                run: run.clone(),
+            });
+            parent_series_id = parent;
         }
         _ => unreachable!("coordinate system validated by the CLI"),
     }
@@ -219,11 +239,21 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
         return Err(FrfError::new("series court produced no points"));
     }
 
-    // -- the series record (content-addressed; an append is a NEW snapshot) --
-    let id = crate::semantics::series_identity(&court_id, coordinate_system, &points)?;
+    // -- the series record (content-addressed; an append is a NEW snapshot
+    //    parent-linked into the experiment's immutable history) --------------
+    let experiment_id = format!("{court_id}-{coordinate_system}");
+    let id = crate::semantics::series_identity(
+        &experiment_id,
+        parent_series_id.as_deref(),
+        &court_id,
+        coordinate_system,
+        &points,
+    )?;
     let series = ExecutionSeries {
         schema_version: SCHEMA_SERIES.to_string(),
         id,
+        experiment_id: experiment_id.clone(),
+        parent_series_id: parent_series_id.clone(),
         court: court_id.clone(),
         coordinate_system: coordinate_system.to_string(),
         points: points.clone(),
@@ -233,14 +263,18 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
     // -- derive one trajectory per observed lineage --------------------------
     let written = derive_trajectories(store, &series)?;
     eprintln!(
-        "series {}: {} point(s), {} distinct run(s), {written} trajectory(ies)",
+        "series {}: {} point(s), {} distinct run(s), parent {}, {written} trajectory(ies)",
         coordinate_system,
         points.len(),
         points
             .iter()
             .map(|p| p.run.clone())
             .collect::<std::collections::HashSet<_>>()
-            .len()
+            .len(),
+        parent_series_id
+            .as_deref()
+            .map(|p| &p[..16])
+            .unwrap_or("none")
     );
     Ok(first_run.unwrap())
 }
@@ -319,11 +353,16 @@ const MINIMIZE_MAX_ATTEMPTS: usize = 256;
 /// `frf court minimize RESIDUAL_ID` — the routed minimizer. The residual's κ
 /// token routes `cli-exit-minimize`/`cli-diagnostic-minimize`; this version
 /// implements ONE deterministic reducer (ddmin over fixture lines) that both
-/// routes share, holding the candidate, authority, comparator, and
-/// environment fixed while the fixture shrinks. Every attempt is recorded in
-/// a content-addressed [`ReductionRecord`] (`reductions/`); the final
-/// reproducer is court-verified (the residual's LINEAGE survives) and
-/// carries provenance back to the original residual.
+/// routes share. The transform is declared, not assumed: only the FIXTURE
+/// may change; the candidate artifact, authority artifact, environment, and
+/// the comparator SEMANTIC + IMPLEMENTATION that observed the residual are
+/// each bound by identity in the record, and preservation is decided by THE
+/// ONE evaluation operation — the same comparator that generated the
+/// original evidence (the built-in implementation in-process, the exact
+/// snapshotted external program re-invoked). Every executable attempt is
+/// recorded in a content-addressed [`ReductionRecord`] (`reductions/`) with
+/// its role, outcome, and acceptance; the attempt budget is a HARD gate
+/// around every execution; the final reproducer is court-verified.
 pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     let record = store.load_residual(residual_id)?;
     let capture = store.load_capture(&record.run)?;
@@ -354,39 +393,32 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         .to_string_lossy()
         .into_owned();
 
-    // The preservation predicate: does a given fixture still produce a
-    // divergence of the residual's LINEAGE? Holds the candidate, authority,
-    // comparator, and environment fixed; the reduced fixture is executed from
-    // a content-addressed snapshot with the same argv (fixture slot replaced).
-    // The COMPARATOR is the one that observed the residual: a built-in axis
-    // rederives its projection equality; an externally served axis re-invokes
-    // the exact snapshotted comparator program on the fresh sides (the
-    // instrument defines what preserving the lineage means).
-    let axis = &record.axis;
-    let semantic = capture
-        .comparator_semantics
-        .iter()
-        .find(|s| s.id == axis.as_str())
-        .cloned()
-        .ok_or_else(|| {
-            FrfError::new(format!(
-                "residual {residual_id}: the run carries no comparator semantic for axis {}",
-                axis.as_str()
-            ))
-        })?;
-    let external = capture
-        .provenance
-        .comparator_implementations
-        .iter()
-        .find(|i| i.id == axis.as_str())
-        .and_then(|i| i.artifact.clone());
+    // The evaluation plan of the residual's axis — the SAME plan the court
+    // bound at observation time (semantic + implementation). Preservation is
+    // decided by [`crate::comparators::evaluate`], nothing else.
+    let plan = crate::comparators::EvaluationPlan::from_capture(&capture, &record.axis)?;
+    let environment_digest = capture.environment.digest.clone();
     let mut attempts: Vec<ReductionAttempt> = Vec::new();
-    let preserved = |store: &Store,
-                     bytes: &[u8],
-                     attempts: &mut Vec<ReductionAttempt>|
-     -> Result<bool> {
-        let snapshot = store.materialize_object(bytes, false)?;
-        let fixture_arg = snapshot.to_string_lossy().into_owned();
+
+    // One executable attempt: run both sides against the given fixture bytes,
+    // evaluate the axis through the one comparison operation, record the
+    // attempt with its role/outcome/acceptance. The budget is a HARD gate
+    // around EVERY executable attempt: the closure refuses to execute past
+    // the bound, so neither the outer nor the inner loop can exceed it. A
+    // harness failure (timeout, overflow, refused evaluation) aborts the
+    // minimization — never silently skipped. Returns `None` when the budget
+    // is exhausted, `Some(outcome)` otherwise.
+    let attempt = |bytes: &[u8],
+                   role: ReductionAttemptRole,
+                   accepted: bool,
+                   attempts: &mut Vec<ReductionAttempt>|
+     -> Result<Option<ReductionAttemptOutcome>> {
+        if attempts.len() >= MINIMIZE_MAX_ATTEMPTS {
+            return Ok(None);
+        }
+        let sha = host::sha256_bytes(bytes);
+        let fixture_snapshot = store.materialize_object(bytes, false)?;
+        let fixture_arg = fixture_snapshot.to_string_lossy().into_owned();
         let arguments: Vec<String> = capture
             .arguments
             .iter()
@@ -398,65 +430,70 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                 }
             })
             .collect();
-        let reference = host::run_process(&authority_program, &arguments)?;
-        let candidate = host::run_process(&candidate_program, &arguments)?;
-        let diverges = match &external {
-            Some(artifact) => {
-                let snapshot = crate::comparators::materialize_implementation(store, artifact)?;
-                let sha = host::sha256_bytes(bytes);
-                let request = crate::comparators::build_request(
-                    axis.as_str(),
-                    &semantic,
-                    &reference,
-                    &candidate,
-                    &sha,
-                    &arguments,
-                    &capture.environment.digest,
-                    // Minimization holds the comparator fixed; the residual's
-                    // axis routes to the minimizer, and a produced-artifact
-                    // axis has no built-in route (the generic κ row yields
-                    // `none`), so no produced context ever reaches here.
-                    None,
-                );
-                let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
-                let (outcome, _) = crate::comparators::run_external(
-                    &snapshot,
-                    axis,
-                    &request_bytes,
-                    &request_cid,
-                    std::path::Path::new("."),
-                )?;
-                matches!(outcome, crate::comparators::ComparatorOutcome::Divergent(_))
-            }
-            None => {
-                let builtin = crate::comparators::BuiltinKind::from_id(axis.as_str())
-                        .ok_or_else(|| {
-                            FrfError::new(format!(
-                                "residual {residual_id}: the {} axis was served by no known in-binary comparator",
-                                axis.as_str()
-                            ))
-                        })?;
-                let divergences = builtin.compare(
-                    &SideCapture::from_outcome(&reference),
-                    &SideCapture::from_outcome(&candidate),
-                );
-                !divergences.is_empty()
+        let reference_out = host::run_process(&authority_program, &arguments)?;
+        let candidate_out = host::run_process(&candidate_program, &arguments)?;
+        let reference = SideCapture::from_outcome(&reference_out);
+        let candidate = SideCapture::from_outcome(&candidate_out);
+        let context = crate::comparators::EvaluationContext {
+            fixture_sha256: &sha,
+            arguments: &arguments,
+            environment_digest: &environment_digest,
+            produced: None,
+            cwd: std::path::Path::new("."),
+            raw: Some((&reference_out, &candidate_out)),
+        };
+        let evaluation =
+            crate::comparators::evaluate(store, &plan, &reference, &candidate, &context);
+        let (outcome, recordable) = match evaluation {
+            Ok(e) => (
+                if matches!(e.result, crate::comparators::EvaluationResult::Divergent(_)) {
+                    ReductionAttemptOutcome::Preserved
+                } else {
+                    ReductionAttemptOutcome::Lost
+                },
+                true,
+            ),
+            Err(e) => {
+                attempts.push(ReductionAttempt {
+                    attempt: attempts.len() as u32 + 1,
+                    role,
+                    fixture_sha256: sha,
+                    outcome: ReductionAttemptOutcome::HarnessFailure,
+                    accepted: false,
+                });
+                return Err(FrfError::new(format!(
+                    "minimization of {residual_id} aborted: an executable attempt could not be evaluated: {e}"
+                )));
             }
         };
-        let sha = host::sha256_bytes(bytes);
-        attempts.push(ReductionAttempt {
-            attempt: attempts.len() as u32 + 1,
-            fixture_sha256: sha,
-            preserved: diverges,
-            kept: diverges,
-        });
-        Ok(diverges)
+        if recordable {
+            attempts.push(ReductionAttempt {
+                attempt: attempts.len() as u32 + 1,
+                role,
+                fixture_sha256: sha,
+                outcome,
+                accepted,
+            });
+        }
+        Ok(Some(outcome))
     };
 
     // The initial check: the ORIGINAL fixture must reproduce the lineage
     // under the minimizer's own comparison (if it does not, the reduction
-    // cannot even start — fail closed).
-    if !preserved(store, &fixture_bytes, &mut attempts)? {
+    // cannot even start — fail closed). A baseline is never an accepted
+    // reduction (nothing shrank).
+    let baseline = attempt(
+        &fixture_bytes,
+        ReductionAttemptRole::Baseline,
+        false,
+        &mut attempts,
+    )?
+    .ok_or_else(|| {
+        FrfError::new(format!(
+            "minimization of {residual_id}: the attempt budget was exhausted by the baseline check"
+        ))
+    })?;
+    if baseline != ReductionAttemptOutcome::Preserved {
         return Err(FrfError::new(format!(
             "residual {residual_id}: the original fixture does not reproduce the {} divergence under this comparator; refusing to minimize",
             record.axis.as_str()
@@ -468,18 +505,31 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     let mut elements: Vec<Vec<u8>> = split_keep_newlines(&fixture_text);
     let mut minimal_proven = true;
     let mut n = 2usize;
-    while elements.len() >= 2 && attempts.len() < MINIMIZE_MAX_ATTEMPTS {
+    'outer: while elements.len() >= 2 && attempts.len() < MINIMIZE_MAX_ATTEMPTS {
         let chunk_size = (elements.len() / n).max(1);
         let mut reduced_any = false;
         let mut start = 0usize;
-        while start < elements.len() {
+        while start < elements.len() && attempts.len() < MINIMIZE_MAX_ATTEMPTS {
             let end = (start + chunk_size).min(elements.len());
             let mut candidate: Vec<Vec<u8>> = elements[..start].to_vec();
             candidate.extend_from_slice(&elements[end..]);
             let candidate_bytes: Vec<u8> = candidate.concat();
-            let survives = preserved(store, &candidate_bytes, &mut attempts)?;
-            if survives && !candidate_bytes.is_empty() {
+            let outcome = attempt(
+                &candidate_bytes,
+                ReductionAttemptRole::Candidate,
+                false,
+                &mut attempts,
+            )?;
+            let Some(outcome) = outcome else {
+                break 'outer; // budget exhausted — the gate sits around the execution
+            };
+            let shrank = !candidate_bytes.is_empty() && candidate.len() < elements.len();
+            if outcome == ReductionAttemptOutcome::Preserved && shrank {
+                // The reduction was KEPT: preserved AND the fixture shrank.
                 elements = candidate;
+                if let Some(last) = attempts.last_mut() {
+                    last.accepted = true;
+                }
                 reduced_any = true;
                 n = n.saturating_sub(1).max(2);
                 break;
@@ -503,53 +553,90 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
 
     // The final reproducer is court-verified (the last attempt that kept it
     // ran it); a final explicit confirmation keeps the record honest even
-    // when the budget cut the search short.
-    let survives_final = preserved(store, &final_bytes, &mut attempts)?;
-    if !survives_final {
+    // when the budget cut the search short. The budget gates this execution
+    // too: if it is exhausted the record cannot claim a verified reproducer.
+    let outcome = attempt(
+        &final_bytes,
+        ReductionAttemptRole::FinalVerification,
+        false,
+        &mut attempts,
+    )?
+    .ok_or_else(|| {
+        FrfError::new(format!(
+            "minimization of {residual_id}: the attempt budget was exhausted before the final reproducer could be court-verified; re-run with a larger budget"
+        ))
+    })?;
+    if outcome != ReductionAttemptOutcome::Preserved {
         return Err(FrfError::new(format!(
             "residual {residual_id}: internal error — the final reproducer does not reproduce the lineage"
         )));
+    }
+    if let Some(last) = attempts.last_mut() {
+        last.accepted = true;
     }
 
     let derivation = ReductionDerivation {
         strategy: "ddmin-lines".to_string(),
         original_lines,
         final_lines,
-        minimal: minimal_proven,
+        minimality: ReductionMinimality {
+            kind: "one-minimal".to_string(),
+            granularity: "line".to_string(),
+            proven: minimal_proven,
+        },
     };
+    let transform = EvidenceTransform::reduction(residual_id, &plan.semantic.relation_label());
     let id = crate::semantics::reduction_identity(
         residual_id,
+        &record.run,
         record.axis.as_str(),
         record.kind.clone(),
-        &record.authority,
-        &record.candidate_sha256,
+        &capture.court_semantic_identity,
+        &capture.authority_artifact.sha256,
+        &capture.candidate_artifact.sha256,
+        &capture.environment.digest,
+        &plan.semantic.id,
+        &plan.semantic.specification_hash,
+        &plan.implementation.implementation_hash,
+        &capture.arguments,
         &capture.fixture_sha256,
         &final_sha,
         &attempts,
         &derivation,
+        &transform,
     )?;
     let reduction = ReductionRecord {
         schema_version: SCHEMA_REDUCTION.to_string(),
         id: id.clone(),
         residual_id: residual_id.to_string(),
+        source_run: record.run.clone(),
         axis: record.axis.as_str().to_string(),
         kind: record.kind.clone(),
-        authority: record.authority.clone(),
-        candidate_sha256: record.candidate_sha256.clone(),
+        court_semantic_identity: capture.court_semantic_identity.clone(),
+        authority_artifact_sha256: capture.authority_artifact.sha256.clone(),
+        candidate_artifact_sha256: capture.candidate_artifact.sha256.clone(),
+        environment_digest,
+        comparator_semantic_id: plan.semantic.id.clone(),
+        comparator_semantic_hash: plan.semantic.specification_hash.clone(),
+        comparator_implementation_hash: plan.implementation.implementation_hash.clone(),
+        argv_template: capture.arguments.clone(),
         original_fixture_sha256: capture.fixture_sha256.clone(),
         final_fixture_sha256: final_sha.clone(),
         attempts,
         derivation: derivation.clone(),
+        transform: transform.clone(),
     };
     store.write_reduction(&reduction)?;
 
     eprintln!(
-        "reduction {}: {} -> {} line(s) (ddmin, {} attempt(s), minimal={}); reproducer object {}",
+        "reduction {}: {} -> {} line(s) (ddmin, {} attempt(s), minimality {}/{} proven={}); reproducer object {}",
         &id[..16],
         derivation.original_lines,
         derivation.final_lines,
         reduction.attempts.len(),
-        derivation.minimal,
+        derivation.minimality.kind,
+        derivation.minimality.granularity,
+        derivation.minimality.proven,
         &final_sha[..16]
     );
     Ok(id)
@@ -796,7 +883,6 @@ pub fn run_once(
     };
     #[derive(Clone)]
     struct ExternalHost {
-        snapshot: std::path::PathBuf,
         artifact: ArtifactIdentity,
     }
     let mut external_hosts: Vec<Option<ExternalHost>> = Vec::new();
@@ -811,6 +897,8 @@ pub fn run_once(
                 Some(c) => {
                     let bytes = host::read_file(Path::new(&c.program))?;
                     let impl_hash = host::sha256_bytes(&bytes);
+                    // Snapshot + seal BEFORE execution; the evaluation
+                    // operation re-hashes the sealed snapshot on every use.
                     let snapshot = store.materialize_object(&bytes, true)?;
                     let interpreter = host::interpreter_identity(&bytes)?;
                     let artifact = ArtifactIdentity {
@@ -819,7 +907,6 @@ pub fn run_once(
                         interpreter,
                     };
                     external_hosts.push(Some(ExternalHost {
-                        snapshot,
                         artifact: artifact.clone(),
                     }));
                     Ok(ComparatorImplementation {
@@ -951,70 +1038,57 @@ pub fn run_once(
     for (idx, axis) in observables.iter().enumerate() {
         // The comparator serving this axis: a declaration (external) or a
         // registry row (built-in). Its SEMANTIC fixes the relation, the
-        // extractor, and the residual classifier.
-        let semantic = &comparator_semantics[idx];
+        // extractor, and the residual classifier. EVERY axis is evaluated
+        // through the ONE evaluation operation — the in-binary implementation
+        // for a registry row, the re-invoked external program for a
+        // declaration; nothing else may decide parity.
+        let semantic = comparator_semantics[idx].clone();
         let classifier = ResidualKind::parse(&semantic.residual_classifier)?;
-        let projections: Vec<(Option<String>, String, String)> = match &external_hosts[idx] {
-            Some(host) => {
-                // An externally served axis speaks the comparator extension
-                // protocol: the raw sides go to the comparator program on
-                // stdin (canonical JSON, base64 streams), its canonical
-                // response must cryptographically name the request it
-                // answers, and its response is interpreted fail-closed. The
-                // request + response + invocation + result are themselves
-                // evidence (the exact instrument that observed).
-                let request = crate::comparators::build_request(
-                    axis.as_str(),
-                    semantic,
-                    &reference_out,
-                    &candidate_out,
-                    &fixture_sha256,
-                    &arguments,
-                    &environment.digest,
-                    reference.produced.as_ref().zip(candidate.produced.as_ref()),
-                );
-                let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
-                let (outcome, response_bytes) = crate::comparators::run_external(
-                    &host.snapshot,
-                    axis,
-                    &request_bytes,
-                    &request_cid,
-                    std::path::Path::new("."),
-                )?;
-                let response_cid = host::sha256_bytes(&response_bytes);
-                let invocation = ComparatorInvocation {
-                    schema_version: SCHEMA_COMPARATOR_INVOCATION.to_string(),
-                    invocation_id: String::new(), // filled below
-                    axis: axis.clone(),
-                    request_cid: request_cid.clone(),
-                    comparator_semantic_cid: semantic.specification_hash.clone(),
-                    comparator_implementation_artifact: host.artifact.clone(),
-                    execution_provenance: runner.clone(),
-                };
-                pending_invocations[idx] = Some(PendingInvocation {
-                    invocation,
-                    response_cid,
-                    request_bytes,
-                    response_bytes,
-                    residual_ids: vec![],
-                });
-                match outcome {
-                    crate::comparators::ComparatorOutcome::Equivalent => vec![],
-                    crate::comparators::ComparatorOutcome::Divergent(v) => v,
-                }
-            }
-            None => {
-                // A built-in axis is compared in-process (the reference
-                // implementation of the same protocol): the extractor row's
-                // projection, or the domain comparator's per-file/per-field
-                // divergences (filesystem.tree over the produced trees,
-                // bytes.wire over the raw streams, structured.state over the
-                // stdout JSON).
-                let builtin = crate::comparators::BuiltinKind::from_id(axis.as_str())
-                    .expect("a non-declared axis was validated to be a built-in");
-                builtin.compare(&reference, &candidate)
-            }
+        let plan = crate::comparators::EvaluationPlan {
+            axis: axis.clone(),
+            semantic: semantic.clone(),
+            implementation: provenance.comparator_implementations[idx].clone(),
         };
+        let context = crate::comparators::EvaluationContext {
+            fixture_sha256: &fixture_sha256,
+            arguments: &arguments,
+            environment_digest: &environment.digest,
+            produced: reference.produced.as_ref().zip(candidate.produced.as_ref()),
+            cwd: std::path::Path::new("."),
+            raw: Some((&reference_out, &candidate_out)),
+        };
+        let evaluation =
+            crate::comparators::evaluate(store, &plan, &reference, &candidate, &context)?;
+        let projections: Vec<(Option<String>, String, String)> = match evaluation.result {
+            crate::comparators::EvaluationResult::Pass => vec![],
+            crate::comparators::EvaluationResult::Divergent(v) => v,
+        };
+        if let Some(ev) = &evaluation.evidence {
+            // An externally served axis: the request + response + invocation
+            // + result are themselves evidence (the exact instrument that
+            // observed), written once the residuals (and therefore their
+            // ids) exist.
+            let invocation = ComparatorInvocation {
+                schema_version: SCHEMA_COMPARATOR_INVOCATION.to_string(),
+                invocation_id: String::new(), // filled below
+                axis: axis.clone(),
+                request_cid: ev.request_cid.clone(),
+                comparator_semantic_cid: semantic.specification_hash.clone(),
+                comparator_implementation_artifact: external_hosts[idx]
+                    .as_ref()
+                    .expect("externally evaluated axis has an external host")
+                    .artifact
+                    .clone(),
+                execution_provenance: runner.clone(),
+            };
+            pending_invocations[idx] = Some(PendingInvocation {
+                invocation,
+                response_cid: ev.response_cid.clone(),
+                request_bytes: ev.request_bytes.clone(),
+                response_bytes: ev.response_bytes.clone(),
+                residual_ids: vec![],
+            });
+        }
         for (surface, raw_ref, raw_cand) in projections {
             let seq = match pending_seq.get(&classifier) {
                 Some(s) => s + 1,

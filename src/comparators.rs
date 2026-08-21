@@ -29,8 +29,9 @@ use crate::error::{FrfError, Result};
 use crate::host;
 use crate::host::ProcessOutcome;
 use crate::model::{
-    ArtifactIdentity, ComparatorDeclaration, ComparatorResponse, ComparatorSemantic, ObservableId,
-    RunnerIdentity, SideCapture, COMPARATOR_VERSION,
+    ArtifactIdentity, CaptureManifest, ComparatorDeclaration, ComparatorImplementation,
+    ComparatorResponse, ComparatorSemantic, ObservableId, ProducedSide, RunnerIdentity,
+    SideCapture, COMPARATOR_VERSION,
 };
 use crate::store::Store;
 use serde_json::json;
@@ -623,6 +624,198 @@ pub fn materialize_implementation(
 fn b64(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// The ONE evaluation operation
+// ---------------------------------------------------------------------------
+
+/// The full specification of how one observable axis is evaluated: the
+/// SEMANTIC identity (what the relation is) plus the IMPLEMENTATION identity
+/// (who runs it). Every evidence operation that decides parity — court run,
+/// replay, resolution, minimization — derives its plan from the SAME
+/// capture-bound fields and evaluates through [`evaluate`]. Nothing outside
+/// [`evaluate`] may decide whether an axis differs.
+#[derive(Debug, Clone)]
+pub struct EvaluationPlan {
+    pub axis: ObservableId,
+    pub semantic: ComparatorSemantic,
+    pub implementation: ComparatorImplementation,
+}
+
+impl EvaluationPlan {
+    /// The plan that observed a run, for one declared axis: derived from the
+    /// capture's bound comparator semantics + implementations — the same
+    /// fields court, replay, resolution, and minimization all consume.
+    pub fn from_capture(capture: &CaptureManifest, axis: &ObservableId) -> Result<EvaluationPlan> {
+        let semantic = capture
+            .comparator_semantics
+            .iter()
+            .find(|s| s.id == axis.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "the capture carries no comparator semantic for axis {}",
+                    axis.as_str()
+                ))
+            })?;
+        let implementation = capture
+            .provenance
+            .comparator_implementations
+            .iter()
+            .find(|i| i.id == axis.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "the capture carries no comparator implementation for axis {}",
+                    axis.as_str()
+                ))
+            })?;
+        Ok(EvaluationPlan {
+            axis: axis.clone(),
+            semantic,
+            implementation,
+        })
+    }
+}
+
+/// The observation context a comparison is made under: everything outside
+/// the two sides' observations that the comparison may need.
+#[derive(Debug, Clone)]
+pub struct EvaluationContext<'a> {
+    pub fixture_sha256: &'a str,
+    pub arguments: &'a [String],
+    pub environment_digest: &'a str,
+    /// The sides' produced trees (the filesystem.tree surface), when the
+    /// court declares `produce`.
+    pub produced: Option<(&'a ProducedSide, &'a ProducedSide)>,
+    /// The working directory external programs run from.
+    pub cwd: &'a Path,
+    /// The raw streams, for externally evaluated axes: present when the
+    /// caller holds the ProcessOutcomes (court run, replay, minimization).
+    /// The external request is built from these raw bytes — the same bytes
+    /// the instrument received the first time.
+    pub raw: Option<(&'a ProcessOutcome, &'a ProcessOutcome)>,
+}
+
+/// The verdict of evaluating one axis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvaluationResult {
+    /// No divergence on this axis.
+    Pass,
+    /// Every divergence, as `(surface, raw_reference, raw_candidate)` — an
+    /// external comparator may name several.
+    Divergent(Vec<(Option<String>, String, String)>),
+}
+
+/// The instrument evidence of one evaluation: present when the axis was
+/// evaluated by an EXTERNAL program — the canonical request the instrument
+/// received and the canonical response it returned, both content-addressed
+/// and preserved under the run (an invocation is itself evidence).
+#[derive(Debug, Clone)]
+pub struct EvaluationEvidence {
+    pub request_bytes: Vec<u8>,
+    pub request_cid: String,
+    pub response_bytes: Vec<u8>,
+    pub response_cid: String,
+}
+
+/// One evaluation: the verdict plus the instrument evidence (when the axis
+/// was externally served).
+#[derive(Debug, Clone)]
+pub struct Evaluation {
+    pub result: EvaluationResult,
+    pub evidence: Option<EvaluationEvidence>,
+}
+
+/// THE one comparison operation. Everything that decides "does this axis
+/// differ?" — court run, replay, resolution, minimization — goes through
+/// this function; nothing outside it may decide parity.
+///
+/// - a BUILT-IN implementation (the capture's implementation identity is the
+///   runner's own hash, no artifact) is evaluated in-process: the registry
+///   row's extractor projection, or the domain comparator's per-file /
+///   per-field divergences;
+/// - an EXTERNAL implementation (the capture binds its artifact identity) is
+///   RE-INVOKED through the extension protocol: the request is built from
+///   the raw streams, the snapshotted program is re-hashed and re-sealed
+///   before use, and its response is interpreted fail-closed (it must name
+///   the request it answers).
+///
+/// Callers that hold ProcessOutcomes pass them in `context.raw` so an
+/// externally served axis receives the identical request bytes (and
+/// therefore the identical request_cid) it received at observation time.
+pub fn evaluate(
+    store: &Store,
+    plan: &EvaluationPlan,
+    reference: &SideCapture,
+    candidate: &SideCapture,
+    context: &EvaluationContext,
+) -> Result<Evaluation> {
+    match &plan.implementation.artifact {
+        None => {
+            // The in-binary implementation of this spec.
+            let builtin = BuiltinKind::from_id(plan.axis.as_str()).ok_or_else(|| {
+                FrfError::new(format!(
+                    "the {} axis was served by no known in-binary comparator",
+                    plan.axis.as_str()
+                ))
+            })?;
+            let divergences = builtin.compare(reference, candidate);
+            Ok(Evaluation {
+                result: if divergences.is_empty() {
+                    EvaluationResult::Pass
+                } else {
+                    EvaluationResult::Divergent(divergences)
+                },
+                evidence: None,
+            })
+        }
+        Some(artifact) => {
+            // Re-invoke the exact snapshotted implementation. The raw
+            // streams must be available: the request is built from the same
+            // bytes the instrument saw.
+            let (reference_out, candidate_out) = context.raw.ok_or_else(|| {
+                FrfError::new(format!(
+                    "the {} axis is externally served; evaluating it requires the raw streams (context.raw) — a recorded result is only valid for verification without execution",
+                    plan.axis.as_str()
+                ))
+            })?;
+            let snapshot = materialize_implementation(store, artifact)?;
+            let request = build_request(
+                plan.axis.as_str(),
+                &plan.semantic,
+                reference_out,
+                candidate_out,
+                context.fixture_sha256,
+                context.arguments,
+                context.environment_digest,
+                context.produced,
+            );
+            let (request_bytes, request_cid) = canonical_request(&request)?;
+            let (outcome, response_bytes) = run_external(
+                &snapshot,
+                &plan.axis,
+                &request_bytes,
+                &request_cid,
+                context.cwd,
+            )?;
+            let response_cid = host::sha256_bytes(&response_bytes);
+            let result = match outcome {
+                ComparatorOutcome::Equivalent => EvaluationResult::Pass,
+                ComparatorOutcome::Divergent(v) => EvaluationResult::Divergent(v),
+            };
+            Ok(Evaluation {
+                result,
+                evidence: Some(EvaluationEvidence {
+                    request_bytes,
+                    request_cid,
+                    response_bytes,
+                    response_cid,
+                }),
+            })
+        }
+    }
 }
 
 /// The runner identity of the invoking process, shared by all comparator

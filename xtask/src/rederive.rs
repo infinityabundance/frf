@@ -271,10 +271,20 @@ pub fn residual_lineage(
 }
 
 /// The ExecutionSeries identity: content-addressed over the experiment
-/// (court, coordinate system, ordered points; the point index enters as its
-/// string form — the canonical value domain has no numbers).
-pub fn series_identity(court: &str, coordinate_system: &str, points: &Value) -> String {
+/// (experiment key, parent snapshot, court, coordinate system, ordered
+/// points; the point index enters as its string form — the canonical value
+/// domain has no numbers). v2: parent-linked — an append is a NEW immutable
+/// node of the experiment's history.
+pub fn series_identity(
+    experiment_id: &str,
+    parent_series_id: Option<&str>,
+    court: &str,
+    coordinate_system: &str,
+    points: &Value,
+) -> String {
     let doc = json!({
+        "experiment_id": experiment_id,
+        "parent_series_id": parent_series_id,
         "court": court,
         "coordinate_system": coordinate_system,
         "points": points.as_array().map(|ps| {
@@ -289,7 +299,97 @@ pub fn series_identity(court: &str, coordinate_system: &str, points: &Value) -> 
                 .collect::<Vec<_>>()
         }).unwrap_or_default(),
     });
-    preimage("FRF/SERIES/v1", &doc)
+    preimage("FRF/SERIES/v2", &doc)
+}
+
+/// FRF/REDUCTION/v2 over the minimization record's own fields — every bound
+/// identity (candidate artifact, authority artifact, environment,
+/// comparator semantic + implementation) plus the attempts, the derivation,
+/// and the transform declaration.
+#[allow(clippy::too_many_arguments)]
+pub fn reduction_identity(
+    residual_id: &str,
+    source_run: &str,
+    axis: &str,
+    kind: &str,
+    court_semantic_identity: &str,
+    authority_artifact_sha256: &str,
+    candidate_artifact_sha256: &str,
+    environment_digest: &str,
+    comparator_semantic_id: &str,
+    comparator_semantic_hash: &str,
+    comparator_implementation_hash: &str,
+    argv_template: &Value,
+    original_fixture_sha256: &str,
+    final_fixture_sha256: &str,
+    attempts: &Value,
+    derivation: &Value,
+    transform: &Value,
+) -> String {
+    let doc = json!({
+        "residual_id": residual_id,
+        "source_run": source_run,
+        "axis": axis,
+        "kind": kind,
+        "court_semantic_identity": court_semantic_identity,
+        "authority_artifact_sha256": authority_artifact_sha256,
+        "candidate_artifact_sha256": candidate_artifact_sha256,
+        "environment_digest": environment_digest,
+        "comparator_semantic_id": comparator_semantic_id,
+        "comparator_semantic_hash": comparator_semantic_hash,
+        "comparator_implementation_hash": comparator_implementation_hash,
+        "argv_template": argv_template,
+        "original_fixture_sha256": original_fixture_sha256,
+        "final_fixture_sha256": final_fixture_sha256,
+        "attempts": attempts.as_array().map(|as_| {
+            as_.iter()
+                .map(|a| json!({
+                    "attempt": s(&a["attempt"]),
+                    "role": s(&a["role"]),
+                    "fixture_sha256": s(&a["fixture_sha256"]),
+                    "outcome": s(&a["outcome"]),
+                    "accepted": a["accepted"].as_bool().unwrap_or(false),
+                }))
+                .collect::<Vec<_>>()
+        }).unwrap_or_default(),
+        "derivation": {
+            "strategy": s(&derivation["strategy"]),
+            "original_lines": s(&derivation["original_lines"]),
+            "final_lines": s(&derivation["final_lines"]),
+            "minimality": {
+                "kind": s(&derivation["minimality"]["kind"]),
+                "granularity": s(&derivation["minimality"]["granularity"]),
+                "proven": derivation["minimality"]["proven"].as_bool().unwrap_or(false),
+            },
+        },
+        "transform": transform,
+    });
+    preimage("FRF/REDUCTION/v2", &doc)
+}
+
+/// FRF/KNOWLEDGE/v1 over the claim's committed evidence universe: the
+/// residual heads (with their dispositions + events), receipts, runs,
+/// authorities, series snapshots, and reductions present at compile time.
+/// Sorted lists — the same universe hashes identically in every
+/// implementation.
+pub fn knowledge_snapshot_identity(snapshot: &Value) -> String {
+    let doc = json!({
+        "residual_heads": snapshot["residual_heads"].as_array().map(|hs| {
+            hs.iter()
+                .map(|h| json!({
+                    "id": s(&h["id"]),
+                    "disposition": s(&h["disposition"]),
+                    "disposition_event_id": h.get("disposition_event_id").cloned().unwrap_or(Value::Null),
+                }))
+                .collect::<Vec<_>>()
+        }).unwrap_or_default(),
+        "receipts": snapshot["receipts"],
+        "runs": snapshot["runs"],
+        "authorities": snapshot["authorities"],
+        "series": snapshot["series"],
+        "reductions": snapshot["reductions"],
+    });
+    preimage("FRF/KNOWLEDGE/v1", &doc)
 }
 
 /// The deterministic ordered-axis classification: drift, slew, localization,

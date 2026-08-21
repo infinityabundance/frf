@@ -288,8 +288,13 @@ mod tests {
     }
 
     #[test]
-    fn union_merges_dimension_sets() {
-        let a = scope(
+    fn region_union_does_not_invent_points() {
+        // A union of Cartesian products is NOT the product of dimension-wise
+        // unions: P1 = {f1} × {exit} × {e1}, P2 = {f2} × {stderr} × {e2}.
+        // Merging dimension sets would invent (f1, stderr, e2) and
+        // (f2, exit, e1) — evidence-space inflation. The region keeps the
+        // cells and contains exactly the premise points.
+        let p1 = scope(
             &["ref-cli-1.8.2"],
             &["h1"],
             &["f1"],
@@ -298,7 +303,7 @@ mod tests {
             &["e1"],
             &["1.8.2"],
         );
-        let b = scope(
+        let p2 = scope(
             &["ref-cli-1.8.2"],
             &["h1"],
             &["f2"],
@@ -307,14 +312,34 @@ mod tests {
             &["e2"],
             &["1.8.2"],
         );
-        let u = a.union(&b);
-        assert_eq!(u.fixtures, vec!["f1".to_string(), "f2".to_string()]);
-        assert_eq!(
-            u.observables,
-            vec!["exit".to_string(), "stderr".to_string()]
+        let mut region = EvidenceRegion::empty();
+        region.push(p1.clone());
+        region.push(p2.clone());
+        assert_eq!(region.cells.len(), 2, "cells are kept, never merged");
+        assert!(region.contains(&p1));
+        assert!(region.contains(&p2));
+        // The invented cross point must NOT be contained: (f1, stderr, e2) is
+        // in no cell. The dimension-wise merged product would have claimed it.
+        let invented = scope(
+            &["ref-cli-1.8.2"],
+            &["h1"],
+            &["f1"],
+            "malformed-input",
+            &["stderr"],
+            &["e2"],
+            &["1.8.2"],
         );
-        assert_eq!(u.environments, vec!["e1".to_string(), "e2".to_string()]);
-        assert!(u.contains(&a));
-        assert!(u.contains(&b));
+        assert!(!region.contains(&invented));
+        // A claim scope that is a SUBSET of a single cell is contained.
+        let claim = scope(
+            &["ref-cli-1.8.2"],
+            &["h1"],
+            &["f1"],
+            "malformed-input",
+            &["exit"],
+            &["e1"],
+            &["1.8.2"],
+        );
+        assert!(region.contains(&claim));
     }
 }

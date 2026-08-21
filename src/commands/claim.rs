@@ -40,47 +40,45 @@ fn is_scope_blocking(disposition: &str) -> bool {
     matches!(disposition, "open" | "unknown")
 }
 
-/// Scan the store for residuals whose surface intersects the claim's scope K
-/// and whose current disposition is blocking. Returns the residual ids.
+/// Scan the EVIDENCE UNIVERSE (the committed [`KnowledgeSnapshot`] the claim
+/// is being compiled against — not a live directory) for residuals whose
+/// surface intersects the claim's scope K and whose head disposition in that
+/// universe is blocking. Returns the residual ids.
 ///
 /// This is the cross-run part of the algebra: a claim compiled from receipt
-/// R is blocked by an open divergence recorded by ANY run about the same
-/// surface (same authority, candidate artifact, fixture, family, environment,
-/// version, and axis). A divergence about a different surface — most
-/// importantly, a different candidate artifact — never blocks: that is the
-/// paper's rule that no observation may be rewritten, generalized to scopes.
+/// R is blocked by an open divergence recorded by ANY run in the universe
+/// about the same surface (same authority, candidate artifact, fixture,
+/// family, environment, version, and axis). A divergence about a different
+/// surface — most importantly, a different candidate artifact — never
+/// blocks: that is the paper's rule that no observation may be rewritten,
+/// generalized to scopes.
+///
+/// The universe is EXPLICIT: the claim is admissible relative to U — no
+/// unresolved residual IN U intersects K — and the compiled claim carries U,
+/// so the same scan reproduces in any implementation from the claim alone.
+/// A residual disposed after compile time does not rewrite the claim; a
+/// residual created after compile time is outside U and does not rewrite it
+/// either (the claim documents the state of knowledge it was admissible
+/// under).
 ///
 /// Shared with `verify_tree` so a compiled claim and its re-derivation run
 /// the SAME scan (one source of truth).
 pub fn store_blockers(
     store: &Store,
     k: &ClaimScope,
+    universe: &KnowledgeSnapshot,
 ) -> Result<Vec<(String, ResidualKind, String)>> {
     let mut blockers = Vec::new();
-    let dir = store.root.join("residuals");
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(blockers),
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !name.ends_with(".yaml") || name.ends_with(".token.yaml") {
+    for head in &universe.residual_heads {
+        if !is_scope_blocking(&head.disposition) {
             continue;
         }
-        let record = store.load_residual(&name[..name.len() - 5])?;
-        let disposition = store.current_disposition(&record.id)?;
-        if !is_scope_blocking(disposition.as_str()) {
-            continue;
-        }
+        let record = store.load_residual(&head.id)?;
         let capture = store.load_capture(&record.run)?;
         let authority = store.load_authority(&record.authority)?;
         let surface = scope::residual_scope(&record, &capture, &authority.version);
         if surface.intersects(k) {
-            blockers.push((
-                record.id.clone(),
-                record.kind,
-                disposition.as_str().to_string(),
-            ));
+            blockers.push((record.id.clone(), record.kind, head.disposition.clone()));
         }
     }
     blockers.sort_by(|a, b| a.0.cmp(&b.0));
@@ -166,8 +164,13 @@ pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
     }
 
     // 4. Store-wide blocking: any open/unknown residual about the claimed
-    //    surface blocks, wherever it was recorded.
-    let blockers = store_blockers(store, &k_scope)?;
+    //    surface blocks, wherever it was recorded. The universe is committed
+    //    BEFORE the scan: the claim is admissible relative to U, and the
+    //    compiled claim carries U (a later store mutation cannot silently
+    //    change what the claim means — the negative search is as portable as
+    //    the premises).
+    let knowledge_snapshot = store.knowledge_snapshot()?;
+    let blockers = store_blockers(store, &k_scope, &knowledge_snapshot)?;
     if !blockers.is_empty() {
         for (id, kind, disposition) in &blockers {
             eprintln!(
@@ -232,6 +235,7 @@ pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
         blockers: blockers.iter().map(|(id, _, _)| id.clone()).collect(),
         excluded_evidence: receipt.residuals.iter().map(|r| r.id.clone()).collect(),
         requires: vec![receipt_id.to_string()],
+        knowledge_snapshot,
         positive: vec![sentence.clone()],
         non_claims: sentences::non_claims(&family),
     };
