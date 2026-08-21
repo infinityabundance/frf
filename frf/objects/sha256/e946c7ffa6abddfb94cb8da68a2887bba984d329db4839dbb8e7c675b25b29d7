@@ -1,0 +1,26 @@
+#!/bin/sh
+# FRF court-challenge mutant: stderr-first-line of objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) 2>/dev/null || exit 2
+ref="$self_dir/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17"
+if [ ! -f "$ref" ]; then
+ref=""
+for arg in "$@"; do
+case "$arg" in
+*/objects/sha256/*)
+dir=$(CDPATH= cd -- "$(dirname -- "$arg")" && pwd) 2>/dev/null || continue
+if [ -f "$dir/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17" ]; then ref="$dir/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17"; break; fi;;
+esac
+done
+fi
+if [ -z "$ref" ]; then
+echo "FRF-MUTANT: cannot locate reference object 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17" >&2
+exit 2
+fi
+out=$(mktemp) || exit 2
+err=$(mktemp) || exit 2
+"$ref" "$@" >"$out" 2>"$err"
+rc=$?
+cat "$out"
+{ IFS= read -r first; printf '%s\n' "FRF-MUTANT:stderr-first-line:${first}"; cat; } <"$err" >&2
+rm -f "$out" "$err"
+exit "$rc"

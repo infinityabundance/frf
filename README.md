@@ -281,7 +281,7 @@ not these tables.
 
 | id | meaning | status |
 |---|---|---|
-| frf-exec-linux-v1 | The reference profile: direct exec, per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable) | active |
+| frf-exec-linux-v1 | The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> — no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable) | active |
 | frf-exec-linux-v2 | Designed: cgroup v2 aggregate envelope (pids.max/memory.max/cpu.max/io.max) — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process) | future |
 <!-- PROTOCOL-REGISTRY:END -->
 
@@ -664,15 +664,18 @@ says no more than that receipt licenses.
   stdout/stderr can never hold the capture open. `ETXTBSY` spawn retries are
   bounded to 1 s. Remaining: a side that escapes via `setsid` is outside the
   policy, and the capture is the process group's output, not byte-timed.
-- **Artifacts execute from content-addressed snapshots** (`objects/sha256/<H>`):
+- **Artifacts execute from SEALED verified images** (`objects/sha256/<H>`):
   bytes are hashed BEFORE execution, materialized via temp-write → fsync →
   verify → atomic rename → seal (executed `0555`, data `0444`), RE-HASHED on
   every use (a corrupt or hand-planted object is refused, never executed),
-  and re-sealed on every use. `{fixture}` resolves to the snapshot path; a
-  script's `$0` is the snapshot path, so sides must not depend on their own
-  path. This is content-addressed and corruption-checked; it is not
-  cryptographically impossible for the same OS user to mutate between
-  verification and execution (sealed memfd + execveat is future work).
+  and re-sealed on every use. `{fixture}` resolves to the snapshot path. The
+  executed IMAGE is the exact verified bytes in a memfd sealed with
+  `F_SEAL_WRITE|F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL` and executed via
+  `/proc/self/fd/<n>` — no pathname is ever re-opened for execution, so the
+  same-OS-user verify→execute race is closed for the executed image (see
+  spec/execution-profile.md). Native binaries keep their argv[0]; a script
+  observes its sealed image path as `$0` (the captured argv is unchanged),
+  and FRF's own instrumentation never depends on `$0`.
 - **Script interpreter identity is the full interpreter CHAIN**: the
   executable the kernel directly invoked (`kernel_interpreter`), the raw
   shebang argument bytes (verbatim — `-S` flags, env assignments — recorded

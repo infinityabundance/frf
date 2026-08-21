@@ -74,6 +74,261 @@ pub const EXEC_RLIMIT_NPROC: u64 = 4096;
 /// starts after the spawn succeeds).
 pub const SPAWN_RETRY_BUDGET: Duration = Duration::from_secs(1);
 
+// ---------------------------------------------------------------------------
+// Sealed executable images — closing the verify→execute race
+// ---------------------------------------------------------------------------
+//
+// The reference engine executes ONLY images bound to verified bytes:
+//
+//   read artifact bytes → verify CID → memfd_create → copy → seal → exec
+//
+// never a pathname whose contents were verified earlier and then re-opened.
+// On Linux (the reference profile) the bytes live in a memfd sealed with
+// F_SEAL_WRITE|F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL and are executed via
+// `/proc/self/fd/<n>`: after sealing, no process — not even the same OS
+// user — can alter the image, and the kernel resolves the fd inside the
+// child at exec time, so the executed bytes are exactly the sealed bytes.
+// Script shebangs re-open `/proc/self/fd/<n>` in the same (post-exec)
+// process, where the inherited fd still resolves to the sealed memfd.
+//
+// argv[0] is preserved as the materialized snapshot path, so a sealed
+// execution observes the same argv[0] as the path-based execution it
+// replaces (many programs inspect argv[0]). Data files (fixtures) stay
+// path-based: the recorded argv is part of the run identity, and the
+// content-addressed object CAS plus 0444/0555 permissions are the data
+// discipline; sealing is for the executed IMAGE.
+
+/// An executable image bound to the exact verified bytes.
+///
+/// - Linux: a sealed memfd (see the module docs).
+/// - Other platforms: a private temp file with mode 0555 (best effort; the
+///   reference profile is Linux).
+///
+/// The image is NOT `Clone` — the sealed fd / temp file is owned exactly
+/// once, for the image's lifetime.
+#[derive(Debug)]
+pub struct ExecImage {
+    /// The path passed to exec(2): `/proc/self/fd/<n>` when sealed, the
+    /// temp file on fallback platforms.
+    exec_path: PathBuf,
+    /// argv[0]: the materialized snapshot path the execution observes.
+    argv0: PathBuf,
+    /// The sealed memfd (Linux), kept alive for the image's lifetime.
+    #[cfg(target_os = "linux")]
+    fd: Option<std::os::fd::OwnedFd>,
+    /// The private temp file to remove on drop (fallback platforms).
+    #[cfg(not(target_os = "linux"))]
+    cleanup: Option<PathBuf>,
+}
+
+impl ExecImage {
+    /// Seal `bytes` — which MUST already be verified by the caller
+    /// (typically [`crate::store::Store::verified_object_bytes`]) — into an
+    /// executable image. `expected_sha256` is re-checked against the bytes
+    /// being sealed (defense in depth: the sealed bytes are the verified
+    /// bytes, self-evidently). `argv0` is the materialized snapshot path the
+    /// process will observe as its program name.
+    pub fn seal(bytes: &[u8], expected_sha256: &str, argv0: &Path) -> Result<ExecImage> {
+        let actual = sha256_bytes(bytes);
+        if actual != expected_sha256 {
+            return Err(FrfError::new(format!(
+                "refusing to seal an executable image: the bytes hash to {} but the verified content address is {} — sealing unverified bytes would re-open the verify→execute race",
+                &actual[..16],
+                &expected_sha256[..16]
+            )));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = seal_memfd(bytes)?;
+            let exec_path = PathBuf::from(format!("/proc/self/fd/{}", fd.as_raw_fd()));
+            Ok(ExecImage {
+                exec_path,
+                argv0: argv0.to_path_buf(),
+                fd: Some(fd),
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let cleanup = materialize_temp(bytes)?;
+            Ok(ExecImage {
+                exec_path: cleanup.clone(),
+                argv0: argv0.to_path_buf(),
+                cleanup: Some(cleanup),
+            })
+        }
+    }
+
+    /// A path-based image (argv[0] = the path): used by tests and any
+    /// execution that is not a content-addressed object. The reference
+    /// engine's evidence execution paths use [`ExecImage::seal`].
+    pub fn from_path(path: &Path) -> ExecImage {
+        #[cfg(target_os = "linux")]
+        {
+            ExecImage {
+                exec_path: path.to_path_buf(),
+                argv0: path.to_path_buf(),
+                fd: None,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            ExecImage {
+                exec_path: path.to_path_buf(),
+                argv0: path.to_path_buf(),
+                cleanup: None,
+            }
+        }
+    }
+
+    /// The path passed to exec(2).
+    pub fn path(&self) -> &Path {
+        &self.exec_path
+    }
+
+    /// The program name the process observes (argv[0]).
+    pub fn argv0(&self) -> &Path {
+        &self.argv0
+    }
+
+    /// The seals currently in force on the image (Linux): the hostile
+    /// regression test proves `F_SEAL_WRITE | F_SEAL_SEAL` are applied
+    /// before the image may be executed. `None` on fallback platforms or
+    /// path-based images.
+    #[cfg(target_os = "linux")]
+    pub fn seals(&self) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        let fd = self.fd.as_ref()?;
+        // SAFETY: fcntl(2) F_GET_SEALS on a valid open memfd.
+        let s = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GET_SEALS) };
+        (s >= 0).then_some(s)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for ExecImage {
+    fn drop(&mut self) {
+        // The OwnedFd closes the memfd when the image is dropped; nothing
+        // else to clean up.
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Drop for ExecImage {
+    fn drop(&mut self) {
+        if let Some(p) = &self.cleanup {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Create a memfd, copy `bytes` into it, and seal it
+/// (F_SEAL_WRITE|F_SEAL_GROW|F_SEAL_SHRINK|F_SEAL_SEAL). After the final
+/// F_ADD_SEALS no process can modify the image; the seals are read back to
+/// prove it before the image is ever executed.
+#[cfg(target_os = "linux")]
+fn seal_memfd(bytes: &[u8]) -> Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+
+    // The name shows up in /proc/<pid>/fdinfo; "frf-object" is descriptive.
+    let name = c"frf-object";
+    // SAFETY: memfd_create(2) is async-signal-safe; MFD_ALLOW_SEALING is
+    // required for F_ADD_SEALS. The returned fd is owned by us.
+    let raw: RawFd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_ALLOW_SEALING) };
+    if raw < 0 {
+        return Err(FrfError::new(format!(
+            "memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: `raw` is a fresh fd owned by us.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+
+    let mut written = 0usize;
+    while written < bytes.len() {
+        // SAFETY: `raw` is a valid open fd; the buffer is `bytes` itself.
+        let n =
+            unsafe { libc::write(raw, bytes[written..].as_ptr().cast(), bytes.len() - written) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(FrfError::new(format!(
+                "cannot write the sealed executable image: {e}"
+            )));
+        }
+        written += n as usize;
+    }
+
+    // Seal: after this, the image is immutable — even to us. The kernel
+    // guarantees the order does not matter; F_SEAL_SEAL in the same call
+    // makes the sealing permanent.
+    // SAFETY: fcntl(2) on a valid fd with valid seal constants.
+    let rc = unsafe {
+        libc::fcntl(
+            raw,
+            libc::F_ADD_SEALS,
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL,
+        )
+    };
+    if rc < 0 {
+        return Err(FrfError::new(format!(
+            "cannot seal the executable image: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // Prove the seals before the image may be executed: read them back.
+    // SAFETY: fcntl(2) F_GET_SEALS on a valid fd.
+    let seals = unsafe { libc::fcntl(raw, libc::F_GET_SEALS) };
+    let required = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    if seals < 0 || (seals & required) != required {
+        return Err(FrfError::new(format!(
+            "the sealed executable image does not report the required seals (F_GET_SEALS = {seals}); refusing to execute an unsealed image"
+        )));
+    }
+    Ok(fd)
+}
+
+/// Fallback (non-Linux): materialize the bytes to a private temp file with
+/// mode 0555. The reference profile is Linux; this is a best-effort port.
+#[cfg(not(target_os = "linux"))]
+fn materialize_temp(bytes: &[u8]) -> Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir();
+    let mut path = dir.join(format!(
+        "frf-image-{}-{}",
+        std::process::id(),
+        crate::host::sha256_bytes(bytes)
+    ));
+    // Avoid collision: append a monotonic counter suffix.
+    for i in 0u32.. {
+        let p = path.with_extension(format!("{i}.img"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o555)
+            .open(&p)
+        {
+            Ok(mut f) => {
+                f.write_all(bytes)
+                    .map_err(|e| FrfError::new(format!("cannot write {}: {e}", p.display())))?;
+                path = p;
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(FrfError::new(format!(
+                    "cannot create the fallback executable image: {e}"
+                )))
+            }
+        }
+    }
+    Ok(path)
+}
+
 /// Effective execution timeout: the default, unless the `FRF_EXEC_TIMEOUT_MS`
 /// test hook overrides it. Kept out of the public CLI surface on purpose;
 /// its only legitimate use is making the kill path cheap to exercise.
@@ -207,58 +462,64 @@ pub struct ProcessOutcome {
     pub exit: String,
 }
 
-/// Execute `program` with `args`, capturing stdout/stderr without a shell.
+/// Execute `image` with `args`, capturing stdout/stderr without a shell.
 ///
 /// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
 /// before failing; everything else fails immediately.
-pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
-    run_impl(program, args, None, None)
+pub fn run_process(image: &ExecImage, args: &[String]) -> Result<ProcessOutcome> {
+    run_impl(image, args, None, None)
 }
 
 /// [`run_process`] with a declared working directory: the side runs from
 /// `cwd`, so recorded root-relative argv paths resolve against the layout
 /// the replay reconstructed (bundle replay executes sides from the temp
 /// invocation root, never from the user's cwd).
-pub fn run_process_in(program: &Path, args: &[String], cwd: &Path) -> Result<ProcessOutcome> {
-    run_impl(program, args, None, Some(cwd))
+pub fn run_process_in(image: &ExecImage, args: &[String], cwd: &Path) -> Result<ProcessOutcome> {
+    run_impl(image, args, None, Some(cwd))
 }
 
-/// Execute `program` with `args` and the given bytes on stdin (used by the
+/// Execute `image` with `args` and the given bytes on stdin (used by the
 /// comparator extension protocol: the canonical request is written to the
 /// comparator's stdin, which sees EOF once the write completes). Same
 /// hostile-runner guarantees as [`run_process`]: own process group, pipes
 /// drained concurrently (stdin written concurrently too), bounded timeout,
 /// descendant termination.
 pub fn run_process_with_stdin(
-    program: &Path,
+    image: &ExecImage,
     args: &[String],
     stdin: &[u8],
 ) -> Result<ProcessOutcome> {
-    run_impl(program, args, Some(stdin), None)
+    run_impl(image, args, Some(stdin), None)
 }
 
 /// [`run_process_with_stdin`] with a declared working directory (bundle
 /// replay invokes the snapshotted comparator from the reconstructed root).
 pub fn run_process_with_stdin_in(
-    program: &Path,
+    image: &ExecImage,
     args: &[String],
     stdin: &[u8],
     cwd: &Path,
 ) -> Result<ProcessOutcome> {
-    run_impl(program, args, Some(stdin), Some(cwd))
+    run_impl(image, args, Some(stdin), Some(cwd))
 }
 
 fn run_impl(
-    program: &Path,
+    image: &ExecImage,
     args: &[String],
     stdin: Option<&[u8]>,
     cwd: Option<&Path>,
 ) -> Result<ProcessOutcome> {
-    // Every side runs in its own process group (unix) so the harness can
-    // terminate the entire tree — direct process plus any descendants that
-    // inherited the capture pipes — when the side exits, times out, or
-    // overflows its capture cap.
-    let mut command = Command::new(program);
+    // The program name the process observes (argv[0]) is the materialized
+    // snapshot path — a sealed execution must not silently change argv[0]
+    // to `/proc/self/fd/<n>`: many programs inspect argv[0], and the
+    // observation must match the path-based contract.
+    let program = image.argv0();
+    let mut command = Command::new(image.path());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.arg0(program.as_os_str());
+    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -299,6 +560,10 @@ fn run_impl(
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        // Every side runs in its own process group (unix) so the harness can
+        // terminate the entire tree — direct process plus any descendants
+        // that inherited the capture pipes — when the side exits, times out,
+        // or overflows its capture cap.
         command.process_group(0);
     }
 
@@ -803,16 +1068,120 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let out = run_process(&script, &[]).unwrap();
+        let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
         assert_eq!(out.exit, "7");
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
         let _ = std::fs::remove_file(&script);
     }
 
+    /// The verify→execute race is closed: a SEALED image executes the exact
+    /// verified bytes even when the materialized path it would otherwise be
+    /// re-opened from is replaced by the same OS user between verification
+    /// and execution. The executed image is the sealed memfd, never the
+    /// pathname.
+    #[test]
+    fn sealed_image_runs_the_exact_verified_bytes() {
+        let materialized = temp_script("sealed-argv0");
+        let bytes_a = b"#!/bin/sh\necho sealed-A\n".to_vec();
+        std::fs::write(&materialized, &bytes_a).unwrap();
+        let hash_a = sha256_bytes(&bytes_a);
+        let image = ExecImage::seal(&bytes_a, &hash_a, &materialized).unwrap();
+
+        let out = run_process(&image, &[]).unwrap();
+        assert_eq!(out.exit, "0");
+        assert_eq!(out.stdout, b"sealed-A\n", "the sealed bytes must run");
+        assert_eq!(
+            image.argv0(),
+            materialized.as_path(),
+            "argv[0] is the materialized snapshot path, never /proc/self/fd/<n>"
+        );
+
+        // The same OS user replaces the materialized path AFTER verification
+        // and BEFORE execution. A path-based exec would run the tampered
+        // bytes; the sealed image still runs the verified bytes.
+        std::fs::write(&materialized, b"#!/bin/sh\necho TAMPERED\n").unwrap();
+        let out2 = run_process(&image, &[]).unwrap();
+        assert_eq!(
+            out2.stdout, b"sealed-A\n",
+            "the executed image must be the sealed verified bytes, not the mutated pathname"
+        );
+        let _ = std::fs::remove_file(&materialized);
+    }
+
+    /// Defense in depth: the bytes being sealed must BE the verified bytes.
+    /// Sealing unverified bytes would re-open the race under a new name.
+    #[test]
+    fn sealing_refuses_unverified_bytes() {
+        let materialized = temp_script("sealed-refuse");
+        let bytes = b"#!/bin/sh\necho x\n".to_vec();
+        std::fs::write(&materialized, &bytes).unwrap();
+        let wrong = "0".repeat(64);
+        let err = ExecImage::seal(&bytes, &wrong, &materialized)
+            .unwrap_err()
+            .0;
+        assert!(err.contains("refusing to seal"), "error: {err}");
+        let _ = std::fs::remove_file(&materialized);
+    }
+
+    /// The memfd is sealed before it may be executed: F_GET_SEALS reports
+    /// the write/grow/shrink seals and the permanent F_SEAL_SEAL.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sealed_image_reports_the_required_seals() {
+        let materialized = temp_script("sealed-seals");
+        let bytes = b"#!/bin/sh\necho s\n".to_vec();
+        std::fs::write(&materialized, &bytes).unwrap();
+        let hash = sha256_bytes(&bytes);
+        let image = ExecImage::seal(&bytes, &hash, &materialized).unwrap();
+        let seals = image.seals().expect("sealed image must report its seals");
+        let required =
+            libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+        assert_eq!(
+            seals & required,
+            required,
+            "the image must be permanently sealed (reported seals {seals})"
+        );
+        let _ = std::fs::remove_file(&materialized);
+    }
+
+    /// The declared profile property for scripts: the kernel executes a
+    /// shebang script via its image path, so a script observes the sealed
+    /// image path as $0 (the args are preserved exactly). Native binaries
+    /// keep argv[0] via arg0. This pins the property as declared, not
+    /// accidental.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_sealed_script_observes_its_image_path_as_zero() {
+        let materialized = temp_script("sealed-zero");
+        let bytes = br#"#!/bin/sh
+echo "zero=$0 one=$1"
+"#
+        .to_vec();
+        std::fs::write(&materialized, &bytes).unwrap();
+        let hash = sha256_bytes(&bytes);
+        let image = ExecImage::seal(&bytes, &hash, &materialized).unwrap();
+        let out = run_process(&image, &["argX".to_string()]).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stdout = stdout.trim();
+        assert!(
+            stdout.starts_with("zero=/proc/self/fd/"),
+            "a sealed script observes its image path as $0, got {stdout:?}"
+        );
+        assert!(
+            stdout.ends_with("one=argX"),
+            "the args are preserved, got {stdout:?}"
+        );
+        let _ = std::fs::remove_file(&materialized);
+    }
+
     #[test]
     fn missing_program_is_a_clear_error() {
-        let err = run_process(Path::new("/nonexistent/frf-nope"), &[]).unwrap_err();
+        let err = run_process(
+            &ExecImage::from_path(Path::new("/nonexistent/frf-nope")),
+            &[],
+        )
+        .unwrap_err();
         assert!(err.0.contains("failed to execute"));
     }
 
@@ -833,7 +1202,7 @@ mod tests {
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         with_default_hooks(|| {
-            let out = run_process(&script, &[]).unwrap();
+            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
             assert_eq!(out.exit, "0");
             let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
             assert_eq!(
@@ -853,7 +1222,7 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nkill -TERM $$\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = run_process(&script, &[]).unwrap();
+        let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
         assert_eq!(out.exit, "signal(15)");
         let _ = std::fs::remove_file(&script);
     }
@@ -874,7 +1243,7 @@ mod tests {
             .open(&script)
             .unwrap();
         let start = Instant::now();
-        let err = run_process(&script, &[]).unwrap_err();
+        let err = run_process(&ExecImage::from_path(&script), &[]).unwrap_err();
         drop(held);
         assert!(err.0.contains("ETXTBSY"), "error: {}", err.0);
         assert!(
@@ -902,7 +1271,7 @@ mod tests {
         // the RUN, not the lock wait.
         let _ = with_default_hooks(|| {
             let start = Instant::now();
-            let out = run_process(&script, &[]).unwrap();
+            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
             assert_eq!(out.exit, "0");
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
             assert!(
@@ -933,7 +1302,7 @@ mod tests {
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             }
             let start = Instant::now();
-            let err = run_process(&script, &[]).unwrap_err();
+            let err = run_process(&ExecImage::from_path(&script), &[]).unwrap_err();
             assert!(
                 err.0.contains("capture cap")
                     && err.0.contains("refusing to record truncated output"),
@@ -969,7 +1338,7 @@ mod tests {
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
                 let start = Instant::now();
-                let out = run_process(&script, &[]).unwrap();
+                let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
                 assert!(
                     out.exit.starts_with("signal("),
                     "the CPU limit must terminate the side by signal, got {:?}",
@@ -998,7 +1367,7 @@ mod tests {
             std::fs::write(&script, "#!/bin/sh\nulimit -u\n").unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let out = run_process(&script, &[]).unwrap();
+            let out = run_process(&ExecImage::from_path(&script), &[]).unwrap();
             assert_eq!(
                 String::from_utf8_lossy(&out.stdout).trim(),
                 "42",
@@ -1033,7 +1402,7 @@ mod tests {
                 let start = Instant::now();
                 // The side is bounded (its forks fail) and the harness returns
                 // at the wall-clock deadline at the latest.
-                let _ = run_process(&script, &[]);
+                let _ = run_process(&ExecImage::from_path(&script), &[]);
                 assert!(
                     start.elapsed() < Duration::from_secs(8),
                     "a fork bomb must not outlive the profile's wall-clock bound (took {:?})",

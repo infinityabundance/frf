@@ -141,14 +141,14 @@ pub fn interpret(
 /// Run a snapshotted normalizer against one side's raw streams and interpret
 /// its response. Returns the normalized streams and the raw response bytes.
 pub fn run_side(
-    snapshot: &Path,
+    image: &host::ExecImage,
     request_bytes: &[u8],
     semantic: &NormalizerSemantic,
     raw_stdout: &[u8],
     raw_stderr: &[u8],
     cwd: &Path,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let response_bytes = ext::run_program(snapshot, request_bytes, cwd)?;
+    let response_bytes = ext::run_program(image, request_bytes, cwd)?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
     ext::require_canonical_response(&response_bytes, "normalizer response")?;

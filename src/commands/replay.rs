@@ -339,14 +339,23 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         }
     }
 
-    // -- artifacts must reproduce exactly: verified, re-sealed snapshots ----
-    let authority_snapshot = store.materialize_object(
-        &store.verified_object_bytes(&capture.authority_artifact.sha256)?,
-        true,
+    // -- artifacts must reproduce exactly: verified, re-sealed snapshots -------
+    // The executed images are the SEALED verified bytes (verify→execute race
+    // closed); the materialized snapshot paths remain argv[0] + the evidence
+    // paths.
+    let authority_bytes = store.verified_object_bytes(&capture.authority_artifact.sha256)?;
+    let authority_snapshot = store.materialize_object(&authority_bytes, true)?;
+    let authority_image = host::ExecImage::seal(
+        &authority_bytes,
+        &capture.authority_artifact.sha256,
+        &authority_snapshot,
     )?;
-    let candidate_snapshot = store.materialize_object(
-        &store.verified_object_bytes(&capture.candidate_artifact.sha256)?,
-        true,
+    let candidate_bytes = store.verified_object_bytes(&capture.candidate_artifact.sha256)?;
+    let candidate_snapshot = store.materialize_object(&candidate_bytes, true)?;
+    let candidate_image = host::ExecImage::seal(
+        &candidate_bytes,
+        &capture.candidate_artifact.sha256,
+        &candidate_snapshot,
     )?;
     // The fixture object is referenced by the captured argv; verify it too.
     store.verified_object_bytes(&capture.fixture_sha256)?;
@@ -379,8 +388,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let raw_reference_out =
-        host::run_process_in(&authority_snapshot, &capture.arguments, side_cwd)?;
+    let raw_reference_out = host::run_process_in(&authority_image, &capture.arguments, side_cwd)?;
     let reference_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
         clear_produce(prod)?;
@@ -388,8 +396,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     } else {
         None
     };
-    let raw_candidate_out =
-        host::run_process_in(&candidate_snapshot, &capture.arguments, side_cwd)?;
+    let raw_candidate_out = host::run_process_in(&candidate_image, &capture.arguments, side_cwd)?;
     let candidate_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
         clear_produce(prod)?;
