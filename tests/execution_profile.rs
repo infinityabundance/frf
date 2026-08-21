@@ -66,7 +66,7 @@ fn the_receipt_carries_the_profile_and_the_bounds_that_applied() {
     let capture_bounds: serde_json::Value =
         serde_json::to_value(&capture["capture_bounds"]).unwrap();
     assert_eq!(body["capture_bounds"], capture_bounds);
-    assert_eq!(body["schema_version"], "frf-receipt-v14");
+    assert_eq!(body["schema_version"], "frf-receipt-v15");
 
     // Replay consumes the receipt through the same verified loader, which
     // enforces that the receipt's profile/bounds equal the capture's.

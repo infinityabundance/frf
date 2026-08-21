@@ -46,6 +46,7 @@ const CAPTURE_BOUNDS_KEYS: &[&str] = &[
     "rlimit_as_mb",
     "rlimit_cpu_s",
     "rlimit_nofile",
+    "rlimit_nproc",
 ];
 
 /// Unknown-key rejection per object kind — the structural mirror of the
@@ -75,9 +76,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v14" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v15" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v14",
+            "schema_version is {:?}, expected frf-receipt-v15",
             doc["schema_version"]
         ));
     }
@@ -435,9 +436,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v14" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v15" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v14",
+            "schema_version is {:?}, expected frf-receipt-v15",
             rec["schema_version"]
         ));
     }
@@ -858,6 +859,7 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         ("rlimit_as_mb", 65_536u64),
         ("rlimit_cpu_s", 86_400u64),
         ("rlimit_nofile", 1_048_576u64),
+        ("rlimit_nproc", 65_536u64),
     ] {
         let v_str = as_str(&bounds[what]);
         match v_str.parse::<u64>() {

@@ -1312,6 +1312,7 @@ mod tests {
                 rlimit_as_mb: "2048".into(),
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
+                rlimit_nproc: "512".into(),
             },
             reference: SideCapture {
                 exit: "0".into(),
