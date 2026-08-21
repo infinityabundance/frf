@@ -36,7 +36,7 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     let run = stdout(&out);
     assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
 
-    // Two divergence fingerprints (exit + stderr), both persistent/stable.
+    // Two divergence lineages (exit + stderr), both persistent/stable.
     let mut trajectories: Vec<serde_yaml::Value> = fs::read_dir(work.path("frf/trajectories"))
         .unwrap()
         .map(|e| {
@@ -44,22 +44,50 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
             serde_yaml::from_str::<serde_yaml::Value>(&fs::read_to_string(&path).unwrap()).unwrap()
         })
         .collect();
-    assert_eq!(trajectories.len(), 2, "exit + stderr fingerprints");
+    assert_eq!(trajectories.len(), 2, "exit + stderr lineages");
     trajectories.sort_by_key(|t| t["subject"].as_str().unwrap().to_string());
+    let mut series_id = String::new();
     for t in &trajectories {
-        assert_eq!(t["schema_version"], "frf-trajectory-v1");
+        assert_eq!(t["schema_version"], "frf-trajectory-v2");
         assert_eq!(t["coordinate_system"], "repeat_index");
-        assert_eq!(t["repeat_count"], 3);
         assert_eq!(t["derivation"]["drift"], "persistent");
         assert_eq!(t["derivation"]["slew"], "stable");
+        assert_eq!(t["derivation"]["localization"], "none");
+        assert_eq!(t["derivation"]["bands"], 1);
         let obs = t["observations"].as_sequence().unwrap();
         assert_eq!(obs.len(), 3, "one observation per repetition");
         for (i, o) in obs.iter().enumerate() {
-            assert_eq!(o["repetition"], (i + 1) as u64);
+            assert_eq!(o["point_index"], (i + 1) as u64);
+            assert_eq!(o["coordinate"], (i + 1).to_string());
             assert_eq!(o["run"], run, "identical evidence is the same run");
             assert_eq!(o["observed"], true);
             assert!(o["residual"].as_str().unwrap().starts_with("cli-"));
+            assert!(
+                o["fingerprint"].as_str().unwrap().len() == 64,
+                "observed entry carries the exact fingerprint"
+            );
         }
+        series_id = t["series"].as_str().unwrap().to_string();
+    }
+    assert_eq!(series_id.len(), 64, "series content address");
+
+    // The ExecutionSeries record: one series, three dense points, all
+    // referencing the single content-addressed run.
+    let series_dir = work.path("frf/series");
+    let series_files: Vec<_> = fs::read_dir(&series_dir).unwrap().collect();
+    assert_eq!(series_files.len(), 1, "one repeat_index series");
+    let series: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/series/{series_id}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(series["schema_version"], "frf-series-v1");
+    assert_eq!(series["id"], series_id);
+    assert_eq!(series["coordinate_system"], "repeat_index");
+    let points = series["points"].as_sequence().unwrap();
+    assert_eq!(points.len(), 3);
+    for (i, p) in points.iter().enumerate() {
+        assert_eq!(p["point_index"], (i + 1) as u64);
+        assert_eq!(p["run"], run);
     }
 
     // The receipt derived from this repeated run carries the trajectory's
@@ -76,6 +104,10 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
         assert_eq!(res["sign"]["norm"], "repeated-run");
         assert_eq!(res["sign"]["drift"], "persistent");
         assert_eq!(res["sign"]["slew"], "stable");
+        assert_eq!(
+            res["sign"]["series"], series_id,
+            "the receipt pins the series snapshot its sign was derived from"
+        );
     }
 
     // The verified path agrees: export the bundle and verify it (this runs
@@ -95,6 +127,10 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
             .count()
             >= 2,
         "the bundle closure must carry the trajectories"
+    );
+    assert!(
+        fs::read_dir(work.path("traj.frf/series")).unwrap().count() >= 1,
+        "the bundle closure must carry the series record"
     );
 }
 
@@ -131,22 +167,21 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
         .map(|d| d.map(|e| e.unwrap().path()).collect())
         .unwrap_or_default();
     if files.is_empty() {
-        // Every repetition matched; the run has no residuals and the receipt
-        // still emits with the single-run... actually the run IS a repetition,
-        // but with no residuals there is nothing to sign. Just succeed.
+        // Every repetition matched; the run has no residuals and no
+        // trajectory exists. The series record still documents the
+        // experiment.
         assert!(
-            fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.yaml")))
-                .unwrap()
-                .contains("repeat_count")
+            fs::read_dir(work.path("frf/series")).unwrap().count() >= 1,
+            "the repeat experiment must leave a series record"
         );
         return;
     }
-    assert!(files.len() <= 2, "exit + stderr fingerprints at most");
+    assert!(files.len() <= 2, "exit + stderr lineages at most");
     for path in &files {
         let t: serde_yaml::Value =
             serde_yaml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(t["schema_version"], "frf-trajectory-v1");
-        assert_eq!(t["repeat_count"], 5);
+        assert_eq!(t["schema_version"], "frf-trajectory-v2");
+        assert_eq!(t["coordinate_system"], "repeat_index");
         let obs = t["observations"].as_sequence().unwrap();
         assert_eq!(obs.len(), 5);
         // The derivation must be the deterministic classification of the
@@ -187,8 +222,13 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
         };
         assert_eq!(t["derivation"]["drift"], expected_drift);
         assert_eq!(t["derivation"]["slew"], expected_slew);
+        // The derivation's localization/bands are the deterministic
+        // companions (re-derived by frf::trajectory::classify).
+        let d = frf::trajectory::classify(&observed).unwrap();
+        assert_eq!(t["derivation"]["localization"], d.localization.as_str());
+        assert_eq!(t["derivation"]["bands"], d.bands);
         // Observed entries reference a real residual whose fingerprint is the
-        // subject, recorded against a real run.
+        // observation fingerprint, recorded against a real run.
         for o in obs {
             let repetition_run = o["run"].as_str().unwrap().to_string();
             assert!(

@@ -27,12 +27,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
-/// Capture schema. v5 records the repetition context of a repeated-run
-/// court (`repeat_index`/`repeat_count`, absent for single-run courts): a
-/// run's identity stays content-addressed over the observation itself, and
-/// the repetition context is execution provenance that lets a receipt
-/// derive its `sign` from the residual's trajectory.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v5";
+/// Capture schema. v6 removes the repetition context from the run entirely:
+/// a run knows nothing about which experiment later references it (v5's
+/// `repeat_index`/`repeat_count` moved to the ExecutionSeries protocol
+/// object). A run's identity is the observation, nothing else.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v6";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -43,10 +42,13 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// fixture's DECLARED arguments (the semantic identity's input); v8 binds
 /// each residual to the exact disposition EVENT that supplied its
 /// disposition (`disposition_event_id`) — a receipt points at an immutable
-/// event in the hash-chained history, it does not merely copy state. The
+/// event in the hash-chained history, it does not merely copy state. v9
+/// pins each residual's sign to the exact ExecutionSeries snapshot it was
+/// derived from (`sign.series`), so later experiments that reference the
+/// same content-addressed run can never change what a receipt means. The
 /// body is serialized as canonical JSON (RFC 8785) and its identity is the
 /// full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v8";
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v9";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -68,10 +70,20 @@ pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 /// travels with the bundle.
 pub const SCHEMA_BUNDLE: &str = "frf-bundle-v2";
 
-/// Residual trajectory schema: an ordered series of observations of one
-/// residual FINGERPRINT over a declared coordinate system (v0.1.17:
-/// `repeat_index` only), with a deterministic derivation.
-pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v1";
+/// Residual trajectory schema v2: the trajectory's SUBJECT is the residual
+/// LINEAGE identity (stable across candidate revisions, authority versions,
+/// environments, and time — `FRF/RESIDUAL-LINEAGE/v1`), not the exact
+/// observation fingerprint; each observation records the exact fingerprint
+/// it saw. Trajectories are DERIVED from an [`ExecutionSeries`] — a run
+/// never knows which experiment references it.
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v2";
+
+/// The ExecutionSeries protocol object: the experiment. One series per
+/// (court, coordinate system); points are appended by series courts
+/// (`--repeat`, `--candidate-revisions`, `--authority-versions`,
+/// `--environment-point`, `--time-point`). A run never carries series
+/// membership — the series references the runs.
+pub const SCHEMA_SERIES: &str = "frf-series-v1";
 
 /// The comparator extension protocol (spec/comparator.md): a canonical
 /// JSON request a court writes to an external comparator program's stdin,
@@ -569,16 +581,6 @@ pub struct CaptureManifest {
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
-    /// Repetition context when this run belongs to a repeated-run court
-    /// (`frf court run --repeat N`): which repetition it was, and of how
-    /// many. Absent for single-run courts. The run's IDENTITY never depends
-    /// on these — identical evidence is the same run whatever its repetition
-    /// context — but a receipt uses them to derive its `sign` from the
-    /// residual's trajectory.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repeat_index: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repeat_count: Option<u32>,
 }
 
 /// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
@@ -1009,22 +1011,23 @@ pub struct TokenRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Residual trajectory (the repeat axis in v0.1.17)
+// Residual trajectories (v0.1.21: the generalized protocol)
 // ---------------------------------------------------------------------------
 
-/// The deterministic repeat-axis classification of a residual fingerprint
-/// across N repetitions of a court: how STABLE the divergence is (drift) and
-/// what pattern of change it shows (slew). See
-/// [`crate::trajectory::classify_repeat`] for the exact table.
+/// The deterministic classification of a trajectory: how STABLE the
+/// divergence is (drift), what pattern of change it shows (slew), where the
+/// observed bands touch the axis bounds (localization), and how many
+/// contiguous observed bands there are (bands). See
+/// [`crate::trajectory::classify`] for the exact table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrajectoryDrift {
-    /// Observed in every repetition.
+    /// Observed at every point of the axis.
     Persistent,
-    /// Observed in some but not all repetitions.
+    /// Observed at some but not all points.
     Transient,
-    /// Transient AND observed in both the first and the last repetition
-    /// (it came back).
+    /// Transient AND observed at both the first and the last point (it came
+    /// back).
     Recurrent,
 }
 
@@ -1051,7 +1054,7 @@ impl TrajectoryDrift {
     }
 }
 
-/// The slew classification of a repeat-axis trajectory.
+/// The slew classification of a trajectory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrajectorySlew {
@@ -1090,48 +1093,141 @@ impl TrajectorySlew {
     }
 }
 
-/// The derived classification of one trajectory.
+/// Where the observed bands touch the axis bounds (ordered axes). For the
+/// paper's vocabulary: `start`/`end` are the boundary-localized patterns
+/// (`abrupt`); `interior` is the burst; `both` with 2+ bands is the
+/// version-stratified/recurrent pattern.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrajectoryLocalization {
+    /// The divergence is present at every point (persistent).
+    #[serde(rename = "none")]
+    None_,
+    /// The observed band touches the start boundary only.
+    Start,
+    /// The observed band touches the end boundary only.
+    End,
+    /// Observed at both the first and the last point.
+    Both,
+    /// The observed band is interior (touches neither boundary).
+    Interior,
+}
+
+impl TrajectoryLocalization {
+    pub const ALL: [TrajectoryLocalization; 5] = [
+        TrajectoryLocalization::None_,
+        TrajectoryLocalization::Start,
+        TrajectoryLocalization::End,
+        TrajectoryLocalization::Both,
+        TrajectoryLocalization::Interior,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            TrajectoryLocalization::None_ => "none",
+            TrajectoryLocalization::Start => "start",
+            TrajectoryLocalization::End => "end",
+            TrajectoryLocalization::Both => "both",
+            TrajectoryLocalization::Interior => "interior",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        TrajectoryLocalization::ALL
+            .iter()
+            .copied()
+            .find(|l| l.as_str() == s)
+    }
+}
+
+/// The derived classification of one trajectory. `localization` and `bands`
+/// make the paper's extended vocabulary executable: `abrupt` ↔ start/end
+/// (boundary-localized), `burst` ↔ interior, `recurrent` ↔ both with 2+
+/// bands (version-stratified along a version axis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryDerivation {
     pub drift: TrajectoryDrift,
     pub slew: TrajectorySlew,
+    /// Where the observed bands touch the axis bounds.
+    pub localization: TrajectoryLocalization,
+    /// The number of contiguous observed bands (1 for persistent/abrupt/
+    /// burst; 2+ for the recurrent/stratified patterns).
+    pub bands: u32,
 }
 
-/// One point of a trajectory: repetition index, the run that repetition
-/// produced (identical repetitions share the content-addressed run), whether
-/// the subject was observed in it, and the residual record that observed it
-/// (when observed).
+/// One point of a trajectory: the coordinate value, the run that point
+/// produced (identical evidence shares the content-addressed run), whether
+/// the subject lineage was observed in it, and — when observed — the
+/// residual id and the EXACT observation fingerprint at that point.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryObservation {
-    pub repetition: u32,
+    pub point_index: u32,
+    /// The coordinate value (repetition index, candidate artifact hash,
+    /// authority version, environment label, time label).
+    pub coordinate: String,
     pub run: String,
     pub observed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub residual: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// The trajectory protocol object: an ordered series of observations of one
-/// residual FINGERPRINT over a declared coordinate system, with the
-/// deterministic derivation. The subject is the fingerprint, not a residual
-/// id: the same divergence re-observed in later runs (later candidates,
-/// authorities, environments) has the same subject, so trajectories can span
-/// executions once those axes exist.
+/// residual LINEAGE over a declared coordinate system, with the
+/// deterministic derivation. The subject is the lineage identity
+/// (`FRF/RESIDUAL-LINEAGE/v1`), stable across candidate revisions,
+/// authority versions, environments, and time — so a trajectory records the
+/// MOVEMENT of a divergence, not merely the exact recurrence of one byte
+/// pattern. Trajectories are DERIVED from the referenced
+/// [`ExecutionSeries`] and may be re-derived (and extended) as the series
+/// accumulates; the runs are the immutable evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryRecord {
     pub schema_version: String,
-    /// The residual fingerprint (`FRF/RESIDUAL-FINGERPRINT/v1`) — the stable
-    /// identity of the divergence.
+    /// The residual lineage identity — the stable subject.
     pub subject: String,
     pub axis: String,
-    /// v0.1.17: only `repeat_index` is executable.
+    /// One of: `repeat_index`, `candidate_revision`, `authority_version`,
+    /// `environment`, `time`.
     pub coordinate_system: String,
-    /// How many repetitions the series spans.
-    pub repeat_count: u32,
+    /// The ExecutionSeries this trajectory is derived from
+    /// (`series/{court}-{coordinate_system}.yaml`).
+    pub series: String,
     pub observations: Vec<TrajectoryObservation>,
     pub derivation: TrajectoryDerivation,
+}
+
+/// The ExecutionSeries protocol object: the experiment. One record per
+/// (court, coordinate system), APPENDED by series courts; the points are the
+/// ordered runs with the divergence fingerprints each observed. The record
+/// is derived (regenerable from the runs) and appendable — the runs are the
+/// immutable evidence, and a run never knows it is in a series.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionSeries {
+    pub schema_version: String,
+    /// The experiment key: `{court}-{coordinate_system}` (the series file
+    /// name).
+    pub id: String,
+    pub court: String,
+    pub coordinate_system: String,
+    /// The ordered points (appended in observation order).
+    pub points: Vec<SeriesPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesPoint {
+    pub point_index: u32,
+    /// The coordinate value at this point.
+    pub coordinate: String,
+    /// The content-addressed run this point produced (identical evidence
+    /// shares the run).
+    pub run: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,16 +1463,28 @@ pub enum ObservableVerdict {
     Residual,
 }
 
-/// Appendix A `sign` block. v0 runs each court once, so drift and slew cannot
-/// be observed; the honest values are literal, not enum-named guesses. A
-/// repeated-run court (`--repeat N`) derives them from the residual's
-/// trajectory instead.
+/// The sign a receipt entry MUST carry for a residual record: single-run
+/// courts honestly record `not-observed` drift/slew (one run cannot observe
+/// drift or slew); a residual whose run belongs to an [`ExecutionSeries`]
+/// derives its sign from the series' trajectory for the residual's LINEAGE.
+///
+/// The receipt PINs the derivation basis: `series` names the exact
+/// [`ExecutionSeries`] snapshot the drift/slew were derived from, so later
+/// experiments that reference the same content-addressed run can never
+/// change what an emitted receipt means — the receipt is a snapshot, and the
+/// verifier replays the pinned series.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResidualSign {
     pub norm: String,
     pub drift: String,
     pub slew: String,
+    /// The ExecutionSeries the drift/slew were derived from, present when
+    /// `norm == "repeated-run"`. `None` = single-run (no series membership
+    /// at emit time; the absence of a later experiment is not something an
+    /// immutable snapshot can be held responsible for).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -183,9 +183,55 @@ pub fn expected_blocks(residual: &Value, family: &str) -> String {
     }
 }
 
-/// The deterministic repeat-axis classification (the paper's restraint: a
-/// single-run court cannot observe drift/slew).
-pub fn classify_repeat(observed: &[bool]) -> (String, String) {
+/// The residual LINEAGE identity: the stable comparison question/surface/
+/// feature (kind, axis, surface, fixture, fixture family, authority NAME) —
+/// deliberately not the exact observed bytes, so trajectories can record the
+/// MOVEMENT of a divergence across candidate revisions, authority versions,
+/// environments, and time.
+pub fn residual_lineage(
+    kind: &str,
+    axis: &str,
+    surface: Option<&str>,
+    fixture_family: &str,
+    authority_name: &str,
+    fixture: &str,
+) -> String {
+    let doc = json!({
+        "kind": kind,
+        "axis": axis,
+        "surface": surface,
+        "fixture_family": fixture_family,
+        "authority_name": authority_name,
+        "fixture": fixture,
+    });
+    preimage("FRF/RESIDUAL-LINEAGE/v1", &doc)
+}
+
+/// The ExecutionSeries identity: content-addressed over the experiment
+/// (court, coordinate system, ordered points; the point index enters as its
+/// string form — the canonical value domain has no numbers).
+pub fn series_identity(court: &str, coordinate_system: &str, points: &Value) -> String {
+    let doc = json!({
+        "court": court,
+        "coordinate_system": coordinate_system,
+        "points": points.as_array().map(|ps| {
+            ps.iter()
+                .map(|p| {
+                    json!({
+                        "point_index": s(&p["point_index"]).to_string(),
+                        "coordinate": s(&p["coordinate"]),
+                        "run": s(&p["run"]),
+                    })
+                })
+                .collect::<Vec<_>>()
+        }).unwrap_or_default(),
+    });
+    preimage("FRF/SERIES/v1", &doc)
+}
+
+/// The deterministic ordered-axis classification: drift, slew, localization,
+/// and bands. Mirrors the reference engine's trajectory::classify.
+pub fn classify(observed: &[bool]) -> (String, String, String, u32) {
     let n = observed.len();
     let t: Vec<usize> = observed
         .iter()
@@ -194,19 +240,42 @@ pub fn classify_repeat(observed: &[bool]) -> (String, String) {
         .map(|(i, _)| i)
         .collect();
     if t.is_empty() {
-        panic!("no observations in the repeat series");
+        panic!("no observations in the series");
     }
-    if t.len() == n {
-        return ("persistent".to_string(), "stable".to_string());
-    }
-    if t.last().unwrap() - t[0] + 1 == t.len() {
-        if t[0] == 0 || t.last() == Some(&(n - 1)) {
-            return ("transient".to_string(), "abrupt".to_string());
+    let first = *t.first().unwrap();
+    let last = *t.last().unwrap();
+    let mut bands = 1u32;
+    for w in t.windows(2) {
+        if w[1] != w[0] + 1 {
+            bands += 1;
         }
-        return ("transient".to_string(), "burst".to_string());
     }
-    if t[0] == 0 && t.last() == Some(&(n - 1)) {
-        return ("recurrent".to_string(), "recurrent".to_string());
+    let contiguous = last - first + 1 == t.len();
+    if t.len() == n {
+        ("persistent".into(), "stable".into(), "none".into(), bands)
+    } else if contiguous {
+        if first == 0 {
+            ("transient".into(), "abrupt".into(), "start".into(), bands)
+        } else if last == n - 1 {
+            ("transient".into(), "abrupt".into(), "end".into(), bands)
+        } else {
+            ("transient".into(), "burst".into(), "interior".into(), bands)
+        }
+    } else if first == 0 && last == n - 1 {
+        ("recurrent".into(), "recurrent".into(), "both".into(), bands)
+    } else {
+        let localization = if first == 0 {
+            "start"
+        } else if last == n - 1 {
+            "end"
+        } else {
+            "interior"
+        };
+        (
+            "transient".into(),
+            "recurrent".into(),
+            localization.into(),
+            bands,
+        )
     }
-    ("transient".to_string(), "recurrent".to_string())
 }

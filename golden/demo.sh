@@ -28,8 +28,8 @@ fi
 ROOT=frf
 
 # Regenerate the evidence tree (courts/ is source and is kept).
-rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
-mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
+rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
+mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
 rm -rf golden/work
 mkdir -p golden/work
 
@@ -86,11 +86,25 @@ if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL"; then
   exit 1
 fi
 
-step "6. the portable bundle — verified away from the evidence tree"
+step "6. the generalized trajectory axes — revisions, versions, environments"
+# The candidate_revision axis: one run per candidate artifact (a version
+# ladder of the candidate). The exit lineage is observed against the
+# original candidate and ABSENT against the fixed one: a boundary-localized
+# cessation across revisions.
+REV_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest.yaml --candidate-revisions golden/candidate.sh,golden/work/candidate-fixed.sh)
+echo "candidate-revision series run: $REV_RUN"
+# The environment axis: this run is one point of the environment experiment
+# at the declared coordinate; re-running with another label on another
+# machine accumulates the series.
+ENV_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest.yaml --environment-point golden-machine)
+echo "environment series run: $ENV_RUN"
+
+step "7. the portable bundle — verified away from the evidence tree"
 BUNDLE=golden/work/portable.frf
 "$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
 # Verify from inside golden/work, where no evidence tree exists: the bundle
-# alone must authenticate the evidence graph.
+# alone must authenticate the evidence graph (its closure carries the series
+# and trajectory records the receipt's evidence participates in).
 (cd golden/work && "$FRF_BIN" bundle verify portable.frf)
 
 step "7. the evidence tree (Section 19.3 layout)"

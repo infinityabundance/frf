@@ -56,9 +56,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v8" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v9" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v8",
+            "schema_version is {:?}, expected frf-receipt-v9",
             doc["schema_version"]
         ));
     }
@@ -263,7 +263,7 @@ const RESIDUAL_KEYS: &[&str] = &[
     "resolution_run_id",
     "closure_predicate",
 ];
-const SIGN_KEYS: &[&str] = &["norm", "drift", "slew"];
+const SIGN_KEYS: &[&str] = &["norm", "drift", "slew", "series"];
 const ENDODUCTION_KEYS: &[&str] = &["schema_version", "tokens"];
 const TOKEN_KEYS: &[&str] = &["residual_id", "token", "next_court", "blocks_claims"];
 const CLAIMS_KEYS: &[&str] = &["positive", "non_claims", "blocked_by_open_residuals"];
@@ -271,9 +271,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v8" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v9" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v8",
+            "schema_version is {:?}, expected frf-receipt-v9",
             rec["schema_version"]
         ));
     }

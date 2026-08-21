@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v8` (this document).*
+*Version: `frf-receipt-v9` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that
@@ -98,7 +98,7 @@ not an event: it is the projection of no events, so open entries carry
 ## 4. Schema
 
 `spec/openreceipt.schema.json` (JSON Schema draft-07) is the normative
-machine-readable definition. `schema_version` MUST be `frf-receipt-v8`; a
+machine-readable definition. `schema_version` MUST be `frf-receipt-v9`; a
 conformant parser refuses any other version.
 
 ## 5. Conformance — two levels
@@ -243,27 +243,49 @@ complete required closure, recomputed from the bundle. Export only ever
 carries VERIFIED evidence: `frf bundle export` refuses a receipt that does
 not verify against the source tree first.
 
-## 7. Residual trajectories — the executable repeat axis
+## 7. Residual trajectories — the generalized protocol
 
-A trajectory is an ordered series of observations of one residual
-FINGERPRINT over a declared coordinate system, with a deterministic
-classification. `frf court run --repeat N` executes the `repeat_index`
-axis: the same court is re-executed N times (fresh processes —
-nondeterminism is the point), and each observed divergence fingerprint gets
-a record under `trajectories/<fingerprint>.yaml` (`frf-trajectory-v1`):
+A trajectory is an ordered series of observations of one residual LINEAGE
+over a declared coordinate system, with a deterministic classification. The
+subject is the lineage identity (`FRF/RESIDUAL-LINEAGE/v1` — kind, axis,
+surface, fixture, fixture family, authority NAME), deliberately NOT the
+exact observed bytes: the lineage is stable across candidate revisions,
+authority versions, environments, and time, so a trajectory records the
+MOVEMENT of a divergence (the same lineage at three commits has three
+different exact fingerprints but one trajectory).
+
+Five coordinate systems are executable:
+
+- `repeat_index` — `frf court run --repeat N`: the same court re-executed N
+  times (fresh processes — nondeterminism is the point);
+- `candidate_revision` — `--candidate-revisions P1,P2,...`: one run per
+  candidate artifact;
+- `authority_version` — `--authority-versions V1,V2,...`: one run per
+  admitted authority version;
+- `environment` — `--environment-point LABEL`: this run is one point of the
+  environment experiment at the declared coordinate; the series accumulates
+  as more machines declare more coordinates;
+- `time` — `--time-point LABEL`: the same, over time.
+
+A series court writes an ExecutionSeries record (`series/<id>.yaml`,
+`frf-series-v1`), content-addressed over the experiment (court, coordinate
+system, ordered points) — every append is a NEW immutable snapshot, so the
+growth of a series is itself evidence. A run NEVER knows its experiments:
+the series references the runs. Trajectories (`frf-trajectory-v2`, under
+`trajectories/<lineage>.<coordinate-system>.<series>.yaml`) are DERIVED from
+a series snapshot and reference it:
 
 ```text
 Trajectory {
-    subject            the residual fingerprint (FRF/RESIDUAL-FINGERPRINT/v1)
+    subject            the residual lineage (FRF/RESIDUAL-LINEAGE/v1)
     axis
-    coordinate_system  "repeat_index" (v0.1.17; the other axes — candidate
-                       revision, authority version, environment, fixture
-                       reduction, time — become executable as those protocol
-                       objects exist)
-    repeat_count
-    observations[]     { repetition, run, observed, residual? } — identical
-                       repetitions share the content-addressed run
-    derivation         { drift, slew }
+    coordinate_system  repeat_index | candidate_revision | authority_version |
+                       environment | time
+    series             the ExecutionSeries snapshot this is derived from
+    observations[]     { point_index, coordinate, run, observed, residual?,
+                       fingerprint? } — identical evidence shares the run;
+                       an observed point names the exact fingerprint
+    derivation         { drift, slew, localization, bands }
 }
 ```
 
@@ -271,22 +293,30 @@ The classification is a deterministic table (never a model): given the
 observed pattern `o[1..=N]` with `T = {i | o[i]}` non-empty —
 
 ```text
-|T| == N                     -> drift=persistent, slew=stable
-T contiguous, touching an end -> drift=transient,  slew=abrupt
-T contiguous, interior        -> drift=transient,  slew=burst
-T non-contiguous, both ends   -> drift=recurrent,  slew=recurrent
-otherwise                     -> drift=transient,  slew=recurrent
+|T| == N                     -> persistent, stable,  localization=none, bands=1
+T contiguous, start          -> transient,  abrupt,  localization=start   (boundary-localized)
+T contiguous, end            -> transient,  abrupt,  localization=end     (boundary-localized)
+T contiguous, interior       -> transient,  burst,   localization=interior
+T non-contiguous, both ends  -> recurrent,  recurrent, localization=both  (2+ bands =
+                               version-stratified along a version axis)
+otherwise                    -> transient,  recurrent, localization by the ends touched
 ```
 
-A single-run court cannot observe drift or slew, and its receipts honestly
-say so (`sign: {norm: single-run, drift: not-observed, slew: not-observed}`
-— the paper's restraint, kept). A repeated-run court's captures record
-`repeat_index`/`repeat_count` (`frf-capture-v5`), and its receipts derive
-the `sign` from the trajectory — the receipt verifier rederives it, and the
-bundle closure carries the trajectory. Claim semantics are unchanged: a
-divergence observed in ANY repetition is still an observation.
+`localization` (start/end/both/interior — the paper's boundary-localized)
+and `bands` (2+ = version-stratified) make the extended vocabulary
+executable; `gradual` needs a magnitude dimension (presence is binary) and
+is deliberately not claimed.
 
-Trajectories are immutable: the record is a snapshot of one repeated
-court, keyed by the subject fingerprint, so the same divergence re-observed
-by later runs (later candidates, authorities, environments) can extend the
-series once those axes exist.
+A single-run court cannot observe drift or slew, and its receipts honestly
+say so (`sign: {norm: single-run, drift: not-observed, slew:
+not-observed}` — the paper's restraint, kept). A receipt entry whose run
+belongs to a series derives its sign from the series' trajectory for the
+lineage and PINs the exact series snapshot it was derived from
+(`sign.series`, OpenReceipt v9): the verifier replays the pinned series
+(it must exist, contain the run, and its trajectory must yield the recorded
+drift/slew), so later experiments that reference the same content-addressed
+run can never change what an emitted receipt means. Claim semantics are
+unchanged: a divergence observed at ANY point is still an observation.
+
+Trajectories are derived projections (regenerable from the immutable runs);
+the runs and the series snapshots are the immutable evidence.
