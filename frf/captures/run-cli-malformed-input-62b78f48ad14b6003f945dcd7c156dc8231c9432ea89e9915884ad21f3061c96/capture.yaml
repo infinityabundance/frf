@@ -1,5 +1,5 @@
-schema_version: frf-capture-v7
-run: run-cli-malformed-input-a7a5ca46fce1f418a1e83ffaf93439ecd5de83f562f6697bfbc2aa4322faeda2
+schema_version: frf-capture-v8
+run: run-cli-malformed-input-62b78f48ad14b6003f945dcd7c156dc8231c9432ea89e9915884ad21f3061c96
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest.yaml
@@ -9,11 +9,15 @@ arguments:
 - --strict
 - frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
 environment:
-  schema_version: frf-environment-v1
+  schema_version: frf-environment-v2
   os: linux
   architecture: x86_64
   kernel_release: 7.1.8-1-cachyos
-  digest: 02a5c0979cc141f7bfe659612cab23869d6ecb18ee59a03ec0a3105895da0f8d
+  locale: en_GB.UTF-8
+  timezone: Europe/London
+  umask: '0022'
+  cwd: /run/media/one/1tb_kingston1/frf
+  digest: d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e
 court_spec:
   id: cli-malformed-input
   question: For malformed input in fixture family malformed-input, does the candidate preserve the admitted reference's exit class and first diagnostic line?
@@ -56,15 +60,15 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.23
-    frf_executable_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
+    frf_version: 0.1.24
+    frf_executable_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
   comparator_implementations:
   - id: exit
-    implementation_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
-    runner_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
+    implementation_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
+    runner_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
   - id: stderr
-    implementation_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
-    runner_hash: efcb8916128487dc94659877e9e86b996c9d5edd8295a2125559fabb597a540a
+    implementation_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
+    runner_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
@@ -88,6 +92,13 @@ candidate_artifact:
       path: /usr/bin/bash
       sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
 court_semantic_identity: c26625152260680daa067e4d1727ff53204047824da55849718b4a553f84453b
+execution_profile: frf-exec-linux-v1
+capture_bounds:
+  timeout_ms: '60000'
+  max_stream_bytes: '16777216'
+  rlimit_as_mb: '2048'
+  rlimit_cpu_s: '30'
+  rlimit_nofile: '1024'
 reference:
   exit: '2'
   exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35

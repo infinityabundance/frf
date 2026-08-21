@@ -1,4 +1,5 @@
-//! `frf replay <RUN_ID | RECEIPT_ID>`: a first-class evidence operation.
+//! `frf replay <RUN_ID | RECEIPT_ID> [--policy exact|semantic]`: a first-class
+//! evidence operation.
 //!
 //! Replay re-executes a captured observation — the exact snapshotted
 //! artifacts (verified and re-sealed on every use), the exact captured argv,
@@ -11,6 +12,21 @@
 //! dimension that drifted (corrupt object, changed environment, changed
 //! output). Original repository paths are provenance, not replay
 //! dependencies — everything a replay needs lives under `objects/`.
+//!
+//! Two reproduction policies, never conflated:
+//!
+//! - **exact** (default): essentially the same execution must reproduce. The
+//!   execution profile and applied capture bounds must be identical, the
+//!   environment (digest + working directory) must be identical, and every
+//!   artifact's interpreter chain — the kernel-invoked executable, the env
+//!   resolver, the downstream interpreter, the PATH digest — must re-resolve
+//!   to the recorded identities. Any provenance drift REFUSES the replay.
+//! - **semantic**: the same bounded observation must reproduce under
+//!   admissibly different machinery. Same court question, same
+//!   authority/candidate artifacts, same observation bytes — while
+//!   provenance differences (environment, interpreter chains, profile,
+//!   bounds) are admitted but always REPORTED, so a reproduction under
+//!   changed machinery is never silently called "the same execution".
 
 use crate::error::{FrfError, Result};
 use crate::host;
@@ -19,7 +35,196 @@ use crate::store::Store;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub fn run(store: &Store, id: &str) -> Result<()> {
+/// The reproduction policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplayPolicy {
+    /// Same execution provenance (profile, bounds, environment, interpreter
+    /// chains) + same observations. Any drift refuses.
+    Exact,
+    /// Same court question + same artifacts + same observations; provenance
+    /// drift is admitted and reported.
+    Semantic,
+}
+
+impl ReplayPolicy {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s {
+            "exact" => Ok(ReplayPolicy::Exact),
+            "semantic" => Ok(ReplayPolicy::Semantic),
+            other => Err(FrfError::new(format!(
+                "unknown replay policy '{other}': use 'exact' (same execution provenance) or 'semantic' (same bounded observation, provenance drift reported)"
+            ))),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplayPolicy::Exact => "exact",
+            ReplayPolicy::Semantic => "semantic",
+        }
+    }
+}
+
+fn short(h: &str) -> &str {
+    if h.len() >= 8 {
+        &h[..8]
+    } else {
+        h
+    }
+}
+
+/// The first differing dimension of two interpreter chains, phrased for a
+/// drift report.
+fn interpreter_drift(
+    who: &str,
+    recorded: &InterpreterIdentity,
+    now: &InterpreterIdentity,
+) -> Option<String> {
+    if recorded.kernel_interpreter != now.kernel_interpreter {
+        Some(format!(
+            "{who} kernel interpreter changed: {} {} -> {} {}",
+            recorded.kernel_interpreter.path,
+            short(&recorded.kernel_interpreter.sha256),
+            now.kernel_interpreter.path,
+            short(&now.kernel_interpreter.sha256)
+        ))
+    } else if recorded.downstream_interpreter != now.downstream_interpreter {
+        Some(format!(
+            "{who} downstream interpreter changed: {} {} -> {} {}",
+            recorded.downstream_interpreter.path,
+            short(&recorded.downstream_interpreter.sha256),
+            now.downstream_interpreter.path,
+            short(&now.downstream_interpreter.sha256)
+        ))
+    } else if recorded.shebang_argument_bytes != now.shebang_argument_bytes {
+        Some(format!(
+            "{who} shebang arguments changed: {:?} -> {:?}",
+            recorded.shebang_argument_bytes, now.shebang_argument_bytes
+        ))
+    } else if recorded.resolver != now.resolver {
+        Some(format!(
+            "{who} env resolver changed (recorded {:?}, now {:?})",
+            recorded.resolver, now.resolver
+        ))
+    } else {
+        None
+    }
+}
+
+/// The execution-provenance drift between the captured observation and the
+/// current host, as human-actionable lines. Exact replay refuses on any;
+/// semantic replay reports them and reproduces the observation anyway.
+fn provenance_drift(store: &Store, capture: &CaptureManifest) -> Result<Vec<String>> {
+    let mut drift: Vec<String> = Vec::new();
+
+    // The execution profile and the capture bounds that applied.
+    if capture.execution_profile != crate::model::EXECUTION_PROFILE_LINUX {
+        drift.push(format!(
+            "execution profile changed: recorded {}, current engine is {}",
+            capture.execution_profile,
+            crate::model::EXECUTION_PROFILE_LINUX
+        ));
+    }
+    let bounds_now = host::capture_bounds();
+    let bounds_recorded = &capture.capture_bounds;
+    for (what, recorded, now) in [
+        (
+            "timeout_ms",
+            &bounds_recorded.timeout_ms,
+            &bounds_now.timeout_ms,
+        ),
+        (
+            "max_stream_bytes",
+            &bounds_recorded.max_stream_bytes,
+            &bounds_now.max_stream_bytes,
+        ),
+        (
+            "rlimit_as_mb",
+            &bounds_recorded.rlimit_as_mb,
+            &bounds_now.rlimit_as_mb,
+        ),
+        (
+            "rlimit_cpu_s",
+            &bounds_recorded.rlimit_cpu_s,
+            &bounds_now.rlimit_cpu_s,
+        ),
+        (
+            "rlimit_nofile",
+            &bounds_recorded.rlimit_nofile,
+            &bounds_now.rlimit_nofile,
+        ),
+    ] {
+        if recorded != now {
+            drift.push(format!("capture bound {what} changed: {recorded} -> {now}"));
+        }
+    }
+
+    // The environment: digest over the output-moving strata, and the working
+    // directory the sides ran under.
+    let env_now = host::environment_identity();
+    if env_now.digest != capture.environment.digest {
+        drift.push(format!(
+            "environment digest changed: {} -> {} (os/arch/kernel/locale/timezone/umask)",
+            short(&capture.environment.digest),
+            short(&env_now.digest)
+        ));
+    }
+    if env_now.cwd != capture.environment.cwd {
+        drift.push(format!(
+            "working directory changed: {:?} -> {:?}",
+            capture.environment.cwd, env_now.cwd
+        ));
+    }
+
+    // Interpreter chains: the artifacts' kernels/resolvers/downstream
+    // interpreters re-resolve against the CURRENT host — a changed /usr/bin/
+    // bash with an unchanged kernel is a provenance change exact replay must
+    // see.
+    for (who, artifact) in [
+        ("authority", &capture.authority_artifact),
+        ("candidate", &capture.candidate_artifact),
+    ] {
+        let bytes = store.verified_object_bytes(&artifact.sha256)?;
+        let now = host::interpreter_identity(&bytes)?;
+        match (&artifact.interpreter, now) {
+            (Some(recorded), Some(now)) => {
+                if let Some(line) = interpreter_drift(who, recorded, &now) {
+                    drift.push(line);
+                }
+            }
+            (None, None) => {}
+            _ => drift.push(format!("{who} interpreter presence changed")),
+        }
+    }
+    // The comparator instruments' interpreters too: replay re-invokes the
+    // exact snapshotted comparator programs.
+    for impl_ in &capture.provenance.comparator_implementations {
+        let Some(artifact) = &impl_.artifact else {
+            continue;
+        };
+        let bytes = store.verified_object_bytes(&artifact.sha256)?;
+        let now = host::interpreter_identity(&bytes)?;
+        match (&artifact.interpreter, now) {
+            (Some(recorded), Some(now)) => {
+                if let Some(line) =
+                    interpreter_drift(&format!("comparator {}", impl_.id), recorded, &now)
+                {
+                    drift.push(line);
+                }
+            }
+            (None, None) => {}
+            _ => drift.push(format!(
+                "comparator {} interpreter presence changed",
+                impl_.id
+            )),
+        }
+    }
+
+    Ok(drift)
+}
+
+pub fn run(store: &Store, id: &str, policy_str: &str) -> Result<()> {
+    let policy = ReplayPolicy::parse(policy_str)?;
     // The name is a claim until recomputed: a run id must rederive its run
     // identity, and a receipt id must verify (content-addressed, semantically
     // conformant, derived from its capture) BEFORE it may be replayed.
@@ -47,6 +252,9 @@ pub fn run(store: &Store, id: &str) -> Result<()> {
     };
 
     // -- checked admissibility environment ----------------------------------
+    // The envelope's platforms are part of the court QUESTION (they are in
+    // the semantic identity): running out-of-envelope is out-of-question, so
+    // this gate applies under BOTH policies.
     let current_platform = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
     let envelope = &capture.court_spec.admissibility_envelope;
     if !envelope.platforms.iter().any(|p| p == &current_platform) {
@@ -55,13 +263,26 @@ pub fn run(store: &Store, id: &str) -> Result<()> {
             envelope.platforms
         )));
     }
-    let env = host::environment_identity();
-    if env.digest != capture.environment.digest {
-        return Err(FrfError::new(format!(
-            "replay refused: the environment changed since observation ({} != {}); the run is not reproducible under the current environment",
-            &env.digest[..8],
-            &capture.environment.digest[..8]
-        )));
+
+    // -- execution-provenance drift (the exact/semantic distinction) --------
+    // Exact replay refuses on any drift; semantic replay reports it and
+    // requires the observation to reproduce anyway. The drift is computed
+    // BEFORE execution so the reproduction itself is never skipped.
+    let drift = provenance_drift(store, &capture)?;
+    match policy {
+        ReplayPolicy::Exact => {
+            if !drift.is_empty() {
+                let lines = drift.join("\n  ");
+                return Err(FrfError::new(format!(
+                    "replay (exact) of {run} refused: the execution provenance changed — the observation is not reproducible under the current host:\n  {lines}"
+                )));
+            }
+        }
+        ReplayPolicy::Semantic => {
+            for line in &drift {
+                eprintln!("replay (semantic): declared provenance difference: {line}");
+            }
+        }
     }
 
     // -- artifacts must reproduce exactly: verified, re-sealed snapshots ----
@@ -85,7 +306,9 @@ pub fn run(store: &Store, id: &str) -> Result<()> {
     // -- the observation must reproduce byte-for-byte ------------------------
     if reference != capture.reference || candidate != capture.candidate {
         return Err(FrfError::new(format!(
-            "replay of {run} FAILED: the executed sides differ from the captured observation (outputs did not reproduce)"
+            "replay ({}) of {run} FAILED: the executed sides differ from the captured observation (outputs did not reproduce{})",
+            policy.as_str(),
+            if drift.is_empty() { String::new() } else { " under declared provenance differences".to_string() }
         )));
     }
 
@@ -229,10 +452,17 @@ pub fn run(store: &Store, id: &str) -> Result<()> {
         }
     }
 
-    println!(
-        "replay {run}: reproduced — sides byte-identical, {} residual(s) with matching fingerprints",
-        capture.residuals.len()
-    );
+    match policy {
+        ReplayPolicy::Exact => println!(
+            "replay (exact) {run}: reproduced — sides byte-identical, {} residual(s) with matching fingerprints",
+            capture.residuals.len()
+        ),
+        ReplayPolicy::Semantic => println!(
+            "replay (semantic) {run}: reproduced — sides byte-identical, {} residual(s) with matching fingerprints, {} declared provenance difference(s)",
+            capture.residuals.len(),
+            drift.len()
+        ),
+    }
     Ok(())
 }
 

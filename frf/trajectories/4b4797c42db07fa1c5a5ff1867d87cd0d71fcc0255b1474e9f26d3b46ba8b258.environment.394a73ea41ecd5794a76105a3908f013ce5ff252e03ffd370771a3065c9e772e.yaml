@@ -2,11 +2,11 @@ schema_version: frf-trajectory-v2
 subject: 4b4797c42db07fa1c5a5ff1867d87cd0d71fcc0255b1474e9f26d3b46ba8b258
 axis: exit
 coordinate_system: environment
-series: beb0b54175744b4ed34cbd5a9d741f0df5c7d3e92d1790f5eea5532d64886bbf
+series: 394a73ea41ecd5794a76105a3908f013ce5ff252e03ffd370771a3065c9e772e
 observations:
 - point_index: 1
   coordinate: golden-machine
-  run: run-cli-malformed-input-a7a5ca46fce1f418a1e83ffaf93439ecd5de83f562f6697bfbc2aa4322faeda2
+  run: run-cli-malformed-input-62b78f48ad14b6003f945dcd7c156dc8231c9432ea89e9915884ad21f3061c96
   observed: true
   residual: cli-exit-0001
   fingerprint: 898b85d1bc91e49aaf33cd1f65337b84f4259c5eda5076dff79a8dec57e7acae

@@ -26,16 +26,33 @@
 
 use crate::error::{FrfError, Result};
 use crate::model::{
-    EnvironmentIdentity, InterpreterExecutable, InterpreterIdentity, InterpreterResolver,
+    CaptureBounds, EnvironmentIdentity, InterpreterExecutable, InterpreterIdentity,
+    InterpreterResolver,
 };
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Upper bound for one side of a court execution.
+/// Upper bound for one side of a court execution (the execution profile's
+/// timeout).
 pub const EXEC_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Maximum bytes retained per output stream (the execution profile's capture
+/// cap). A side that exceeds it is killed and the run REFUSED — truncated
+/// output is never evidence. The profile records the cap that applied.
+pub const EXEC_MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
+
+/// Child address-space limit in MiB (RLIMIT_AS).
+pub const EXEC_RLIMIT_AS_MB: u64 = 2048;
+/// Child CPU-time limit in seconds (RLIMIT_CPU) — a CPU-bound hostile side
+/// hits this before the wall-clock timeout.
+pub const EXEC_RLIMIT_CPU_S: u64 = 30;
+/// Child open-file limit (RLIMIT_NOFILE).
+pub const EXEC_RLIMIT_NOFILE: u64 = 1024;
 
 /// Total budget for `ETXTBSY` spawn retries. Exec'ing a file another process
 /// just finished writing (or is still writing) transiently fails with
@@ -54,6 +71,54 @@ pub fn exec_timeout() -> Duration {
         .and_then(|v| v.parse::<u64>().ok())
         .map(Duration::from_millis)
         .unwrap_or(EXEC_TIMEOUT)
+}
+
+/// Effective per-stream capture cap: the profile default, unless the
+/// `FRF_EXEC_MAX_BYTES` test hook overrides it (a hostile side must not be
+/// able to exhaust the harness's memory before the timeout).
+pub fn max_stream_bytes() -> usize {
+    std::env::var("FRF_EXEC_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(EXEC_MAX_STREAM_BYTES)
+}
+
+/// Effective address-space limit (MiB), `FRF_EXEC_RLIMIT_AS_MB` override.
+pub fn rlimit_as_mb() -> u64 {
+    std::env::var("FRF_EXEC_RLIMIT_AS_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_RLIMIT_AS_MB)
+}
+
+/// Effective CPU-time limit (seconds), `FRF_EXEC_RLIMIT_CPU_S` override.
+pub fn rlimit_cpu_s() -> u64 {
+    std::env::var("FRF_EXEC_RLIMIT_CPU_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_RLIMIT_CPU_S)
+}
+
+/// Effective open-file limit, `FRF_EXEC_RLIMIT_NOFILE` override.
+pub fn rlimit_nofile() -> u64 {
+    std::env::var("FRF_EXEC_RLIMIT_NOFILE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_RLIMIT_NOFILE)
+}
+
+/// The capture bounds that applied, as the profile records them (strings —
+/// the OpenReceipt canonical value domain has no numbers). Bound at
+/// observation time and copied into receipts, so an observation is always
+/// read against the harness contract it was actually made under.
+pub fn capture_bounds() -> CaptureBounds {
+    CaptureBounds {
+        timeout_ms: exec_timeout().as_millis().to_string(),
+        max_stream_bytes: max_stream_bytes().to_string(),
+        rlimit_as_mb: rlimit_as_mb().to_string(),
+        rlimit_cpu_s: rlimit_cpu_s().to_string(),
+        rlimit_nofile: rlimit_nofile().to_string(),
+    }
 }
 
 /// SHA-256 hex digest of a byte slice.
@@ -124,7 +189,8 @@ pub fn run_process_with_stdin(
 fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<ProcessOutcome> {
     // Every side runs in its own process group (unix) so the harness can
     // terminate the entire tree — direct process plus any descendants that
-    // inherited the capture pipes — when the side exits or times out.
+    // inherited the capture pipes — when the side exits, times out, or
+    // overflows its capture cap.
     let mut command = Command::new(program);
     command
         .args(args)
@@ -135,6 +201,27 @@ fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<Pro
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // The execution profile's resource bounds, applied inside the child
+        // before exec: a hostile side is bounded in memory, CPU time, and
+        // file descriptors. A side that hits a limit dies by the profile's
+        // deterministic signal outcome (declared in
+        // spec/execution-profile.md); the capture records the signal.
+        let as_bytes = rlimit_as_mb().saturating_mul(1024 * 1024);
+        let cpu_s = rlimit_cpu_s();
+        let nofile = rlimit_nofile();
+        // SAFETY: `pre_exec` runs after fork(2), before execve(2), in the
+        // single-threaded child; setrlimit(2) is async-signal-safe.
+        unsafe {
+            command.pre_exec(move || {
+                set_rlimit(libc::RLIMIT_AS, as_bytes)
+                    .and_then(|_| set_rlimit(libc::RLIMIT_CPU, cpu_s))
+                    .and_then(|_| set_rlimit(libc::RLIMIT_NOFILE, nofile))
+            });
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -178,7 +265,10 @@ fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<Pro
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let timeout = exec_timeout();
+    let max_bytes = max_stream_bytes();
+    let group = child.id();
     let start = Instant::now();
+    let overflow = Arc::new(AtomicBool::new(false));
 
     let status = std::thread::scope(|s| {
         if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin_bytes) {
@@ -188,12 +278,10 @@ fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<Pro
                 let _ = pipe.write_all(&bytes);
             });
         }
-        let _drain_out = s.spawn(|| {
-            let _ = stdout_pipe.read_to_end(&mut stdout);
-        });
-        let _drain_err = s.spawn(|| {
-            let _ = stderr_pipe.read_to_end(&mut stderr);
-        });
+        let _drain_out =
+            s.spawn(|| drain_capped(&mut stdout_pipe, &mut stdout, max_bytes, group, &overflow));
+        let _drain_err =
+            s.spawn(|| drain_capped(&mut stderr_pipe, &mut stderr, max_bytes, group, &overflow));
         let result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -230,12 +318,75 @@ fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<Pro
         // buffers are complete before the caller sees them.
     })?;
 
+    // Evidentiary overflow: a stream exceeded the profile's capture cap and
+    // the side was killed. The captured bytes are TRUNCATED — recording them
+    // would fabricate an observation — so the run is refused, naming the
+    // bound that was enforced.
+    if overflow.load(Ordering::SeqCst) {
+        return Err(FrfError::new(format!(
+            "{} exceeded the execution profile's {} byte per-stream capture cap; refusing to record truncated output as evidence",
+            program.display(),
+            max_bytes
+        )));
+    }
+
     let exit = exit_string(&status);
     Ok(ProcessOutcome {
         stdout,
         stderr,
         exit,
     })
+}
+
+/// Drain a capture pipe up to `max` bytes. On exceeding the cap the whole
+/// process group is terminated and the overflow flag set: the caller refuses
+/// the run (truncated output is never evidence), and killing the group frees
+/// the peer pipes so every other drain reaches EOF and the scope can join.
+fn drain_capped(
+    pipe: &mut impl Read,
+    out: &mut Vec<u8>,
+    max: usize,
+    group: u32,
+    overflow: &AtomicBool,
+) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                if out.len() + n > max {
+                    overflow.store(true, Ordering::SeqCst);
+                    #[cfg(unix)]
+                    terminate_process_group(group);
+                    break;
+                }
+                out.extend_from_slice(&chunk[..n]);
+            }
+            Err(_) => break, // the group-kill path closes the pipe
+        }
+    }
+}
+
+/// Apply one child resource limit (inside the pre-exec hook). Lowering a
+/// limit never needs privilege; an inability to apply the profile's bound is
+/// a harness error that aborts the exec. Linux only: the reference profile
+/// is `frf-exec-linux-v1`.
+#[cfg(target_os = "linux")]
+fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64) -> std::io::Result<()> {
+    // SAFETY: setrlimit(2) is async-signal-safe; `resource` is a valid
+    // resource constant.
+    let rlim = libc::rlimit {
+        rlim_cur: value,
+        rlim_max: value,
+    };
+    // SAFETY: the pointer refers to a valid rlimit struct for the duration
+    // of the call.
+    let rc = unsafe { libc::setrlimit(resource, &rlim) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Terminate every process in `pid`'s process group. The side was spawned
@@ -293,28 +444,109 @@ pub fn set_permissions(path: &Path, mode: u32) -> Result<()> {
 
 /// The environment digest: the one formula, shared by capture (at
 /// observation time) and OpenReceipt semantic verification (rederived from
-/// the receipt's own os/architecture/kernel_release fields).
-pub fn environment_digest(os: &str, architecture: &str, kernel_release: &str) -> String {
-    sha256_bytes(format!("os={os}\narch={architecture}\nkernel={kernel_release}").as_bytes())
+/// the receipt's own environment fields). Covers the strata that actually
+/// move side output: os, architecture, kernel release, the effective locale,
+/// the timezone, and the umask.
+pub fn environment_digest(
+    os: &str,
+    architecture: &str,
+    kernel_release: &str,
+    locale: &str,
+    timezone: &str,
+    umask: &str,
+) -> String {
+    sha256_bytes(
+        format!(
+            "os={os}\narch={architecture}\nkernel={kernel_release}\nlocale={locale}\ntimezone={timezone}\numask={umask}"
+        )
+        .as_bytes(),
+    )
+}
+
+/// The effective locale the sides run under: `LC_ALL`, else `LC_CTYPE`, else
+/// `LANG`, else `C` (the POSIX default that applies when none is set).
+pub fn effective_locale() -> String {
+    std::env::var("LC_ALL")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var("LC_CTYPE").ok().filter(|v| !v.is_empty()))
+        .or_else(|| std::env::var("LANG").ok().filter(|v| !v.is_empty()))
+        .unwrap_or_else(|| "C".to_string())
+}
+
+/// The timezone the sides run under: `TZ` when set, else the resolved system
+/// zone (when /etc/localtime is a symlink into zoneinfo, its tail — e.g.
+/// `Europe/London`), else a digest of the zone file's bytes, else `unknown`.
+pub fn timezone() -> String {
+    if let Ok(tz) = std::env::var("TZ") {
+        if !tz.is_empty() {
+            return tz;
+        }
+    }
+    if let Ok(canonical) = std::fs::canonicalize("/etc/localtime") {
+        let path = canonical.to_string_lossy();
+        if let Some(idx) = path.rfind("zoneinfo/") {
+            return path[idx + "zoneinfo/".len()..].to_string();
+        }
+        if let Ok(bytes) = std::fs::read(&canonical) {
+            return format!("tz:{}", &sha256_bytes(&bytes)[..16]);
+        }
+    }
+    "unknown".to_string()
+}
+
+/// The process umask at observation time, as octal digits (`0022`).
+/// Momentarily set-and-restored — the court is single-threaded at this
+/// point, before any side is spawned.
+pub fn umask() -> String {
+    #[cfg(unix)]
+    {
+        // SAFETY: umask(2) returns the previous mask and takes the new one;
+        // restoring the returned value leaves the process mask unchanged.
+        let mask = unsafe { libc::umask(0) };
+        unsafe {
+            libc::umask(mask);
+        }
+        format!("{mask:04o}")
+    }
+    #[cfg(not(unix))]
+    {
+        "0000".to_string()
+    }
 }
 
 /// The environment an observation happens in, captured at court time: os,
-/// architecture, kernel release, and the digest over them. The receipt
-/// copies this identity verbatim — it never asks its own host what
-/// environment an old court ran under. (Expanding the strata — libc,
-/// locale, timezone, dynamic dependencies, container/Nix digests — is
-/// environment admission, a later milestone; the struct is already the
-/// shape for it.)
+/// architecture, kernel release, locale, timezone, umask, the working
+/// directory the sides ran under, and the digest over the output-moving
+/// strata. The receipt copies this identity verbatim — it never asks its own
+/// host what environment an old court ran under.
 pub fn environment_identity() -> EnvironmentIdentity {
     let os = std::env::consts::OS.to_string();
     let architecture = std::env::consts::ARCH.to_string();
     let kernel_release = kernel_release();
-    let digest = environment_digest(&os, &architecture, &kernel_release);
+    let locale = effective_locale();
+    let timezone = timezone();
+    let umask = umask();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let digest = environment_digest(
+        &os,
+        &architecture,
+        &kernel_release,
+        &locale,
+        &timezone,
+        &umask,
+    );
     EnvironmentIdentity {
         schema_version: crate::model::SCHEMA_ENVIRONMENT.to_string(),
         os,
         architecture,
         kernel_release,
+        locale,
+        timezone,
+        umask,
+        cwd,
         digest,
     }
 }
@@ -438,6 +670,42 @@ mod tests {
         std::env::temp_dir().join(format!("frf-{tag}-{}-{nanos}.sh", std::process::id()))
     }
 
+    /// Runs `body` with the given environment overrides set, restoring (or
+    /// removing) the prior values afterwards. Test threads share the process
+    /// environment, so hook-dependent tests must isolate themselves with this
+    /// instead of calling `std::env::set_var` directly. The global hook lock
+    /// serializes every test that reads or writes the execution hooks: an
+    /// override from one thread would otherwise leak into a concurrently
+    /// running test that reads the same variable mid-flight.
+    static HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_env<T>(overrides: &[(&str, &str)], body: impl FnOnce() -> T) -> T {
+        let _guard = HOOK_LOCK.lock().unwrap();
+        let mut prior: Vec<(&str, Option<std::ffi::OsString>)> = Vec::new();
+        for (k, v) in overrides {
+            prior.push((k, std::env::var_os(k)));
+            std::env::set_var(k, v);
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        for (k, v) in prior {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        match result {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// Runs `body` under the hook lock without overriding anything: the test
+    /// observes the profile defaults and must not race another thread's
+    /// temporary override.
+    fn with_default_hooks<T>(body: impl FnOnce() -> T) -> T {
+        with_env(&[], body)
+    }
+
     #[test]
     fn sha256_is_hex_and_stable() {
         let a = sha256_bytes(b"the quick brown fox");
@@ -484,15 +752,17 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let out = run_process(&script, &[]).unwrap();
-        assert_eq!(out.exit, "0");
-        let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
-        assert_eq!(
-            out.stdout.len(),
-            (line.len() + 1) * 20_000,
-            "full stream must be drained"
-        );
-        assert!(out.stderr.is_empty());
+        with_default_hooks(|| {
+            let out = run_process(&script, &[]).unwrap();
+            assert_eq!(out.exit, "0");
+            let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
+            assert_eq!(
+                out.stdout.len(),
+                (line.len() + 1) * 20_000,
+                "full stream must be drained"
+            );
+            assert!(out.stderr.is_empty());
+        });
         let _ = std::fs::remove_file(&script);
     }
 
@@ -548,7 +818,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         let start = Instant::now();
-        let out = run_process(&script, &[]).unwrap();
+        let out = with_default_hooks(|| run_process(&script, &[]).unwrap());
         assert_eq!(out.exit, "0");
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
         assert!(
@@ -557,6 +827,132 @@ mod tests {
             start.elapsed()
         );
         let _ = std::fs::remove_file(&script);
+    }
+
+    #[test]
+    fn capture_overflow_refuses_instead_of_truncating() {
+        // The execution profile bounds each stream; a side that exceeds the
+        // cap is killed and the run REFUSED — the truncated bytes must never
+        // become evidence. The tiny cap makes the path cheap to exercise.
+        with_env(&[("FRF_EXEC_MAX_BYTES", "1024")], || {
+            let script = temp_script("overflow");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\nawk 'BEGIN{for(i=0;i<1000;i++) print \"0123456789abcdefghijklmnopqrstuvwxyz\"}'\n",
+            )
+            .unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let start = Instant::now();
+            let err = run_process(&script, &[]).unwrap_err();
+            assert!(
+                err.0.contains("capture cap")
+                    && err.0.contains("refusing to record truncated output"),
+                "the overflow must refuse the run, naming the cap: {}",
+                err.0
+            );
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "the overflow path must terminate the side promptly (took {:?})",
+                start.elapsed()
+            );
+            let _ = std::fs::remove_file(&script);
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_cpu_limit_terminates_a_cpu_bound_side() {
+        // The profile's RLIMIT_CPU is applied in the child: a CPU-bound side
+        // hits it and dies by the profile's deterministic signal outcome
+        // (SIGXCPU, or SIGKILL once the hard limit is reached — the exact
+        // signal is kernel-dependent; the property is that the resource bound
+        // terminates the side before the wall-clock timeout). The 1-second
+        // override keeps the test fast.
+        with_env(
+            &[
+                ("FRF_EXEC_RLIMIT_CPU_S", "1"),
+                ("FRF_EXEC_TIMEOUT_MS", "20000"),
+            ],
+            || {
+                let script = temp_script("cpu-limit");
+                std::fs::write(&script, "#!/bin/sh\nwhile :; do :; done\n").unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let start = Instant::now();
+                let out = run_process(&script, &[]).unwrap();
+                assert!(
+                    out.exit.starts_with("signal("),
+                    "the CPU limit must terminate the side by signal, got {:?}",
+                    out.exit
+                );
+                assert!(
+                    start.elapsed() < Duration::from_secs(15),
+                    "the CPU limit must bite before the wall-clock timeout (took {:?})",
+                    start.elapsed()
+                );
+                let _ = std::fs::remove_file(&script);
+            },
+        );
+    }
+
+    #[test]
+    fn capture_bounds_reflect_the_applied_contract() {
+        // The bounds are STRINGS (the OpenReceipt value domain has no
+        // numbers) and reflect the profile defaults or the hooks' overrides.
+        with_env(
+            &[
+                ("FRF_EXEC_TIMEOUT_MS", "1234"),
+                ("FRF_EXEC_MAX_BYTES", "2048"),
+                ("FRF_EXEC_RLIMIT_CPU_S", "7"),
+            ],
+            || {
+                let bounds = capture_bounds();
+                assert_eq!(bounds.timeout_ms, "1234");
+                assert_eq!(bounds.max_stream_bytes, "2048");
+                assert_eq!(bounds.rlimit_cpu_s, "7");
+                assert_eq!(bounds.rlimit_as_mb, EXEC_RLIMIT_AS_MB.to_string());
+                assert_eq!(bounds.rlimit_nofile, EXEC_RLIMIT_NOFILE.to_string());
+                // The profile's contract validates within the protocol maxima.
+                crate::model::validate_capture_bounds(&bounds).unwrap();
+            },
+        );
+    }
+
+    #[test]
+    fn environment_identity_records_the_expanded_strata() {
+        // The digest covers locale/timezone/umask on top of os/arch/kernel,
+        // and the cwd is recorded (not digested — an invocation property).
+        let env = environment_identity();
+        assert_eq!(env.schema_version, crate::model::SCHEMA_ENVIRONMENT);
+        assert_eq!(env.locale, effective_locale());
+        assert_eq!(env.timezone, timezone());
+        assert_eq!(env.umask, umask());
+        assert!(!env.cwd.is_empty());
+        let expected = environment_digest(
+            &env.os,
+            &env.architecture,
+            &env.kernel_release,
+            &env.locale,
+            &env.timezone,
+            &env.umask,
+        );
+        assert_eq!(env.digest, expected);
+        // A different locale moves the digest.
+        assert_ne!(
+            expected,
+            environment_digest(
+                &env.os,
+                &env.architecture,
+                &env.kernel_release,
+                "C.UTF-8",
+                &env.timezone,
+                &env.umask
+            )
+        );
     }
 
     #[cfg(unix)]

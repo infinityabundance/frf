@@ -26,6 +26,8 @@ const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "court",
     "provenance",
     "comparator_semantics",
+    "execution_profile",
+    "capture_bounds",
     "authority",
     "candidate",
     "environment",
@@ -35,6 +37,13 @@ const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "endoduction",
     "claims",
     "replay",
+];
+const CAPTURE_BOUNDS_KEYS: &[&str] = &[
+    "timeout_ms",
+    "max_stream_bytes",
+    "rlimit_as_mb",
+    "rlimit_cpu_s",
+    "rlimit_nofile",
 ];
 
 /// Unknown-key rejection per object kind — the structural mirror of the
@@ -64,9 +73,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v10" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v11" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v10",
+            "schema_version is {:?}, expected frf-receipt-v11",
             doc["schema_version"]
         ));
     }
@@ -103,6 +112,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
         v.push(format!(
             "unknown property {k:?} on the admissibility envelope"
         ));
+    }
+    for k in unknown_keys(&doc["capture_bounds"], CAPTURE_BOUNDS_KEYS) {
+        v.push(format!("unknown property {k:?} on capture_bounds"));
     }
     for k in unknown_keys(&doc["provenance"]["runner"], RUNNER_KEYS) {
         v.push(format!("unknown property {k:?} on provenance.runner"));
@@ -278,6 +290,10 @@ const ENVIRONMENT_KEYS: &[&str] = &[
     "os",
     "architecture",
     "kernel_release",
+    "locale",
+    "timezone",
+    "umask",
+    "cwd",
     "digest",
 ];
 const FIXTURE_KEYS: &[&str] = &["id", "hash", "arguments", "declared_arguments"];
@@ -316,9 +332,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v10" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v11" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v10",
+            "schema_version is {:?}, expected frf-receipt-v11",
             rec["schema_version"]
         ));
     }
@@ -610,9 +626,37 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         as_str(&env["os"]),
         as_str(&env["architecture"]),
         as_str(&env["kernel_release"]),
+        as_str(&env["locale"]),
+        as_str(&env["timezone"]),
+        as_str(&env["umask"]),
     ) != as_str(&env["digest"])
     {
         v.push("the environment digest does not rederive".to_string());
+    }
+
+    // The execution profile is a valid protocol identifier, and the capture
+    // bounds are positive integers within the protocol's maxima.
+    if !is_valid_identifier(as_str(&rec["execution_profile"])) {
+        v.push(format!(
+            "invalid execution_profile identifier {:?}",
+            rec["execution_profile"]
+        ));
+    }
+    let bounds = &rec["capture_bounds"];
+    for (what, max) in [
+        ("timeout_ms", 3_600_000u64),
+        ("max_stream_bytes", 1u64 << 30),
+        ("rlimit_as_mb", 65_536u64),
+        ("rlimit_cpu_s", 86_400u64),
+        ("rlimit_nofile", 1_048_576u64),
+    ] {
+        let v_str = as_str(&bounds[what]);
+        match v_str.parse::<u64>() {
+            Ok(n) if n > 0 && n <= max => {}
+            _ => v.push(format!(
+                "capture bound {what} must be a positive integer within the protocol maximum {max}, got {v_str:?}"
+            )),
+        }
     }
 
     match court_semantic_identity_from_receipt(rec) {

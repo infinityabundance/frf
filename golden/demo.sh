@@ -117,6 +117,22 @@ echo "reduction: $MIN_ID"
 echo "-- the reproducer (1 line vs the original 3):"
 cat "$ROOT"/objects/sha256/$(grep final_fixture_sha256 "$ROOT"/reductions/$MIN_ID.yaml | awk '{print $2}')
 
+step "9. replay — exact reproduction, and the declared-policy distinction"
+# The run identity is rederived from the capture's recorded fields, the
+# snapshots are re-verified and re-sealed, and the observation must
+# reproduce byte-for-byte under the recorded profile and bounds.
+echo "-- exact replay (same execution provenance, must reproduce)"
+"$FRF_BIN" --root "$ROOT" replay "$RESOLUTION_RUN" --policy exact
+# A declared provenance difference (a different capture cap in force)
+# makes exact replay REFUSE and semantic replay report + reproduce.
+echo "-- a changed capture bound: exact refuses, semantic reports and reproduces"
+if FRF_EXEC_MAX_BYTES=2048 "$FRF_BIN" --root "$ROOT" replay "$RESOLUTION_RUN" --policy exact 2>golden/work/drift-refusal.txt; then
+  echo "FAIL: exact replay reproduced under a changed capture bound" >&2
+  exit 1
+fi
+cat golden/work/drift-refusal.txt
+FRF_EXEC_MAX_BYTES=2048 "$FRF_BIN" --root "$ROOT" replay "$RESOLUTION_RUN" --policy semantic
+
 step "7. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort
 

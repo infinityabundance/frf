@@ -34,8 +34,12 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// the run's outgoing EVIDENCE REFERENCES ([`EvidenceRef`]) — the typed
 /// edges the bundle closure walks (authority/candidate/fixture objects and
 /// every external comparator implementation), so the closure traversal is
-/// generic instead of special-casing a fixed artifact list.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v7";
+/// generic instead of special-casing a fixed artifact list. v8 binds the
+/// EXECUTION PROFILE: which reference execution contract observed the run
+/// (`execution_profile` + the applied `capture_bounds`), so exact replay can
+/// require the same bounds and the receipt never guesses what the harness
+/// actually enforced.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v8";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -56,9 +60,13 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// specification hash REDERIVES from its own fields), external
 /// implementations record their artifact identity, and an externally served
 /// observable binds the exact comparator request/result records that
-/// produced its verdict. The body is serialized as canonical JSON (RFC
-/// 8785) and its identity is the full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v10";
+/// produced its verdict. v11 binds the EXECUTION PROFILE: which reference
+/// execution contract observed the run and the exact capture bounds that
+/// applied (timeout, stream caps, resource limits) — an observation is
+/// made under a declared harness contract, and exact replay requires the
+/// same one. The body is serialized as canonical JSON (RFC 8785) and its
+/// identity is the full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v11";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -66,13 +74,100 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v10";
 pub const SCHEMA_CLAIM: &str = "frf-claim-v2";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
-/// Environment identity block recorded in every capture at court time.
-pub const SCHEMA_ENVIRONMENT: &str = "frf-environment-v1";
+/// Environment identity block recorded in every capture at court time. v2
+/// expands the strata the digest covers: os, architecture, kernel release,
+/// effective locale, timezone, and umask (the dimensions that actually move
+/// side output), plus the recorded working directory.
+pub const SCHEMA_ENVIRONMENT: &str = "frf-environment-v2";
 /// Observation provenance block (runner + comparator implementations).
 pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v1";
 
+/// The reference execution profile: the normative contract the reference
+/// engine executes under (`spec/execution-profile.md`). v1 (linux): direct
+/// exec (no shell), each side in its own process group with group
+/// termination on exit/timeout/overflow, concurrent pipe draining, bounded
+/// spawn retries, a 60 s execution timeout, 16 MiB stdout/stderr capture
+/// caps (overflow REFUSES the run — truncated output is never evidence),
+/// and child resource limits (2 GiB address space, 30 CPU-seconds, 1024
+/// open files). An observation is made under a declared harness contract;
+/// exact replay requires the same profile and the same applied bounds.
+pub const EXECUTION_PROFILE_LINUX: &str = "frf-exec-linux-v1";
+
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
+
+/// The capture bounds that actually applied to a court's executions — the
+/// execution profile's parameters as enforced (the profile's defaults, or
+/// the test hooks' overrides). Recorded at observation time so a receipt
+/// never guesses what the harness bounded. All values are STRINGS: the
+/// OpenReceipt canonical value domain has no numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureBounds {
+    /// Milliseconds until a side is killed (the profile's timeout).
+    pub timeout_ms: String,
+    /// Maximum bytes retained per output stream; a side that exceeds it is
+    /// killed and the run REFUSED (truncated output is never evidence).
+    pub max_stream_bytes: String,
+    /// Address-space limit of each side, in MiB (RLIMIT_AS).
+    pub rlimit_as_mb: String,
+    /// CPU-time limit of each side, in seconds (RLIMIT_CPU).
+    pub rlimit_cpu_s: String,
+    /// Open-file limit of each side (RLIMIT_NOFILE).
+    pub rlimit_nofile: String,
+}
+
+/// The protocol's maxima for the capture bounds — a receipt can never claim
+/// the harness enforced an unbounded or absurd contract.
+pub const CAPTURE_BOUND_MAX_TIMEOUT_MS: u64 = 3_600_000; // 1 hour
+pub const CAPTURE_BOUND_MAX_STREAM_BYTES: u64 = 1 << 30; // 1 GiB
+pub const CAPTURE_BOUND_MAX_RLIMIT_AS_MB: u64 = 65_536; // 64 GiB
+pub const CAPTURE_BOUND_MAX_RLIMIT_CPU_S: u64 = 86_400; // 1 day
+pub const CAPTURE_BOUND_MAX_RLIMIT_NOFILE: u64 = 1_048_576;
+
+/// Validate capture bounds: positive integers within the protocol's maxima.
+pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
+    for (what, v, max) in [
+        ("timeout_ms", &b.timeout_ms, CAPTURE_BOUND_MAX_TIMEOUT_MS),
+        (
+            "max_stream_bytes",
+            &b.max_stream_bytes,
+            CAPTURE_BOUND_MAX_STREAM_BYTES,
+        ),
+        (
+            "rlimit_as_mb",
+            &b.rlimit_as_mb,
+            CAPTURE_BOUND_MAX_RLIMIT_AS_MB,
+        ),
+        (
+            "rlimit_cpu_s",
+            &b.rlimit_cpu_s,
+            CAPTURE_BOUND_MAX_RLIMIT_CPU_S,
+        ),
+        (
+            "rlimit_nofile",
+            &b.rlimit_nofile,
+            CAPTURE_BOUND_MAX_RLIMIT_NOFILE,
+        ),
+    ] {
+        let n: u64 = v.parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "capture bound {what} must be a positive integer, got {v:?}"
+            ))
+        })?;
+        if n == 0 {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound {what} must be positive, got 0"
+            )));
+        }
+        if n > max {
+            return Err(crate::error::FrfError::new(format!(
+                "capture bound {what} = {n} exceeds the protocol maximum {max}"
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Bundle manifest schema (OpenReceipt bundle: the receipt + its portable
 /// object closure — see `spec/openreceipt.md`). v2 closure: the admitted
@@ -722,6 +817,13 @@ pub struct CaptureManifest {
     /// (see [`crate::semantics::court_semantic_identity`]) — the key a
     /// resolution run must reproduce, except the candidate.
     pub court_semantic_identity: String,
+    /// The execution profile the run was observed under (the harness
+    /// contract, see [`EXECUTION_PROFILE_LINUX`] and
+    /// `spec/execution-profile.md`).
+    pub execution_profile: String,
+    /// The capture bounds that actually applied (the profile's defaults or
+    /// the overrides in force).
+    pub capture_bounds: CaptureBounds,
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
@@ -830,6 +932,13 @@ pub struct ObservationProvenance {
 /// The environment an observation happened in, captured at court time. The
 /// receipt copies it verbatim — it never asks its own host what environment
 /// an old court ran under.
+///
+/// v2: the digest now covers the strata that actually move side output —
+/// os, architecture, kernel release, the effective locale, the timezone, and
+/// the umask — plus the recorded working directory the sides ran under
+/// (`cwd` is recorded, not digested: it is an invocation property, and the
+/// observation's own bytes already capture its effects; exact replay gates
+/// on it separately).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentIdentity {
@@ -837,6 +946,17 @@ pub struct EnvironmentIdentity {
     pub os: String,
     pub architecture: String,
     pub kernel_release: String,
+    /// The effective locale the sides ran under: `LC_ALL` / `LC_CTYPE` /
+    /// `LANG`, or `C`.
+    pub locale: String,
+    /// The timezone the sides ran under: `TZ`, or the resolved system zone
+    /// (from /etc/localtime), or `unknown`.
+    pub timezone: String,
+    /// The umask at observation time, as octal digits (e.g. `0022`).
+    pub umask: String,
+    /// The working directory the sides ran under (recorded provenance; exact
+    /// replay requires the same cwd).
+    pub cwd: String,
     pub digest: String,
 }
 
@@ -1648,6 +1768,11 @@ pub struct Receipt {
     pub provenance: ObservationProvenance,
     /// The comparator relations applied, copied from the capture.
     pub comparator_semantics: Vec<ComparatorSemantic>,
+    /// The execution profile the observation was made under, and the capture
+    /// bounds that applied (copied from the capture — a receipt never
+    /// guesses what the harness enforced).
+    pub execution_profile: String,
+    pub capture_bounds: CaptureBounds,
     pub authority: ReceiptAuthority,
     pub candidate: ReceiptCandidate,
     /// The environment the observation happened in, copied from the capture.

@@ -195,6 +195,11 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
         // separate: the question asked vs. who asked it.
         provenance: capture.provenance.clone(),
         comparator_semantics: capture.comparator_semantics.clone(),
+        // The execution profile + applied capture bounds are copied from the
+        // capture: an observation is read against the harness contract it
+        // was actually made under, never what the emitting binary guesses.
+        execution_profile: capture.execution_profile.clone(),
+        capture_bounds: capture.capture_bounds.clone(),
         authority: ReceiptAuthority {
             name: authority.name.clone(),
             kind: authority.kind.clone(),

@@ -1167,6 +1167,8 @@ pub fn run_once(
             interpreter: candidate_interpreter,
         },
         court_semantic_identity,
+        execution_profile: crate::model::EXECUTION_PROFILE_LINUX.to_string(),
+        capture_bounds: host::capture_bounds(),
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
