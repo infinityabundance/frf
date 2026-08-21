@@ -224,19 +224,36 @@ pub fn attest(
     stmt.id = statement_id;
     store.write_witness_statement(&stmt)?;
     // The preserved request + response documents, under `witnesses/<id>/`.
+    // Both are content-addressed (the cids are the byte hashes): when they
+    // already exist, verify the existing bytes hash to the recorded cids —
+    // a corrupt or mismatched document at this address is refused, never
+    // silently "reused".
     let dir = store.witness_dir(&stmt.id)?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
-    store.write_once(
-        &dir.join("request.json"),
-        &String::from_utf8(request_bytes)
-            .map_err(|_| FrfError::new("internal error: witness request is not UTF-8"))?,
-    )?;
-    store.write_once(
-        &dir.join("response.json"),
-        &String::from_utf8(response_bytes)
-            .map_err(|_| FrfError::new("internal error: witness response is not UTF-8"))?,
-    )?;
+    let request_doc = String::from_utf8(request_bytes)
+        .map_err(|_| FrfError::new("internal error: witness request is not UTF-8"))?;
+    let response_doc = String::from_utf8(response_bytes)
+        .map_err(|_| FrfError::new("internal error: witness response is not UTF-8"))?;
+    for (file, cid, doc) in [
+        ("request.json", &stmt.request_cid, &request_doc),
+        ("response.json", &stmt.response_cid, &response_doc),
+    ] {
+        let target = dir.join(file);
+        if target.exists() {
+            let existing = std::fs::read(&target)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", target.display())))?;
+            if crate::host::sha256_bytes(&existing) != *cid {
+                return Err(FrfError::new(format!(
+                    "{} already exists but does not hash to the recorded {} cid; refusing to reuse corrupt witness evidence",
+                    target.display(),
+                    file
+                )));
+            }
+        } else {
+            store.write_once(&target, doc)?;
+        }
+    }
 
     eprintln!(
         "witness statement {}: {} {} -> outcome={} ({})",
