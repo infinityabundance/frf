@@ -61,6 +61,11 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 println!("{run}");
                 Ok(())
             }
+            CourtCmd::Minimize { residual } => {
+                let id = court::minimize(store, &residual)?;
+                println!("{id}");
+                Ok(())
+            }
         },
         Command::Residual { sub } => match sub {
             ResidualCmd::Dispose {

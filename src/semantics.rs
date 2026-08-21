@@ -300,6 +300,47 @@ pub fn series_identity(
     hash_preimage("FRF/SERIES/v1", &doc)
 }
 
+/// The reduction identity: content-addressed over the minimization
+/// experiment (residual, artifacts, fixtures, and every attempt).
+#[allow(clippy::too_many_arguments)] // one argument per record dimension; the doc is the protocol shape
+pub fn reduction_identity(
+    residual_id: &str,
+    axis: &str,
+    kind: ResidualKind,
+    authority: &str,
+    candidate_sha256: &str,
+    original_fixture_sha256: &str,
+    final_fixture_sha256: &str,
+    attempts: &[ReductionAttempt],
+    derivation: &ReductionDerivation,
+) -> Result<String> {
+    let doc = json!({
+        "residual_id": residual_id,
+        "axis": axis,
+        "kind": kind.as_str(),
+        "authority": authority,
+        "candidate_sha256": candidate_sha256,
+        "original_fixture_sha256": original_fixture_sha256,
+        "final_fixture_sha256": final_fixture_sha256,
+        "attempts": attempts
+            .iter()
+            .map(|a| json!({
+                "attempt": a.attempt.to_string(),
+                "fixture_sha256": a.fixture_sha256,
+                "preserved": a.preserved,
+                "kept": a.kept,
+            }))
+            .collect::<Vec<_>>(),
+        "derivation": {
+            "strategy": derivation.strategy,
+            "original_lines": derivation.original_lines.to_string(),
+            "final_lines": derivation.final_lines.to_string(),
+            "minimal": derivation.minimal,
+        },
+    });
+    hash_preimage("FRF/REDUCTION/v1", &doc)
+}
+
 /// The content-addressable inputs of one disposition event: everything the
 /// event's identity is computed over (the event_id itself is excluded — an
 /// object cannot contain its own address). The parent link makes the event
