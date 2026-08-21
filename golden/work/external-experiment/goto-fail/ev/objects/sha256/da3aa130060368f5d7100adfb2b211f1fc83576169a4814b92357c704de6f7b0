@@ -1,0 +1,12 @@
+#!/bin/sh
+# FRF court-challenge mutant: stderr-first-line of objects/sha256/01f9de1623269196d09b21efd6e70b7468b96cfffd806dd0c2fd1c8d3635152a
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
+ref="$self_dir/01f9de1623269196d09b21efd6e70b7468b96cfffd806dd0c2fd1c8d3635152a"
+out=$(mktemp) || exit 2
+err=$(mktemp) || exit 2
+"$ref" "$@" >"$out" 2>"$err"
+rc=$?
+cat "$out"
+{ IFS= read -r first; printf '%s\n' "FRF-MUTANT:stderr-first-line:${first}"; cat; } <"$err" >&2
+rm -f "$out" "$err"
+exit "$rc"

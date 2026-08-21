@@ -1,0 +1,22 @@
+#!/bin/sh
+# CVE-2014-0160 (OpenSSL "Heartbleed") — the FIXED heartbeat responder. A
+# heartbeat request is `type(len 1) + declared_length(len 2) + payload`,
+# as hex. The declared length must not exceed the bytes actually present;
+# a truncated record is refused with a fixed alert — the responder never
+# discloses bytes beyond the request.
+set -u
+file=""
+for arg in "$@"; do case "$arg" in *) file="$arg" ;; esac; done
+[ -n "$file" ] || exit 2
+type=$(cut -c1-2 "$file")
+decl=$(cut -c3-6 "$file")
+payload_hex=$(cut -c7- "$file" | tr -d '\n')
+actual=$(( ${#payload_hex} / 2 ))
+decl_num=$(( 0x$decl ))
+if [ "$decl_num" -gt "$actual" ]; then
+  # Truncated record: refuse with the fixed alert, never echo the request.
+  printf '15030000020268'
+  exit 0
+fi
+printf '%s%s%s' "$type" "$decl" "$payload_hex"
+exit 0
