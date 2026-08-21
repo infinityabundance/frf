@@ -985,7 +985,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
 
 impl Receipt {
     /// OpenReceipt SEMANTIC conformance: the cross-field, cross-object
-    /// invariants of `frf-receipt-v13`, checked on the document ALONE so any
+    /// invariants of `frf-receipt-v14`, checked on the document ALONE so any
     /// independent implementation can run the same algorithm (normative
     /// description in `spec/openreceipt.md`, corpus in
     /// `conformance/invalid-semantic/`). This is deliberately separate from
@@ -1185,6 +1185,110 @@ impl Receipt {
                         obs.axis
                     ),
                 );
+            }
+        }
+
+        // Normalizer semantics: ids must match the envelope's application
+        // order EXACTLY — the order is semantic (a normalizer changes the
+        // comparison surface; applying the same two normalizers in the
+        // opposite order asks a different question), ids are unique, and
+        // every specification hash REDERIVES from the record's own fields.
+        let envelope_norm: Vec<&str> = envelope.normalizers.iter().map(String::as_str).collect();
+        let rec_norm: Vec<&str> = self
+            .normalizer_semantics
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect();
+        if rec_norm != envelope_norm {
+            fail(
+                &mut violations,
+                "normalizer_semantics ids must match the envelope's application order exactly",
+            );
+        }
+        let mut norm_ids: Vec<&str> = Vec::new();
+        for n in &self.normalizer_semantics {
+            if norm_ids.contains(&n.id.as_str()) {
+                fail(
+                    &mut violations,
+                    format!("duplicate normalizer semantic id {}", n.id),
+                );
+            } else {
+                norm_ids.push(&n.id);
+            }
+            if !matches!(n.applies_to.as_str(), "stdout" | "stderr" | "both") {
+                fail(
+                    &mut violations,
+                    format!(
+                        "normalizer semantic {} has invalid applies_to {:?}",
+                        n.id, n.applies_to
+                    ),
+                );
+            }
+            if n.relation_id.is_empty() {
+                fail(
+                    &mut violations,
+                    format!("normalizer semantic {} must carry a relation", n.id),
+                );
+            }
+            match crate::semantics::normalizer_spec_hash_rederives(n) {
+                Ok(true) => {}
+                Ok(false) => fail(
+                    &mut violations,
+                    format!(
+                        "normalizer semantic {}: the specification_hash does not rederive from its own fields",
+                        n.id
+                    ),
+                ),
+                Err(e) => fail(
+                    &mut violations,
+                    format!("normalizer semantic {}: {e}", n.id),
+                ),
+            }
+        }
+
+        // Capture-adapter semantics: ids are declared observable axes served
+        // by an external capture, unique, and every specification hash
+        // REDERIVES from the record's own fields (an adapter's extraction
+        // scheme is part of the question, so a receipt cannot claim a scheme
+        // its own fields do not hash to).
+        let mut adapter_ids: Vec<&str> = Vec::new();
+        for a in &self.adapter_semantics {
+            if adapter_ids.contains(&a.id.as_str()) {
+                fail(
+                    &mut violations,
+                    format!("duplicate capture-adapter semantic id {}", a.id),
+                );
+            } else {
+                adapter_ids.push(&a.id);
+            }
+            if !declared.contains(&a.id.as_str()) {
+                fail(
+                    &mut violations,
+                    format!(
+                        "capture-adapter semantic {} serves no declared observable",
+                        a.id
+                    ),
+                );
+            }
+            if a.relation_id.is_empty() {
+                fail(
+                    &mut violations,
+                    format!("capture-adapter semantic {} must carry a relation", a.id),
+                );
+            }
+            match crate::semantics::capture_adapter_spec_hash_rederives(a) {
+                Ok(true) => {}
+                Ok(false) => fail(
+                    &mut violations,
+                    format!(
+                        "capture-adapter semantic {}: the specification_hash does not rederive from its own fields",
+                        a.id
+                    ),
+                ),
+                Err(e) => fail(
+                    &mut violations,
+                    format!("capture-adapter semantic {}: {e}", a.id),
+                ),
             }
         }
 
@@ -1718,6 +1822,8 @@ mod tests {
             &authority_hash,
             &fixture_hash,
             &[crate::comparators::semantic("exit").unwrap()],
+            &[],
+            &[],
         )
         .unwrap();
 
@@ -1769,6 +1875,7 @@ mod tests {
             },
             comparator_semantics: vec![comparator],
             normalizer_semantics: vec![],
+            adapter_semantics: vec![],
             execution_profile: crate::model::EXECUTION_PROFILE_LINUX.into(),
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),

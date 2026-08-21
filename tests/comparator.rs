@@ -238,7 +238,7 @@ fn a_new_axis_is_a_protocol_identifier() {
     // A wire comparator: compares the stderr BYTES of the two sides.
     fs::write(
         work.path("golden/comparators/wire.py"),
-        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, sort_keys=True, separators=(\",\", \":\")))\nelse:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, sort_keys=True, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     let manifest = "court:\n  id: cli-wire-court\n  question: >-\n    For malformed input in fixture family malformed-input, does the candidate\n    preserve the admitted reference's wire stream?\n  falsifier: >-\n    The candidate's wire stream diverges from the admitted reference.\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand-cli\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [wire]\n    normalizers: []\n    replay_scope: single-run\ncomparators:\n  - axis: wire\n    relation: eq\n    extractor: stderr-bytes\n    residual_classifier: wire\n    relation_version: \"v1\"\n    program: golden/comparators/wire.py\n"
@@ -313,7 +313,7 @@ fn a_response_that_does_not_name_its_request_is_refused() {
     // which request it answers.
     fs::write(
         work.path("golden/comparators/no-request-id.py"),
-        "#!/usr/bin/env python3\nimport json, sys\nsys.stdin.buffer.read()\nprint(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": \"0\" * 64, \"equivalent\": True, \"residuals\": [], \"indeterminate\": False, \"failure\": None}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport json, sys\nsys.stdin.buffer.read()\nsys.stdout.write(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": \"0\" * 64, \"equivalent\": True, \"residuals\": [], \"indeterminate\": False, \"failure\": None}, sort_keys=True, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     write_manifest(
@@ -351,7 +351,7 @@ fn a_new_extractor_is_a_new_question() {
     // specification and a different question.
     fs::write(
         work.path("golden/comparators/stderr-bytes.py"),
-        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\nelse:\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport base64, hashlib, json, sys\nraw = sys.stdin.buffer.read()\nreq = json.loads(raw.decode(\"utf-8\"))\nrequest_id = hashlib.sha256(raw).hexdigest()\nref = base64.b64decode(req[\"reference\"][\"stderr_base64\"])\ncand = base64.b64decode(req[\"candidate\"][\"stderr_base64\"])\nbase = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\nif ref == cand:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, sort_keys=True, separators=(\",\", \":\")))\nelse:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": False, \"residuals\": [{\"surface\": \"stderr-bytes\", \"raw_reference\": ref.decode(\"utf-8\", \"replace\"), \"raw_candidate\": cand.decode(\"utf-8\", \"replace\")}]}, sort_keys=True, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     write_manifest(
@@ -443,7 +443,7 @@ fn an_indeterminate_comparator_refuses_the_court() {
     admit_reference(&work);
     fs::write(
         work.path("golden/comparators/indeterminate.py"),
-        "#!/usr/bin/env python3\nimport hashlib, json, sys\nraw = sys.stdin.buffer.read()\nprint(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": hashlib.sha256(raw).hexdigest(), \"equivalent\": False, \"residuals\": [], \"indeterminate\": True, \"failure\": None}, separators=(\",\", \":\")))\n",
+        "#!/usr/bin/env python3\nimport hashlib, json, sys\nraw = sys.stdin.buffer.read()\nsys.stdout.write(json.dumps({\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": hashlib.sha256(raw).hexdigest(), \"equivalent\": False, \"residuals\": [], \"indeterminate\": True, \"failure\": None}, sort_keys=True, separators=(\",\", \":\")))\n",
     )
     .unwrap();
     write_manifest(
@@ -555,8 +555,8 @@ def stderr_of(side):\n    return base64.b64decode(side[\"stderr_base64\"]).decod
 ref = stderr_of(req[\"reference\"])\n\
 cand = stderr_of(req[\"candidate\"])\n\
 base = {\"schema_version\": \"frf-comparator-response-v2\", \"request_id\": request_id, \"indeterminate\": False, \"failure\": None}\n\
-if ref == cand:\n    print(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, separators=(\",\", \":\")))\n\
-else:\n    out = {\"surface\": \"stderr-bytes\", \"raw_reference\": ref, \"raw_candidate\": cand}\n    print(json.dumps({**base, \"equivalent\": False, \"residuals\": [out]}, separators=(\",\", \":\")))\n";
+if ref == cand:\n    sys.stdout.write(json.dumps({**base, \"equivalent\": True, \"residuals\": []}, sort_keys=True, separators=(\",\", \":\")))\n\
+else:\n    out = {\"surface\": \"stderr-bytes\", \"raw_reference\": ref, \"raw_candidate\": cand}\n    sys.stdout.write(json.dumps({**base, \"equivalent\": False, \"residuals\": [out]}, sort_keys=True, separators=(\",\", \":\")))\n";
 
 #[test]
 fn one_comparator_governs_observation_replay_resolution_and_reduction() {
@@ -662,7 +662,7 @@ fn one_comparator_governs_observation_replay_resolution_and_reduction() {
     )
     .unwrap();
     let semantic =
-        frf::comparators::specification_hash("stderr", "eq", "stderr-bytes", "text").unwrap();
+        frf::comparators::specification_hash("stderr", "eq", "stderr-bytes", "text", "v1").unwrap();
     assert_eq!(reduction["comparator_semantic_hash"], semantic);
     assert_eq!(reduction["comparator_semantic_id"], "stderr");
     assert_eq!(

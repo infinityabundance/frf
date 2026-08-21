@@ -20,10 +20,11 @@ without executing anything).
 The two identities are always separate:
 
 - **Semantic identity** — what the mapping *is*: a canonical specification
-  document `{id, relation, applies_to}` whose SHA-256
-  (`FRF/NORMALIZER-SPEC/v1`) is the normalizer's `specification_hash`.
+  document `{id, relation, applies_to, relation_version}` whose SHA-256
+  (`FRF/NORMALIZER-SPEC/v2`) is the normalizer's `specification_hash`.
   `applies_to` is `stdout`, `stderr`, or `both` — the streams the normalizer
-  is DECLARED to move.
+  is DECLARED to move. The relation's version is part of the specification
+  document itself, as in every protocol.
 - **Implementation identity** — what *implemented* the mapping: the SHA-256
   of its program bytes (read + hashed + sealed BEFORE anything executes,
   re-hashed on every use, exactly like the artifacts) plus its full ARTIFACT

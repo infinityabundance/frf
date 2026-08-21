@@ -96,24 +96,29 @@ pub fn spec_for(id: &str) -> Option<&'static ComparatorSpec> {
     SPECS.iter().find(|s| s.id == id)
 }
 
-/// The specification hash: SHA-256 of `FRF/COMPARATOR-SPEC/v1` over the
-/// canonical specification document. One formula shared by the in-binary
-/// registry and external declarations — and by the receipt-side semantic
-/// validator, so a recorded `specification_hash` REDERIVES from its own
-/// fields.
+/// The specification hash: SHA-256 of `FRF/COMPARATOR-SPEC/v2` over the
+/// The comparator specification hash — the SEMANTIC identity of a relation.
+/// v2: `relation_version` enters the specification document itself (the one
+/// rule: a relation's version is part of its semantic identity, in every
+/// protocol), so the same id/relation/extractor/classifier under two
+/// versions are two relations. One formula shared by the in-binary registry
+/// and external declarations — and by the receipt-side semantic validator,
+/// so a recorded `specification_hash` REDERIVES from its own fields.
 pub fn specification_hash(
     id: &str,
     relation: &str,
     extractor: &str,
     residual_classifier: &str,
+    relation_version: &str,
 ) -> Result<String> {
     let doc = json!({
         "id": id,
         "relation": relation,
         "extractor": extractor,
         "residual_classifier": residual_classifier,
+        "relation_version": relation_version,
     });
-    crate::semantics::hash_preimage("FRF/COMPARATOR-SPEC/v1", &doc)
+    crate::semantics::hash_preimage("FRF/COMPARATOR-SPEC/v2", &doc)
 }
 
 /// The comparator semantic from a registry row.
@@ -128,6 +133,7 @@ pub fn semantic(id: &str) -> Result<ComparatorSemantic> {
         spec.relation,
         spec.extractor,
         spec.residual_classifier,
+        COMPARATOR_VERSION,
     )?;
     Ok(ComparatorSemantic {
         id: spec.id.to_string(),
@@ -150,6 +156,7 @@ pub fn declared_semantic(decl: &ComparatorDeclaration) -> Result<ComparatorSeman
         &decl.relation,
         &decl.extractor,
         &decl.residual_classifier,
+        &decl.relation_version,
     )?;
     Ok(ComparatorSemantic {
         id: decl.axis.clone(),
@@ -178,7 +185,9 @@ pub fn implementations(
         .collect()
 }
 
-/// What a comparator concluded about one axis.
+/// What a comparator concluded about one axis. The SAME outcome type serves
+/// the built-ins and the external protocol: the one evaluation relation is
+/// true all the way down, not only at the dispatcher layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComparatorOutcome {
     /// The axes' projections agree; no residual on this axis.
@@ -186,6 +195,11 @@ pub enum ComparatorOutcome {
     /// The divergences, as `(surface, raw_reference, raw_candidate)` triples
     /// the court preserves verbatim.
     Divergent(Vec<(Option<String>, String, String)>),
+    /// The comparison cannot be decided on the evidence (e.g. a relation
+    /// whose extractor requires structured input received unparsable input
+    /// on BOTH sides). Inconclusive evidence is refused, never recorded as
+    /// conclusive.
+    Indeterminate,
 }
 
 /// Interpret a comparator's canonical response. Fail-closed: every
@@ -335,23 +349,28 @@ impl BuiltinKind {
         }
     }
 
-    /// Compare two sides: every divergence as
-    /// `(surface, raw_reference, raw_candidate)`. The single-surface
-    /// built-ins (exit, stderr, stdout, bytes) yield at most one; the
-    /// domain comparators (filesystem.tree, structured.state) yield one per
-    /// differing file or field.
+    /// Compare two sides, returning the SAME outcome type the external
+    /// protocol uses. The single-surface built-ins (exit, stderr, stdout,
+    /// bytes) yield at most one divergence; the domain comparators
+    /// (filesystem.tree, structured.state) yield one per differing file or
+    /// field. An `Err` is a refusal (the comparison cannot be evaluated);
+    /// `Indeterminate` is an honest "cannot decide on this evidence".
     pub fn compare(
         self,
         reference: &SideCapture,
         candidate: &SideCapture,
-    ) -> Vec<(Option<String>, String, String)> {
-        match self {
+    ) -> Result<ComparatorOutcome> {
+        let divergences = match self {
             BuiltinKind::Tree => {
-                // One residual per differing produced file: the surface is
+                // One residual per differing produced FILE: the surface is
                 // the relative path, the raw projections are the content
                 // hashes (or `<absent>` when the file exists on one side
-                // only). No produced observation on either side is an empty
-                // tree: both produced nothing, and nothing diverges.
+                // only). A file present on both sides with identical content
+                // but a different EXECUTABLE FLAG is a mode divergence with
+                // its own surface (`path:<path>#executable`) — an artifact
+                // that is not executable is operationally different even when
+                // its bytes match. No produced observation on either side is
+                // an empty tree: both produced nothing, and nothing diverges.
                 let ref_files = reference
                     .produced
                     .as_ref()
@@ -368,28 +387,65 @@ impl BuiltinKind {
                 while i < ref_files.len() || j < cand_files.len() {
                     let ref_f = ref_files.get(i);
                     let cand_f = cand_files.get(j);
-                    let (path, ref_sha, cand_sha) = match (ref_f, cand_f) {
+                    let (path, ref_sha, cand_sha, ref_exec, cand_exec) = match (ref_f, cand_f) {
                         (Some(r), Some(c)) if r.path == c.path => {
                             i += 1;
                             j += 1;
-                            (r.path.clone(), r.sha256.clone(), c.sha256.clone())
+                            (
+                                r.path.clone(),
+                                r.sha256.clone(),
+                                c.sha256.clone(),
+                                r.executable,
+                                c.executable,
+                            )
                         }
                         (Some(r), Some(c)) if r.path < c.path => {
                             i += 1;
-                            (r.path.clone(), r.sha256.clone(), "<absent>".to_string())
+                            (
+                                r.path.clone(),
+                                r.sha256.clone(),
+                                "<absent>".to_string(),
+                                r.executable,
+                                false,
+                            )
                         }
                         (Some(r), _) => {
                             i += 1;
-                            (r.path.clone(), r.sha256.clone(), "<absent>".to_string())
+                            (
+                                r.path.clone(),
+                                r.sha256.clone(),
+                                "<absent>".to_string(),
+                                r.executable,
+                                false,
+                            )
                         }
                         (_, Some(c)) => {
                             j += 1;
-                            (c.path.clone(), "<absent>".to_string(), c.sha256.clone())
+                            (
+                                c.path.clone(),
+                                "<absent>".to_string(),
+                                c.sha256.clone(),
+                                false,
+                                c.executable,
+                            )
                         }
                         (None, None) => break,
                     };
                     if ref_sha != cand_sha {
-                        out.push((Some(format!("path:{path}")), ref_sha, cand_sha));
+                        out.push((
+                            Some(format!("path:{path}")),
+                            ref_sha.clone(),
+                            cand_sha.clone(),
+                        ));
+                    }
+                    if ref_exec != cand_exec && ref_sha == cand_sha {
+                        // A mode divergence (same bytes, different flag): its
+                        // own surface, raw values the flags themselves.
+                        out.push((
+                            Some(format!("path:{path}#executable")),
+                            ref_exec.to_string(),
+                            cand_exec.to_string(),
+                        ));
                     }
                 }
                 out
@@ -397,7 +453,12 @@ impl BuiltinKind {
             BuiltinKind::Json => {
                 // Parse both sides' stdout as JSON; one residual per
                 // differing field (surface = the JSON pointer), or a single
-                // parse residual when a side is not valid JSON.
+                // parse residual when ONE side is not valid JSON (a side that
+                // fails the extractor is a divergence on the structured
+                // surface). When BOTH sides fail parsing, the relation
+                // cannot decide — the two invalid documents are not evidence
+                // of equivalence, and recording them as equal would license a
+                // false pass — so the outcome is INDETERMINATE (refused).
                 let ref_text = String::from_utf8_lossy(reference.stdout()).into_owned();
                 let cand_text = String::from_utf8_lossy(candidate.stdout()).into_owned();
                 let ref_val = serde_json::from_str::<serde_json::Value>(&ref_text);
@@ -409,9 +470,15 @@ impl BuiltinKind {
                         diff_json(&mut out, "$", &r, &c);
                         out
                     }
-                    (Err(_), Err(_)) => vec![],
-                    (Err(_), Ok(_)) => vec![(Some("json-parse".to_string()), ref_text, cand_text)],
-                    (Ok(_), Err(_)) => vec![(Some("json-parse".to_string()), ref_text, cand_text)],
+                    (Err(_), Err(_)) => {
+                        return Ok(ComparatorOutcome::Indeterminate);
+                    }
+                    (Err(_), Ok(_)) => {
+                        vec![(Some("json-parse".to_string()), ref_text, cand_text)]
+                    }
+                    (Ok(_), Err(_)) => {
+                        vec![(Some("json-parse".to_string()), ref_text, cand_text)]
+                    }
                 }
             }
             // The byte/wire surface: the raw stdout stream, compared by
@@ -435,7 +502,12 @@ impl BuiltinKind {
                     vec![]
                 }
             }
-        }
+        };
+        Ok(if divergences.is_empty() {
+            ComparatorOutcome::Equivalent
+        } else {
+            ComparatorOutcome::Divergent(divergences)
+        })
     }
 }
 
@@ -598,6 +670,9 @@ pub fn run_external(
             out.exit
         )));
     }
+    // The protocol says canonical JSON: the response must BE its own
+    // canonical serialization (one semantic response, one evidence identity).
+    crate::ext::require_canonical_response(&out.stdout, "comparator response")?;
     let response: ComparatorResponse = serde_json::from_slice(&out.stdout).map_err(|e| {
         FrfError::new(format!(
             "comparator for axis {} produced an unparseable response: {e}",
@@ -771,19 +846,26 @@ pub fn evaluate(
 ) -> Result<Evaluation> {
     match &plan.implementation.artifact {
         None => {
-            // The in-binary implementation of this spec.
+            // The in-binary implementation of this spec — the SAME outcome
+            // type the external protocol uses: the one evaluation relation is
+            // true all the way down.
             let builtin = BuiltinKind::from_id(plan.axis.as_str()).ok_or_else(|| {
                 FrfError::new(format!(
                     "the {} axis was served by no known in-binary comparator",
                     plan.axis.as_str()
                 ))
             })?;
-            let divergences = builtin.compare(reference, candidate);
+            let outcome = builtin.compare(reference, candidate)?;
             Ok(Evaluation {
-                result: if divergences.is_empty() {
-                    EvaluationResult::Pass
-                } else {
-                    EvaluationResult::Divergent(divergences)
+                result: match outcome {
+                    ComparatorOutcome::Equivalent => EvaluationResult::Pass,
+                    ComparatorOutcome::Divergent(v) => EvaluationResult::Divergent(v),
+                    ComparatorOutcome::Indeterminate => {
+                        return Err(FrfError::new(format!(
+                            "the {} axis is indeterminate: the comparison cannot be decided on this evidence; refusing to record inconclusive evidence as conclusive",
+                            plan.axis.as_str()
+                        )));
+                    }
                 },
                 evidence: None,
             })
@@ -831,6 +913,15 @@ pub fn evaluate(
             let result = match outcome {
                 ComparatorOutcome::Equivalent => EvaluationResult::Pass,
                 ComparatorOutcome::Divergent(v) => EvaluationResult::Divergent(v),
+                // `interpret` refuses indeterminate responses, so this arm is
+                // unreachable for an external comparator — kept for the
+                // exhaustive match.
+                ComparatorOutcome::Indeterminate => {
+                    return Err(FrfError::new(format!(
+                        "the {} axis is indeterminate: the comparison cannot be decided on this evidence; refusing to record inconclusive evidence as conclusive",
+                        plan.axis.as_str()
+                    )));
+                }
             };
             Ok(Evaluation {
                 result,
@@ -858,7 +949,7 @@ pub fn runner_identity() -> Result<RunnerIdentity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ComparatorDeclaration, ComparatorResidual};
+    use crate::model::{ComparatorDeclaration, ComparatorResidual, ProducedFile};
 
     #[test]
     fn semantics_are_stable_and_distinct() {
@@ -870,7 +961,8 @@ mod tests {
         assert_eq!(a.specification_hash.len(), 64);
         // The semantic identity is implementation-independent by
         // construction: it is a hash of the specification doc, not of code.
-        let expected = specification_hash("exit", "eq", "exit-code", "exit").unwrap();
+        let expected =
+            specification_hash("exit", "eq", "exit-code", "exit", COMPARATOR_VERSION).unwrap();
         assert_eq!(a.specification_hash, expected);
     }
 
@@ -1034,18 +1126,121 @@ mod tests {
             adapted: None,
             stdout_bytes: vec![],
         };
-        let divergences = BuiltinKind::Exit.compare(&reference, &candidate);
-        assert_eq!(divergences, vec![(None, "2".to_string(), "1".to_string())]);
-        let divergences = BuiltinKind::Stderr.compare(&reference, &candidate);
+        let divergences = BuiltinKind::Exit.compare(&reference, &candidate).unwrap();
         assert_eq!(
             divergences,
-            vec![(
+            ComparatorOutcome::Divergent(vec![(None, "2".to_string(), "1".to_string())])
+        );
+        let divergences = BuiltinKind::Stderr.compare(&reference, &candidate).unwrap();
+        assert_eq!(
+            divergences,
+            ComparatorOutcome::Divergent(vec![(
                 Some("first-diagnostic-line".to_string()),
                 "ref diag".to_string(),
                 "cand diag".to_string()
-            )]
+            )])
         );
-        let divergences = BuiltinKind::Stdout.compare(&reference, &candidate);
-        assert_eq!(divergences, vec![]);
+        let divergences = BuiltinKind::Stdout.compare(&reference, &candidate).unwrap();
+        assert_eq!(divergences, ComparatorOutcome::Equivalent);
+    }
+
+    /// The filesystem.tree false-pass fix: a file present on both sides with
+    /// identical bytes but a different EXECUTABLE FLAG is a mode divergence
+    /// with its own surface — an artifact that is not executable is
+    /// operationally different even when its content hashes match.
+    #[test]
+    fn tree_diverges_on_the_executable_flag_alone() {
+        let side = |executable: bool| SideCapture {
+            exit: "0".into(),
+            exit_sha256: "a".repeat(64),
+            stderr_first_line: String::new(),
+            stderr_first_line_sha256: "b".repeat(64),
+            stdout_first_line: String::new(),
+            stdout_first_line_sha256: "c".repeat(64),
+            stdout_sha256: "d".repeat(64),
+            stderr_sha256: "e".repeat(64),
+            produced: Some(ProducedSide {
+                schema_version: crate::model::SCHEMA_PRODUCED.into(),
+                manifest_sha256: "f".repeat(64),
+                files: vec![ProducedFile {
+                    path: "bin/tool".into(),
+                    sha256: "abc".repeat(21) + "def", // 64 hex, identical on both sides
+                    executable,
+                }],
+            }),
+            adapted: None,
+            stdout_bytes: vec![],
+        };
+        let reference = side(true);
+        let candidate = side(false);
+        let outcome = BuiltinKind::Tree.compare(&reference, &candidate).unwrap();
+        assert_eq!(
+            outcome,
+            ComparatorOutcome::Divergent(vec![(
+                Some("path:bin/tool#executable".to_string()),
+                "true".to_string(),
+                "false".to_string()
+            )])
+        );
+        // Identical bytes AND identical flags: still equivalent.
+        let both = side(true);
+        assert_eq!(
+            BuiltinKind::Tree.compare(&both, &both).unwrap(),
+            ComparatorOutcome::Equivalent
+        );
+    }
+
+    /// The structured.state false-pass fix: two unparsable documents are NOT
+    /// evidence of equivalence. Both sides failing the extractor is
+    /// INDETERMINATE (refused — inconclusive evidence must never record as
+    /// conclusive); one side failing is a parse divergence on the structured
+    /// surface.
+    #[test]
+    fn json_comparator_is_fail_closed_on_unparsable_input() {
+        let side = |stdout: &str| SideCapture {
+            exit: "0".into(),
+            exit_sha256: "a".repeat(64),
+            stderr_first_line: String::new(),
+            stderr_first_line_sha256: "b".repeat(64),
+            stdout_first_line: stdout.to_string(),
+            stdout_first_line_sha256: "c".repeat(64),
+            stdout_sha256: "d".repeat(64),
+            stderr_sha256: "e".repeat(64),
+            produced: None,
+            adapted: None,
+            stdout_bytes: stdout.as_bytes().to_vec(),
+        };
+        // Both sides invalid: indeterminate — the two broken documents do
+        // not license equivalence.
+        assert_eq!(
+            BuiltinKind::Json
+                .compare(
+                    &side("{ this is broken A"),
+                    &side("THIS IS DIFFERENT BROKEN")
+                )
+                .unwrap(),
+            ComparatorOutcome::Indeterminate
+        );
+        // One side invalid: a parse divergence on the structured surface.
+        let outcome = BuiltinKind::Json
+            .compare(&side("{\"a\":1}"), &side("not json at all"))
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            ComparatorOutcome::Divergent(ref v) if v.len() == 1
+        ));
+        // Both valid but differing: a field-pointer divergence.
+        let outcome = BuiltinKind::Json
+            .compare(
+                &side("{\"config\":{\"timeout\":5},\"status\":\"ok\"}"),
+                &side("{\"config\":{\"timeout\":9},\"status\":\"ok\"}"),
+            )
+            .unwrap();
+        match outcome {
+            ComparatorOutcome::Divergent(ref v) => {
+                assert_eq!(v[0].0.as_deref(), Some("$.config.timeout"));
+            }
+            _ => panic!("expected a field divergence"),
+        }
     }
 }

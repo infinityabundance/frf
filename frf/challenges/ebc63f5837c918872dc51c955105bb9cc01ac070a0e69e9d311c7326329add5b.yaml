@@ -1,0 +1,18 @@
+schema_version: frf-challenge-v1
+id: ebc63f5837c918872dc51c955105bb9cc01ac070a0e69e9d311c7326329add5b
+court: cli-malformed-input
+operator: exit-class
+target_axis: exit
+reference_sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+mutant_candidate_sha256: bdc08f16f2587b9a1775e549f54e3624c8805181fe1beb37e5f3d2e69e242464
+run: run-cli-malformed-input-e0138e411ef4c154e3aa7f0abc54f993f3e19eecc4895013f329df695b8385a4
+observed_residuals:
+- cli-exit-0002
+unaffected_axes:
+- stderr
+saw_defect: true
+specificity_clean: true
+created_by:
+  schema_version: frf-runner-v1
+  frf_version: 0.1.31
+  frf_executable_hash: 62caf6220cac117f8a344543ef5a2f29ea78e7c83e40bbacccbcf52d83270c83

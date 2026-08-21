@@ -21,12 +21,16 @@ knowing what stdout, packets, or filesystem trees are.
 The two identities are always separate (the FRF rule):
 
 - **Semantic identity** — what the relation *is*: a canonical specification
-  document `{id, relation, extractor, residual_classifier}` whose SHA-256
-  (`FRF/COMPARATOR-SPEC/v1`) is the comparator's `specification_hash`. This
-  hash enters the court's semantic identity. A program that declares the
-  same specification asks the same question, whatever language it is
-  written in. The `residual_classifier` names the KIND every divergence on
-  the axis is recorded as (`exit` for the exit axis, `text` for
+  document `{id, relation, extractor, residual_classifier,
+  relation_version}` whose SHA-256 (`FRF/COMPARATOR-SPEC/v2`) is the
+  comparator's `specification_hash`. The relation's VERSION is part of the
+  specification document itself — the one rule: a relation's version is
+  part of its semantic identity, in every protocol, so two relations with
+  the same fields under different versions are two relations. This hash
+  enters the court's semantic identity. A program that declares the same
+  specification asks the same question, whatever language it is written
+  in. The `residual_classifier` names the KIND every divergence on the
+  axis is recorded as (`exit` for the exit axis, `text` for
   stderr/stdout, an axis-specific kind like `wire` for a domain
   comparator); it is part of the question.
 - **Implementation identity** — what *implemented* the relation: for an
@@ -64,8 +68,8 @@ Rules:
 - The declaration's `relation`/`extractor`/`residual_classifier`/
   `relation_version` define the SEMANTIC identity via the same formula as
   the in-binary registry — a declaration matching a built-in row asks the
-  same question, a different extractor or classifier is a different
-  question.
+  same question, a different extractor, classifier, or version is a
+  different question.
 - The comparator program is read and hashed BEFORE any execution, executed
   through a content-addressed snapshot, and the snapshot is re-hashed on
   every use: the bytes that ran are the bytes that were hashed.

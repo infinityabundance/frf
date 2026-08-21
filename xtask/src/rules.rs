@@ -27,6 +27,7 @@ const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "provenance",
     "comparator_semantics",
     "normalizer_semantics",
+    "adapter_semantics",
     "execution_profile",
     "capture_bounds",
     "authority",
@@ -74,9 +75,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v13" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v14" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v13",
+            "schema_version is {:?}, expected frf-receipt-v14",
             doc["schema_version"]
         ));
     }
@@ -170,6 +171,23 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             if !matches!(as_str(&c["applies_to"]), "stdout" | "stderr" | "both") {
                 v.push(format!(
                     "normalizer_semantics[{i}].applies_to must be stdout, stderr, or both"
+                ));
+            }
+        }
+    }
+    if let Some(sems) = doc["adapter_semantics"].as_array() {
+        for (i, c) in sems.iter().enumerate() {
+            for k in unknown_keys(c, ADAPTER_SEMANTIC_KEYS) {
+                v.push(format!("unknown property {k:?} on adapter_semantics[{i}]"));
+            }
+            if !hex64(as_str(&c["specification_hash"])) {
+                v.push(format!(
+                    "adapter_semantics[{i}].specification_hash must be 64 hex"
+                ));
+            }
+            if as_str(&c["relation_version"]).is_empty() {
+                v.push(format!(
+                    "adapter_semantics[{i}] must carry a relation_version"
                 ));
             }
         }
@@ -332,6 +350,12 @@ const NORMALIZER_SEMANTIC_KEYS: &[&str] = &[
     "relation_version",
     "specification_hash",
 ];
+const ADAPTER_SEMANTIC_KEYS: &[&str] = &[
+    "id",
+    "relation_id",
+    "relation_version",
+    "specification_hash",
+];
 const COMPARATOR_SEMANTIC_KEYS: &[&str] = &[
     "id",
     "relation_id",
@@ -411,9 +435,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v13" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v14" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v13",
+            "schema_version is {:?}, expected frf-receipt-v14",
             rec["schema_version"]
         ));
     }
@@ -502,6 +526,7 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             as_str(&c["relation_id"]),
             as_str(&c["extractor"]),
             as_str(&c["residual_classifier"]),
+            as_str(&c["relation_version"]),
         );
         if expected != as_str(&c["specification_hash"]) {
             v.push(format!(
@@ -518,6 +543,80 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             v.push(format!(
                 "observable {} must have exactly one comparator semantic (found {n})",
                 as_str(&obs["axis"])
+            ));
+        }
+    }
+
+    // Normalizer semantics: ids match the envelope's application order
+    // EXACTLY (the order is semantic), ids are unique, and every
+    // specification hash rederives from its own fields.
+    let env_norm = envelope["normalizers"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let norm_sems = rec["normalizer_semantics"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let env_norm_ids: Vec<String> = env_norm.iter().map(as_str).map(str::to_string).collect();
+    let rec_norm_ids: Vec<String> = norm_sems
+        .iter()
+        .map(|n| as_str(&n["id"]).to_string())
+        .collect();
+    if rec_norm_ids != env_norm_ids {
+        v.push(
+            "normalizer_semantics ids must match the envelope's application order exactly"
+                .to_string(),
+        );
+    }
+    let mut norm_ids: Vec<String> = Vec::new();
+    for n in &norm_sems {
+        let id = as_str(&n["id"]).to_string();
+        if norm_ids.contains(&id) {
+            v.push(format!("duplicate normalizer semantic id {id}"));
+        } else {
+            norm_ids.push(id.clone());
+        }
+        let expected = normalizer_spec_hash(
+            &id,
+            as_str(&n["relation_id"]),
+            as_str(&n["applies_to"]),
+            as_str(&n["relation_version"]),
+        );
+        if expected != as_str(&n["specification_hash"]) {
+            v.push(format!(
+                "normalizer semantic {id}: the specification_hash does not rederive from its own fields"
+            ));
+        }
+    }
+
+    // Capture-adapter semantics: ids are declared observable axes, unique,
+    // and every specification hash rederives from its own fields.
+    let adapters = rec["adapter_semantics"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut adapter_ids: Vec<String> = Vec::new();
+    for a in &adapters {
+        let id = as_str(&a["id"]).to_string();
+        if adapter_ids.contains(&id) {
+            v.push(format!("duplicate capture-adapter semantic id {id}"));
+        } else {
+            adapter_ids.push(id.clone());
+        }
+        if !declared.contains(&id) {
+            v.push(format!(
+                "capture-adapter semantic {id} serves no declared observable"
+            ));
+        }
+        let expected = capture_adapter_spec_hash(
+            &id,
+            as_str(&a["relation_id"]),
+            as_str(&a["relation_version"]),
+        );
+        if expected != as_str(&a["specification_hash"]) {
+            v.push(format!(
+                "capture-adapter semantic {id}: the specification_hash does not rederive from its own fields"
             ));
         }
     }

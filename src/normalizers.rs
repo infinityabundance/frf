@@ -27,11 +27,15 @@ use crate::store::Store;
 use std::path::Path;
 
 /// The semantic identity of a declared normalizer. Same formula as the
-/// comparator registry: `FRF/NORMALIZER-SPEC/v1` over the specification
+/// comparator registry: `FRF/NORMALIZER-SPEC/v2` over the specification
 /// document (id + relation + applies_to).
 pub fn declared_semantic(decl: &NormalizerDeclaration) -> Result<NormalizerSemantic> {
-    let specification_hash =
-        semantics::normalizer_specification_hash(&decl.id, &decl.relation, &decl.applies_to)?;
+    let specification_hash = semantics::normalizer_specification_hash(
+        &decl.id,
+        &decl.relation,
+        &decl.applies_to,
+        &decl.relation_version,
+    )?;
     Ok(NormalizerSemantic {
         id: decl.id.clone(),
         relation_id: decl.relation.clone(),
@@ -145,6 +149,9 @@ pub fn run_side(
     cwd: &Path,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let response_bytes = ext::run_program(snapshot, request_bytes, cwd)?;
+    // The protocol says canonical JSON: the response must BE its own
+    // canonical serialization (one semantic response, one evidence identity).
+    ext::require_canonical_response(&response_bytes, "normalizer response")?;
     let response: NormalizerResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
         FrfError::new(format!(
             "normalizer for id {} produced an unparseable response: {e}",

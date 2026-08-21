@@ -74,6 +74,25 @@ pub fn store_blockers(
             continue;
         }
         let record = store.load_residual(&head.id)?;
+        // The universe commits the exact observation: the record loaded now
+        // must BE the record the universe named (canonical record content
+        // address + fingerprint). A store that no longer matches the
+        // committed universe cannot be scanned against it — the claim would
+        // be compiled against evidence it does not name.
+        let record_cid = crate::semantics::record_content_identity(&record)?;
+        if record_cid != head.record_cid {
+            return Err(FrfError::new(format!(
+                "residual {} no longer matches the committed knowledge universe (its record content address changed); re-compile against a fresh universe",
+                head.id
+            )));
+        }
+        let fingerprint = crate::semantics::residual_fingerprint(&record)?;
+        if fingerprint != head.fingerprint {
+            return Err(FrfError::new(format!(
+                "residual {} no longer matches the committed knowledge universe (its fingerprint changed); re-compile against a fresh universe",
+                head.id
+            )));
+        }
         let capture = store.load_capture(&record.run)?;
         let authority = store.load_authority(&record.authority)?;
         let surface = scope::residual_scope(&record, &capture, &authority.version);

@@ -6,18 +6,23 @@
 //! cannot be ambiguous about field boundaries the way a concatenation can.
 //!
 //!   FRF/RUN/v1                 run identity (per court run)
-//!   FRF/COURT/v1               court semantic identity (the question)
-//!   FRF/COMPARATOR-SPEC/v1     comparator relation specification
+//!   FRF/COURT/v2               court semantic identity (the question)
+//!   FRF/COMPARATOR-SPEC/v2     comparator relation specification
 //!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
 //!
 //! The court semantic identity answers ONLY "what question was asked?":
 //! question, falsifier, authority ARTIFACT identity, fixture identity,
-//! arguments, the full envelope, and the comparator SEMANTIC identities
-//! (specification hashes). Implementation provenance (which runner, which
-//! comparator implementations) is bound separately in the capture — the
-//! question never depends on the implementation, so two independent FRF
-//! implementations can ask the same court question without pretending to be
-//! the same implementation.
+//! arguments, the full envelope, the comparator SEMANTIC identities, the
+//! normalizer SEMANTIC identities in application order, and the
+//! capture-adapter SEMANTIC identities axis-keyed (v2 — everything that
+//! defines the observation is part of the question). Implementation
+//! provenance (which runner, which comparator implementations) is bound
+//! separately in the capture — the question never depends on the
+//! implementation, so two independent FRF implementations can ask the same
+//! court question without pretending to be the same implementation. In
+//! every extension protocol, the relation's VERSION enters the
+//! specification document itself (all spec domains are v2) — one rule, so
+//! a relation's version is part of its semantic identity everywhere.
 
 use crate::canon;
 use crate::error::{FrfError, Result};
@@ -37,48 +42,76 @@ pub fn hash_preimage(kind: &str, doc: &Value) -> Result<String> {
 // Extension-protocol specification hashes. One formula everywhere: a
 // domain-separated canonical JSON document whose SHA-256 is the semantic
 // identity of the relation — what the relation IS, never which implementation
-// ran it.
+// ran it. v2: `relation_version` enters the preimage itself (the one rule:
+// a relation's version is part of its semantic identity, in every protocol),
+// so two relations with the same id/relation but different versions are
+// different relations.
 // ---------------------------------------------------------------------------
 
-/// `FRF/NORMALIZER-SPEC/v1` over {id, relation, applies_to}.
-pub fn normalizer_specification_hash(id: &str, relation: &str, applies_to: &str) -> Result<String> {
+/// `FRF/NORMALIZER-SPEC/v2` over {id, relation, applies_to, relation_version}.
+pub fn normalizer_specification_hash(
+    id: &str,
+    relation: &str,
+    applies_to: &str,
+    relation_version: &str,
+) -> Result<String> {
     hash_preimage(
-        "FRF/NORMALIZER-SPEC/v1",
-        &json!({"id": id, "relation": relation, "applies_to": applies_to}),
+        "FRF/NORMALIZER-SPEC/v2",
+        &json!({"id": id, "relation": relation, "applies_to": applies_to, "relation_version": relation_version}),
     )
 }
 
-/// `FRF/MINIMIZER-SPEC/v1` over {id, relation}.
-pub fn minimizer_specification_hash(id: &str, relation: &str) -> Result<String> {
+/// `FRF/MINIMIZER-SPEC/v2` over {id, relation, relation_version}.
+pub fn minimizer_specification_hash(
+    id: &str,
+    relation: &str,
+    relation_version: &str,
+) -> Result<String> {
     hash_preimage(
-        "FRF/MINIMIZER-SPEC/v1",
-        &json!({"id": id, "relation": relation}),
+        "FRF/MINIMIZER-SPEC/v2",
+        &json!({"id": id, "relation": relation, "relation_version": relation_version}),
     )
 }
 
-/// `FRF/CAPTURE-ADAPTER-SPEC/v1` over {id, relation}.
-pub fn capture_adapter_specification_hash(id: &str, relation: &str) -> Result<String> {
+/// `FRF/CAPTURE-ADAPTER-SPEC/v2` over {id, relation, relation_version}.
+pub fn capture_adapter_specification_hash(
+    id: &str,
+    relation: &str,
+    relation_version: &str,
+) -> Result<String> {
     hash_preimage(
-        "FRF/CAPTURE-ADAPTER-SPEC/v1",
-        &json!({"id": id, "relation": relation}),
+        "FRF/CAPTURE-ADAPTER-SPEC/v2",
+        &json!({"id": id, "relation": relation, "relation_version": relation_version}),
     )
 }
 
-/// `FRF/WITNESS-SPEC/v1` over {id, relation}.
-pub fn witness_specification_hash(id: &str, relation: &str) -> Result<String> {
+/// `FRF/WITNESS-SPEC/v2` over {id, relation, relation_version}.
+pub fn witness_specification_hash(
+    id: &str,
+    relation: &str,
+    relation_version: &str,
+) -> Result<String> {
     hash_preimage(
-        "FRF/WITNESS-SPEC/v1",
-        &json!({"id": id, "relation": relation}),
+        "FRF/WITNESS-SPEC/v2",
+        &json!({"id": id, "relation": relation, "relation_version": relation_version}),
     )
 }
 
-/// The court semantic identity — the resolution-comparability key. Contents:
+/// The court semantic identity — the resolution-comparability key. Contents
+/// (FRF/COURT/v2):
 ///
 /// - question, falsifier
 /// - the admitted authority ARTIFACT hash (bytes, not the id label)
 /// - fixture id + bytes + declared arguments
 /// - the full admissibility envelope
-/// - comparator SEMANTIC identities (relation + specification hash)
+/// - comparator SEMANTIC identities (relation + version + specification hash)
+/// - normalizer SEMANTIC identities, in APPLICATION ORDER (a normalizer
+///   changes the comparison surface; its relation and the streams it moves
+///   are part of the question — two courts applying different normalizers
+///   under the same id ask different questions)
+/// - capture-adapter SEMANTIC identities, axis-keyed and sorted (an adapter
+///   defines the observation delivered to an externally served axis — a
+///   different extraction scheme is a different evidentiary surface)
 ///
 /// Deliberately absent: the court id (a label), the candidate (the one
 /// thing a fix court may change), the environment (checked separately by
@@ -88,6 +121,8 @@ pub fn court_semantic_identity(
     authority_sha256: &str,
     fixture_sha256: &str,
     comparator_semantics: &[ComparatorSemantic],
+    normalizer_semantics: &[NormalizerSemantic],
+    adapter_semantics: &[CaptureAdapterSemantic],
 ) -> Result<String> {
     court_semantic_doc(
         &spec.question,
@@ -98,8 +133,10 @@ pub fn court_semantic_identity(
         &spec.fixture.arguments,
         &spec.admissibility_envelope,
         comparator_semantics,
+        normalizer_semantics,
+        adapter_semantics,
     )
-    .and_then(|doc| hash_preimage("FRF/COURT/v1", &doc))
+    .and_then(|doc| hash_preimage("FRF/COURT/v2", &doc))
 }
 
 /// The court-semantic-identity preimage document, built from the fields that
@@ -117,7 +154,14 @@ fn court_semantic_doc(
     fixture_arguments: &[String],
     envelope: &AdmissibilityEnvelope,
     comparator_semantics: &[ComparatorSemantic],
+    normalizer_semantics: &[NormalizerSemantic],
+    adapter_semantics: &[CaptureAdapterSemantic],
 ) -> Result<Value> {
+    // Normalizers compose in APPLICATION ORDER: the order is semantic. The
+    // adapters serve distinct axes; their array is sorted by axis so two
+    // manifests declaring them in different orders ask the same question.
+    let mut adapters: Vec<&CaptureAdapterSemantic> = adapter_semantics.iter().collect();
+    adapters.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(json!({
         "question": question,
         "falsifier": falsifier,
@@ -143,14 +187,34 @@ fn court_semantic_doc(
                 "specification_hash": c.specification_hash,
             }))
             .collect::<Vec<_>>(),
+        "normalizers": normalizer_semantics
+            .iter()
+            .map(|n| json!({
+                "id": n.id,
+                "relation_id": n.relation_id,
+                "applies_to": n.applies_to,
+                "relation_version": n.relation_version,
+                "specification_hash": n.specification_hash,
+            }))
+            .collect::<Vec<_>>(),
+        "capture_adapters": adapters
+            .iter()
+            .map(|a| json!({
+                "id": a.id,
+                "relation_id": a.relation_id,
+                "relation_version": a.relation_version,
+                "specification_hash": a.specification_hash,
+            }))
+            .collect::<Vec<_>>(),
     }))
 }
 
 /// Rederive the court semantic identity from an OpenReceipt document alone.
 /// The receipt carries everything the question is made of: question,
 /// falsifier, authority artifact hash, fixture id/hash/arguments, the
-/// envelope, and the comparator semantics. The validator requires exactly one
-/// fixture (v0 courts have one), so `fixtures[0]` is the fixture.
+/// envelope, the comparator semantics, the normalizer semantics (application
+/// order), and the capture-adapter semantics. The validator requires exactly
+/// one fixture (v0 courts have one), so `fixtures[0]` is the fixture.
 pub fn court_semantic_identity_from_receipt(rec: &Receipt) -> Result<String> {
     let envelope = AdmissibilityEnvelope {
         fixture_family: rec.court.admissibility_envelope.fixture_family.clone(),
@@ -171,8 +235,10 @@ pub fn court_semantic_identity_from_receipt(rec: &Receipt) -> Result<String> {
         &fixture.declared_arguments,
         &envelope,
         &rec.comparator_semantics,
+        &rec.normalizer_semantics,
+        &rec.adapter_semantics,
     )
-    .and_then(|doc| hash_preimage("FRF/COURT/v1", &doc))
+    .and_then(|doc| hash_preimage("FRF/COURT/v2", &doc))
 }
 
 /// Every input that defines one court run's identity. The preimage is a
@@ -437,11 +503,13 @@ pub fn reduction_identity(
     hash_preimage("FRF/REDUCTION/v3", &doc)
 }
 
-/// The knowledge-snapshot identity: SHA-256 of `FRF/KNOWLEDGE/v1` over the
-/// canonical document of the snapshot's fields. The residual heads enter as
-/// (id, disposition, event) triples — a disposition change is a NEW
-/// universe. Every list is sorted, so the same universe hashes identically
-/// in every implementation.
+/// The knowledge-snapshot identity: SHA-256 of `FRF/KNOWLEDGE/v2` over the
+/// canonical document of the snapshot's fields. Every residual head enters as
+/// (id, record content address, fingerprint, disposition, event) — the
+/// universe commits the exact immutable observations the blocker scan reads,
+/// not the labels — and the objects list commits every other member by
+/// (kind, id, cid). Every list is sorted, so the same universe hashes
+/// identically in every implementation.
 pub fn knowledge_snapshot_identity(snapshot: &KnowledgeSnapshot) -> Result<String> {
     let doc = json!({
         "residual_heads": snapshot
@@ -449,17 +517,37 @@ pub fn knowledge_snapshot_identity(snapshot: &KnowledgeSnapshot) -> Result<Strin
             .iter()
             .map(|h| json!({
                 "id": h.id,
+                "record_cid": h.record_cid,
+                "fingerprint": h.fingerprint,
                 "disposition": h.disposition,
                 "disposition_event_id": h.disposition_event_id,
             }))
             .collect::<Vec<_>>(),
-        "receipts": snapshot.receipts,
-        "runs": snapshot.runs,
-        "authorities": snapshot.authorities,
-        "series": snapshot.series,
-        "reductions": snapshot.reductions,
+        "objects": snapshot
+            .objects
+            .iter()
+            .map(|o| json!({
+                "kind": o.kind,
+                "id": o.id,
+                "cid": o.cid,
+            }))
+            .collect::<Vec<_>>(),
     });
-    hash_preimage("FRF/KNOWLEDGE/v1", &doc)
+    hash_preimage("FRF/KNOWLEDGE/v2", &doc)
+}
+
+/// The CONTENT ADDRESS of an evidence record (a residual record or an
+/// authority record): SHA-256 of the canonical serialization of the record's
+/// own fields. Records are stored as YAML by the reference engine, but their
+/// content identity is the canonical JSON document of their fields — the
+/// same document any independent implementation rederives from its own
+/// parsing. This is what the knowledge universe commits for a record whose
+/// id is a label, not a content address.
+pub fn record_content_identity<T: serde::Serialize>(record: &T) -> Result<String> {
+    let value = serde_json::to_value(record)
+        .map_err(|e| FrfError::new(format!("cannot serialize the record: {e}")))?;
+    let json = crate::canon::canonical(&value)?;
+    Ok(host::sha256_bytes(json.as_bytes()))
 }
 
 /// The court-challenge identity: `FRF/CHALLENGE/v1` over the DECLARED
@@ -543,7 +631,30 @@ pub fn comparator_spec_hash_rederives(c: &ComparatorSemantic) -> Result<bool> {
         &c.relation_id,
         &c.extractor,
         &c.residual_classifier,
+        &c.relation_version,
     )? == c.specification_hash)
+}
+
+/// Does a recorded NORMALIZER semantic rederive its own specification hash?
+/// Same discipline as [`comparator_spec_hash_rederives`]: the semantic record
+/// carries the full specification (id, relation, applies_to, version) next to
+/// its hash, so a receipt cannot claim a normalizer specification its own
+/// fields do not hash to.
+pub fn normalizer_spec_hash_rederives(n: &NormalizerSemantic) -> Result<bool> {
+    Ok(
+        normalizer_specification_hash(&n.id, &n.relation_id, &n.applies_to, &n.relation_version)?
+            == n.specification_hash,
+    )
+}
+
+/// Does a recorded CAPTURE-ADAPTER semantic rederive its own specification
+/// hash? Same discipline: the adapter's spec document is {id, relation,
+/// relation_version}, so the recorded hash must rederive from those fields.
+pub fn capture_adapter_spec_hash_rederives(a: &CaptureAdapterSemantic) -> Result<bool> {
+    Ok(
+        capture_adapter_specification_hash(&a.id, &a.relation_id, &a.relation_version)?
+            == a.specification_hash,
+    )
 }
 
 /// The content-addressable inputs of one comparator INVOCATION record: the
@@ -874,26 +985,56 @@ mod tests {
 
     #[test]
     fn identity_is_deterministic_and_sensitive_to_the_question() {
-        let a = court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &semantics())
-            .unwrap();
+        let a = court_semantic_identity(
+            &spec("q"),
+            &"1".repeat(64),
+            &"2".repeat(64),
+            &semantics(),
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(
             a,
-            court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &semantics())
-                .unwrap()
+            court_semantic_identity(
+                &spec("q"),
+                &"1".repeat(64),
+                &"2".repeat(64),
+                &semantics(),
+                &[],
+                &[],
+            )
+            .unwrap()
         );
         // The candidate is NOT part of the question.
         let mut s2 = spec("q");
         s2.candidate.name = "something-else".into();
         assert_eq!(
             a,
-            court_semantic_identity(&s2, &"1".repeat(64), &"2".repeat(64), &semantics()).unwrap()
+            court_semantic_identity(
+                &s2,
+                &"1".repeat(64),
+                &"2".repeat(64),
+                &semantics(),
+                &[],
+                &[],
+            )
+            .unwrap()
         );
         // The court id is a label, not part of the question.
         let mut s3 = spec("q");
         s3.id = "renamed-court".into();
         assert_eq!(
             a,
-            court_semantic_identity(&s3, &"1".repeat(64), &"2".repeat(64), &semantics()).unwrap()
+            court_semantic_identity(
+                &s3,
+                &"1".repeat(64),
+                &"2".repeat(64),
+                &semantics(),
+                &[],
+                &[],
+            )
+            .unwrap()
         );
         // The question, the authority ARTIFACT bytes, the fixture bytes, and
         // the comparator semantics all move it.
@@ -903,23 +1044,40 @@ mod tests {
                 &spec("different"),
                 &"1".repeat(64),
                 &"2".repeat(64),
-                &semantics()
+                &semantics(),
+                &[],
+                &[],
             )
             .unwrap()
         );
         assert_ne!(
             a,
-            court_semantic_identity(&spec("q"), &"9".repeat(64), &"2".repeat(64), &semantics())
-                .unwrap()
+            court_semantic_identity(
+                &spec("q"),
+                &"9".repeat(64),
+                &"2".repeat(64),
+                &semantics(),
+                &[],
+                &[],
+            )
+            .unwrap()
         );
         assert_ne!(
             a,
-            court_semantic_identity(&spec("q"), &"1".repeat(64), &"9".repeat(64), &semantics())
-                .unwrap()
+            court_semantic_identity(
+                &spec("q"),
+                &"1".repeat(64),
+                &"9".repeat(64),
+                &semantics(),
+                &[],
+                &[],
+            )
+            .unwrap()
         );
         assert_ne!(
             a,
-            court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &[]).unwrap()
+            court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &[], &[], &[])
+                .unwrap()
         );
     }
 

@@ -23,8 +23,10 @@ unverified reduction is ever accepted.
 The two identities are always separate:
 
 - **Semantic identity** — what the reduction strategy *is*: a canonical
-  specification document `{id (the κ route), relation}` whose SHA-256
-  (`FRF/MINIMIZER-SPEC/v1`) is the minimizer's `specification_hash`.
+  specification document `{id (the κ route), relation, relation_version}`
+  whose SHA-256 (`FRF/MINIMIZER-SPEC/v2`) is the minimizer's
+  `specification_hash`. The relation's version is part of the specification
+  document itself, as in every protocol.
 - **Implementation identity** — what *proposed* it: the SHA-256 of the
   program bytes, sealed at OBSERVATION time (the court binds the reducer for
   each declared route), plus its ARTIFACT identity, recorded in the
@@ -92,8 +94,8 @@ carries the exact reducer.
   "fixture_base64": "<the proposed reduced fixture, base64>",
   "minimal": true,
   "attempts": [
-    {"attempt": 1, "fixture_sha256": "...", "kept": false},
-    {"attempt": 2, "fixture_sha256": "...", "kept": true}
+    {"attempt": "1", "fixture_sha256": "...", "kept": false},
+    {"attempt": "2", "fixture_sha256": "...", "kept": true}
   ],
   "indeterminate": false,
   "failure": null
@@ -101,9 +103,12 @@ carries the exact reducer.
 ```
 
 `attempts` is the minimizer's OWN log (the core records which proposal
-survived; the response document preserves the log verbatim). `minimal` is
-the minimizer's own claim, recorded as claimed — the final proposal's
-survival is independently court-verified.
+survived; the response document preserves the log verbatim). The attempt
+index is a STRING: the canonical JSON value domain is
+strings/arrays/booleans/null, so a response cannot carry a JSON number
+(RFC 8785 number serialization is out of scope for the protocol value
+domain). `minimal` is the minimizer's own claim, recorded as claimed — the
+final proposal's survival is independently court-verified.
 
 ## 4. Fail-closed interpretation and court verification
 

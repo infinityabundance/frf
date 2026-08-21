@@ -298,7 +298,15 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 runs.push(record.run.clone());
             }
         }
-        for rid in &parsed.knowledge_snapshot.reductions {
+        // The typed universe objects: reduction records (with their external-
+        // minimizer evidence) and the residual heads' runs enter the closure;
+        // receipts/authorities/series are carried by the runs' walks and the
+        // receipt root itself.
+        for obj in &parsed.knowledge_snapshot.objects {
+            if obj.kind != "reduction" {
+                continue;
+            }
+            let rid = &obj.id;
             let r_path = store.reduction_path(rid)?;
             let bytes = read(&r_path, "reduction")?;
             let rel = format!("reductions/{rid}.yaml");

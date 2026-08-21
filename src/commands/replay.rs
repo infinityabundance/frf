@@ -493,6 +493,9 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 )));
             }
             let response_bytes = crate::ext::run_program(&snapshot, &request_bytes, side_cwd)?;
+            // The protocol says canonical JSON: the response must BE its own
+            // canonical serialization.
+            crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
             let response: crate::model::CaptureAdapterResponse =
                 serde_json::from_slice(&response_bytes).map_err(|e| {
                     FrfError::new(format!(
@@ -579,12 +582,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                         ))
                     },
                 )?;
-                let divergences = builtin.compare(&reference, &candidate);
-                if divergences.is_empty() {
-                    crate::comparators::ComparatorOutcome::Equivalent
-                } else {
-                    crate::comparators::ComparatorOutcome::Divergent(divergences)
-                }
+                builtin.compare(&reference, &candidate)?
             }
             Some(artifact) => {
                 // Re-invoke the exact snapshotted comparator on the
@@ -635,6 +633,9 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 let outcome_str = match &outcome {
                     crate::comparators::ComparatorOutcome::Equivalent => "equivalent",
                     crate::comparators::ComparatorOutcome::Divergent(_) => "divergent",
+                    // `run_external` refuses indeterminate responses; this arm
+                    // is unreachable, kept for the exhaustive match.
+                    crate::comparators::ComparatorOutcome::Indeterminate => "indeterminate",
                 };
                 if outcome_str != evidence.result.outcome {
                     return Err(FrfError::new(format!(
@@ -650,6 +651,16 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         let fresh: Vec<(Option<String>, String, String)> = match outcome {
             crate::comparators::ComparatorOutcome::Equivalent => vec![],
             crate::comparators::ComparatorOutcome::Divergent(v) => v,
+            crate::comparators::ComparatorOutcome::Indeterminate => {
+                // The recorded observation was decided (a court refuses an
+                // indeterminate axis, so a captured run's axis was decidable);
+                // an indeterminate re-evaluation means the reproduced sides
+                // are NOT the recorded observation.
+                return Err(FrfError::new(format!(
+                    "replay of {run} FAILED: the {} axis is indeterminate on the reproduced sides — the evidence does not re-derive",
+                    axis.as_str()
+                )));
+            }
         };
         let fresh_fps: BTreeSet<String> = fresh
             .iter()
