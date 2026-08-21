@@ -18,6 +18,7 @@
 mod common;
 use common::*;
 
+use frf::store::Store;
 use std::fs;
 
 /// Write a file tree into the workdir from `(rel_path, contents)` pairs.
@@ -293,6 +294,101 @@ fn a_filesystem_tree_court_without_produce_is_refused() {
         "{}",
         stderr(&out)
     );
+}
+
+#[test]
+fn a_mode_divergence_is_preserved_alongside_a_content_divergence() {
+    // One file diverges in CONTENT and in EXECUTABLE STATE at once. That is
+    // two observable facts, and FRF preserves BOTH residuals: a trajectory
+    // must be able to watch a content divergence vanish while a mode
+    // divergence persists (the older comparator suppressed the mode residual
+    // whenever the bytes also differed — a residual was thrown away).
+    let work = Workdir::new("noncli-tree-mode");
+    write_files(
+        &work,
+        &[
+            (
+                "treegen-ref.sh",
+                "#!/bin/sh\nset -u\nwhile [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done\n[ -n \"$out\" ] || exit 2\nrm -rf \"$out\"\nmkdir -p \"$out/bin\"\nprintf '#!/bin/sh\\necho ref-tool\\n' > \"$out/bin/tool\"\nchmod +x \"$out/bin/tool\"\nexit 0\n",
+            ),
+            (
+                "treegen-cand.sh",
+                "#!/bin/sh\nset -u\nwhile [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift 2;; *) shift;; esac; done\n[ -n \"$out\" ] || exit 2\nrm -rf \"$out\"\nmkdir -p \"$out/bin\"\nprintf '#!/bin/sh\\necho cand-tool\\n' > \"$out/bin/tool\"\nexit 0\n",
+            ),
+            ("frf/courts/fs-tree-build/manifest.yaml", TREE_MANIFEST),
+            (
+                "frf/courts/fs-tree-build/fixtures/tree-spec.conf",
+                "bin/tool\tignored-by-these-scripts\n",
+            ),
+        ],
+    );
+    admit(&work, "treegen-ref.sh", "treegen-ref", "1.0");
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/fs-tree-build/manifest.yaml",
+        ],
+    );
+    assert_success(&out, "tree court run (mode + content divergence)");
+    let run = stdout(&out);
+
+    let residuals: Vec<serde_json::Value> = fs::read_dir(work.path("frf/residuals"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter(|e| {
+            !e.file_name().to_string_lossy().contains(".token")
+                && !e.file_name().to_string_lossy().contains(".events")
+        })
+        .map(|e| {
+            load_evidence(
+                &work,
+                &format!("frf/residuals/{}", e.file_name().to_string_lossy()),
+            )
+        })
+        .collect();
+    let surfaces: Vec<(String, String, String)> = residuals
+        .iter()
+        .filter(|r| r["axis"] == "filesystem.tree")
+        .map(|r| {
+            (
+                r["surface"].as_str().unwrap().to_string(),
+                r["raw_reference"].as_str().unwrap().to_string(),
+                r["raw_candidate"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        surfaces.len(),
+        2,
+        "content + mode are two residuals, not one: {surfaces:?}"
+    );
+    let content = surfaces
+        .iter()
+        .find(|(s, _, _)| s == "path:bin/tool")
+        .expect("content divergence surfaced");
+    assert_ne!(content.1, content.2, "different contents are divergent");
+    let mode = surfaces
+        .iter()
+        .find(|(s, _, _)| s == "path:bin/tool#executable")
+        .expect("mode divergence surfaced");
+    assert_eq!(mode.1, "true", "reference tool is executable");
+    assert_eq!(mode.2, "false", "candidate tool is not executable");
+
+    // Both residuals re-derive through the one comparison relation: the
+    // verified read accepts them (and would refuse a residual the comparator
+    // did not generate).
+    let store = Store::new(work.path(ROOT));
+    for id in ["cli-text-0001", "cli-text-0002"] {
+        let verified = frf::verify::load_residual_verified(&store, id).unwrap();
+        assert_eq!(verified.record().run, run);
+        assert_eq!(verified.record().axis.as_str(), "filesystem.tree");
+    }
 }
 
 // ---------------------------------------------------------------------------
