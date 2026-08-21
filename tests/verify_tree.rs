@@ -1441,15 +1441,24 @@ fn claims_are_re_derivable_from_receipts() {
             vec![expected],
             "claim {receipt_id} drifted from its receipt"
         );
-        // The full Claim IR re-derives. Scope K is the executed surface
-        // restricted to the axes THIS run observed passing; the premise
-        // surface is the receipt's full executed surface; admission is the
-        // containment rule Scope(K) ⊆ Scope(P).
-        let k = frf::scope::claim_scope(rec);
-        let premise = frf::scope::premise_scope(rec);
-        assert!(premise.contains(&k), "Scope(K) ⊄ Scope(P) for {receipt_id}");
+        // The full Claim IR re-derives. K is the REGION of per-premise clean
+        // surfaces (one cell per premise; the golden tree is single-premise);
+        // the premise region P is the premises' full executed surfaces;
+        // admission is the literal containment Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)
+        // over the cells — every point of every K cell lies in SOME premise
+        // cell.
+        let k = frf::scope::claim_region(&[rec]);
+        let p = frf::scope::premise_region(&[rec]);
+        assert!(
+            k.cells.iter().all(|cell| p.contains(cell)),
+            "Scope(K) ⊄ Scope(P₁ ∪ … ∪ Pₙ) for {receipt_id}"
+        );
         assert_eq!(claim.scope, k, "claim {receipt_id} scope drifted");
-        assert_eq!(claim.observable_scope, k.observables);
+        assert_eq!(
+            claim.observable_scope,
+            frf::scope::region_observables(&k),
+            "claim {receipt_id} observable scope drifted"
+        );
         // A claim exists only when NO blocking residual (open/unknown)
         // intersects K — the compiler refuses otherwise, so every compiled
         // claim must re-derive an empty blocker set with the SAME scan over
@@ -1470,6 +1479,8 @@ fn claims_are_re_derivable_from_receipts() {
             blockers.len()
         );
         assert_eq!(claim.blockers, Vec::<String>::new());
+        // The golden tree is single-premise: the claim names exactly its own
+        // receipt. (The multi-premise form is exercised in claim_policy.rs.)
         assert_eq!(claim.requires, vec![receipt_id.to_string()]);
         let expected_excluded: Vec<String> = rec.residuals.iter().map(|r| r.id.clone()).collect();
         assert_eq!(claim.excluded_evidence, expected_excluded);

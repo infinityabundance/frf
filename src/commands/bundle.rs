@@ -292,13 +292,52 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             },
         );
         let parsed: ClaimRecord = store.parse_evidence(&claim_path)?;
+        // The claim is MULTI-PREMISE since v6: every premise receipt's run is
+        // part of the evidence the claim was compiled under, so each premise's
+        // capture + objects + residuals + authorities enter the closure (the
+        // walk below picks them up by run id).
+        for prem_id in &parsed.requires {
+            let prem = crate::verify::load_receipt_verified(store, prem_id)?;
+            // The premise receipt document itself is part of the closure (a
+            // multi-premise claim's other premises are not the root receipt).
+            let prem_bytes = read(&store.receipt_path(prem_id)?, "premise receipt")?;
+            let prem_rel = format!("receipts/{prem_id}.json");
+            entries.insert(
+                prem_rel.clone(),
+                ClosureEntry {
+                    rel: prem_rel,
+                    sha256: host::sha256_bytes(&prem_bytes),
+                    kind: "receipt",
+                },
+            );
+            if !runs.contains(&prem.body().run) {
+                runs.push(prem.body().run.clone());
+            }
+        }
         // The capability evidence a sensitivity-backed claim was compiled
         // under: every content-addressed challenge record it names, and the
         // mutant run each challenge observed (the run traversal below picks
-        // up its capture, objects, and residuals).
+        // up its capture, objects, and residuals). Each capability entry
+        // binds the PREMISE RECEIPT it covers: the challenge must be of that
+        // premise's court and wrap that premise's reference artifact.
         for cap in &parsed.capability {
+            if !parsed.requires.contains(&cap.receipt) {
+                return Err(FrfError::new(format!(
+                    "claim capability for axis {} binds premise {} which the claim does not require",
+                    cap.axis, cap.receipt
+                )));
+            }
+            let prem = crate::verify::load_receipt_verified(store, &cap.receipt)?;
             for chid in &cap.challenge_ids {
                 let ch = store.load_challenge(chid)?; // verified: content-addressed
+                if ch.court != prem.body().court.id
+                    || ch.reference_sha256 != prem.body().authority.identity_hash
+                {
+                    return Err(FrfError::new(format!(
+                        "claim capability for axis {} cites challenge {} which does not belong to premise {}'s court/reference",
+                        cap.axis, chid, cap.receipt
+                    )));
+                }
                 let bytes = read(&store.challenge_path(chid)?, "challenge")?;
                 let rel = format!("challenges/{chid}.json");
                 entries.insert(

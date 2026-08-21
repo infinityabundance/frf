@@ -187,11 +187,16 @@ pub enum ReceiptCmd {
 
 #[derive(Subcommand)]
 pub enum ClaimCmd {
-    /// Compile a claim from a receipt; refuses open/unknown/harness residuals
-    /// whose surface intersects the claim's scope
+    /// Compile a claim from one or more premise receipts (multi-premise
+    /// since v6: K is the region of each premise's clean surface, and
+    /// admission is the literal containment K ⊆ P₁ ∪ … ∪ Pₙ over the region
+    /// cells); refuses open/unknown/harness residuals whose surface
+    /// intersects any claim cell
     Compile {
-        /// Receipt id (printed by `frf receipt emit`)
-        receipt: String,
+        /// Premise receipt ids (printed by `frf receipt emit`); all must
+        /// bind the same authority and the same candidate artifact
+        #[arg(value_name = "RECEIPT", num_args = 1.., required = true)]
+        receipt: Vec<String>,
         /// Emit the Claim IR as canonical JSON instead of prose (prose is
         /// one renderer of the IR)
         #[arg(long)]

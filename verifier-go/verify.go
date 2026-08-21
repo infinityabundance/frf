@@ -258,7 +258,7 @@ type ClaimIR struct {
 // content-addressed and hash-chained: each event rederives its own event_id
 // from its recorded content and links to the previous event.
 func verifyEventChain(events []*jcs.Object, rid string) {
-	var prev *string
+	var prev jcs.Value
 	for _, e := range events {
 		var refs []jcs.Value
 		for _, r := range arr(recVal(e, "evidence_refs")) {
@@ -271,11 +271,9 @@ func verifyEventChain(events []*jcs.Object, rid string) {
 		if id != str(e, "event_id") {
 			fail("residual %s: disposition event %s is not content-addressed; refusing to consume a hand-edited event", rid, str(e, "event_id"))
 		}
-		prev = stringPtr(id)
+		prev = id
 	}
 }
-
-func stringPtr(s string) *string { return &s }
 
 // claimIR mirrors the claim compiler's scope algebra: a claim is admissible
 // iff its scope K is non-empty, no premise run is harness-invalidated, and no
@@ -424,7 +422,9 @@ func scopesIntersect(a, b *jcs.Object) bool {
 // verifyClaimPolicy re-derives a compiled claim's admission policy from the
 // bundle alone: the claim's capability / witness_statements / replay_profile
 // are evidence references, and each tier's requirements are checked against
-// the bundle's own objects — never trusted from the claim file.
+// the bundle's own objects — never trusted from the claim file. Since v6 a
+// claim is MULTI-PREMISE: every capability entry binds the premise receipt
+// its covered axes belong to, and each tier's obligations hold per premise.
 func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string) {
 	policy := str(claim, "policy")
 	switch policy {
@@ -435,30 +435,70 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 		fail("claim %s: unknown admission policy %s", receiptID, policy)
 	}
 
+	// The premise receipts the claim names; the claim file is named after
+	// the first premise.
+	requires := asStrArray(recVal(claim, "requires"))
+	if len(requires) == 0 {
+		fail("claim %s: names no premise receipts", receiptID)
+	}
+	if str(claim, "receipt") != receiptID {
+		fail("claim %s: the claim file does not bind its first premise", receiptID)
+	}
+	premise := func(premID string) *jcs.Object {
+		return obj(loadEvidence(safeJoin(bundle, "receipts/"+premID+".json")))
+	}
+	// Subject coherence: every premise binds the same authority and the same
+	// candidate artifact (the reference compiler enforces this at compile
+	// time; the verifier re-derives it from the bundle's own receipts).
+	first := premise(requires[0])
+	for _, premID := range requires[1:] {
+		p := premise(premID)
+		if str(obj(recVal(p, "authority")), "name") != str(obj(recVal(first, "authority")), "name") ||
+			str(obj(recVal(p, "authority")), "version") != str(obj(recVal(first, "authority")), "version") ||
+			str(obj(recVal(p, "authority")), "identity_hash") != str(obj(recVal(first, "authority")), "identity_hash") {
+			fail("claim %s: the premises bind different authorities", receiptID)
+		}
+		if str(obj(recVal(p, "candidate")), "identity_hash") != str(obj(recVal(first, "candidate")), "identity_hash") {
+			fail("claim %s: the premises bind different candidate artifacts", receiptID)
+		}
+	}
+
 	claimed := asStrArray(recVal(claim, "observable_scope"))
 	covered := make(map[string]bool)
 	for _, capV := range arr(recVal(claim, "capability")) {
 		cap := obj(capV)
 		axis := str(cap, "axis")
+		premID := str(cap, "receipt")
+		premOK := false
+		for _, r := range requires {
+			if r == premID {
+				premOK = true
+				break
+			}
+		}
+		if !premOK {
+			fail("claim %s: capability entry for axis %s binds premise %s which the claim does not require", receiptID, axis, premID)
+		}
+		prem := premise(premID)
 		ids := asStrArray(recVal(cap, "challenge_ids"))
 		if len(ids) == 0 {
 			fail("claim %s: capability entry for axis %s names no challenge", receiptID, axis)
 		}
 		for _, cid := range ids {
 			ch := obj(loadEvidence(safeJoin(bundle, "challenges/"+cid+".json")))
-			if str(ch, "court") != str(obj(recVal(body, "court")), "id") {
-				fail("claim %s: challenge %s is not a challenge of the receipt's court", receiptID, cid)
+			if str(ch, "court") != str(obj(recVal(prem, "court")), "id") {
+				fail("claim %s: challenge %s is not a challenge of premise %s's court", receiptID, cid, premID)
 			}
 			if str(ch, "target_axis") != axis {
 				fail("claim %s: challenge %s targets %s not %s", receiptID, cid, str(ch, "target_axis"), axis)
 			}
-			if str(ch, "reference_sha256") != str(obj(recVal(body, "authority")), "identity_hash") {
-				fail("claim %s: challenge %s does not wrap the receipt's reference artifact", receiptID, cid)
+			if str(ch, "reference_sha256") != str(obj(recVal(prem, "authority")), "identity_hash") {
+				fail("claim %s: challenge %s does not wrap premise %s's reference artifact", receiptID, cid, premID)
 			}
 			chRun := str(ch, "run")
 			mutCap := obj(loadEvidence(safeJoin(bundle, "captures/"+chRun+"/capture.json")))
-			if str(mutCap, "court_semantic_identity") != str(obj(recVal(body, "court")), "semantic_identity") {
-				fail("claim %s: challenge %s did not run the same question", receiptID, cid)
+			if str(mutCap, "court_semantic_identity") != str(obj(recVal(prem, "court")), "semantic_identity") {
+				fail("claim %s: challenge %s did not run premise %s's question", receiptID, cid, premID)
 			}
 			onTarget, onUnaffected := false, false
 			for _, ridV := range arr(recVal(mutCap, "residuals")) {
@@ -486,43 +526,51 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 		if len(witnesses) == 0 {
 			fail("claim %s: policy %s requires a witness attestation but names none", receiptID, policy)
 		}
-		affirmed := false
-		for _, wid := range witnesses {
-			stmt := obj(loadEvidence(safeJoin(bundle, "witnesses/"+wid+".json")))
-			subj := obj(recVal(stmt, "subject"))
-			if str(subj, "kind") != "receipt" || str(subj, "id") != receiptID {
-				fail("claim %s: witness %s does not attest this receipt", receiptID, wid)
-			}
-			for _, f := range []string{"request.json", "response.json"} {
-				b := readFile(safeJoin(bundle, "witnesses/"+wid+"/"+f))
-				cidField := "request_cid"
-				if f == "response.json" {
-					cidField = "response_cid"
+		// EVERY premise receipt must have at least one affirming attestation
+		// of ITSELF (the compiler attests each premise before compiling).
+		for _, premID := range requires {
+			affirmedThis := false
+			for _, wid := range witnesses {
+				stmt := obj(loadEvidence(safeJoin(bundle, "witnesses/"+wid+".json")))
+				subj := obj(recVal(stmt, "subject"))
+				if str(subj, "kind") != "receipt" || str(subj, "id") != premID {
+					continue
 				}
-				if jcs.Sha256Hex(b) != str(stmt, cidField) {
-					fail("claim %s: witness %s preserved %s does not hash to its cid", receiptID, wid, f)
+				for _, f := range []string{"request.json", "response.json"} {
+					b := readFile(safeJoin(bundle, "witnesses/"+wid+"/"+f))
+					cidField := "request_cid"
+					if f == "response.json" {
+						cidField = "response_cid"
+					}
+					if jcs.Sha256Hex(b) != str(stmt, cidField) {
+						fail("claim %s: witness %s preserved %s does not hash to its cid", receiptID, wid, f)
+					}
+				}
+				if str(obj(recVal(stmt, "attestation")), "outcome") == "affirm" {
+					affirmedThis = true
 				}
 			}
-			if str(obj(recVal(stmt, "attestation")), "outcome") == "affirm" {
-				affirmed = true
+			if !affirmedThis {
+				fail("claim %s: no named witness affirms premise receipt %s", receiptID, premID)
 			}
-		}
-		if !affirmed {
-			fail("claim %s: no named witness affirms the receipt", receiptID)
 		}
 	}
 
 	if policy == "high-assurance" {
-		if str(body, "execution_profile") != "frf-exec-linux-v1" {
-			fail("claim %s: high-assurance requires the reference execution profile", receiptID)
-		}
-		bounds := obj(recVal(body, "capture_bounds"))
-		if str(bounds, "timeout_ms") != "60000" ||
-			str(bounds, "max_stream_bytes") != "16777216" ||
-			str(bounds, "rlimit_as_mb") != "2048" ||
-			str(bounds, "rlimit_cpu_s") != "30" ||
-			str(bounds, "rlimit_nofile") != "1024" {
-			fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract)", receiptID)
+		// EVERY premise was observed under the reference execution contract.
+		for _, premID := range requires {
+			prem := premise(premID)
+			if str(prem, "execution_profile") != "frf-exec-linux-v1" {
+				fail("claim %s: high-assurance requires the reference execution profile for premise %s", receiptID, premID)
+			}
+			bounds := obj(recVal(prem, "capture_bounds"))
+			if str(bounds, "timeout_ms") != "60000" ||
+				str(bounds, "max_stream_bytes") != "16777216" ||
+				str(bounds, "rlimit_as_mb") != "2048" ||
+				str(bounds, "rlimit_cpu_s") != "30" ||
+				str(bounds, "rlimit_nofile") != "1024" {
+				fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract) for premise %s", receiptID, premID)
+			}
 		}
 		if str(claim, "replay_profile") != "frf-exec-linux-v1" {
 			fail("claim %s: the claim's replay_profile does not record the reference profile", receiptID)

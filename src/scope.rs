@@ -67,6 +67,65 @@ pub fn residual_scope(
     }
 }
 
+/// The claim's scope K as a REGION: one cell per premise receipt, each cell
+/// the receipt's executed surface restricted to the axes THAT premise's run
+/// observed passing. The cells are never merged — the union of Cartesian
+/// products is the cell list, not the product of dimension-wise unions, so a
+/// multi-premise claim cannot invent a surface no premise observed.
+pub fn claim_region(receipts: &[&Receipt]) -> EvidenceRegion {
+    let mut region = EvidenceRegion::empty();
+    for r in receipts {
+        region.push(claim_scope(r));
+    }
+    region
+}
+
+/// The premises' observed surface P as a REGION: one cell per premise
+/// receipt's FULL executed surface. Admission `K ⊆ P` is the region
+/// containment: every point of every K cell must lie in SOME premise cell.
+pub fn premise_region(receipts: &[&Receipt]) -> EvidenceRegion {
+    let mut region = EvidenceRegion::empty();
+    for r in receipts {
+        region.push(premise_scope(r));
+    }
+    region
+}
+
+/// The axes a region of claim cells covers (the flat union across cells).
+pub fn region_observables(region: &EvidenceRegion) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for cell in &region.cells {
+        for a in &cell.observables {
+            if !out.contains(a) {
+                out.push(a.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The residuals this region's cells' runs observed diverging (the axes a
+/// multi-premise claim's cells exclude): the union across every premise.
+pub fn region_excluded_evidence(receipts: &[&Receipt], region: &EvidenceRegion) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in receipts {
+        for res in &r.residuals {
+            // A residual whose axis IS covered by some cell is a blocker, not
+            // excluded evidence; the claim's cells exclude each premise's own
+            // residual axes, so residuals on uncovered axes are the excluded
+            // divergences.
+            let covered = region
+                .cells
+                .iter()
+                .any(|c| c.observables.contains(&res.axis));
+            if !covered && !out.contains(&res.id) {
+                out.push(res.id.clone());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

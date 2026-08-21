@@ -105,7 +105,14 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v14";
 /// challenge coverage (the court demonstrated it can SEE the claimed
 /// surface's defect classes), the witness statements that attested the
 /// receipt, and the replay contract the observation was made under.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v5";
+/// v6: the claim is MULTI-PREMISE — `scope` is K as an [`EvidenceRegion`]
+/// (one cell per premise's clean surface, the honest DNF union — a union of
+/// Cartesian products is never the product of dimension-wise unions),
+/// `requires` carries every premise receipt, and admission is the literal
+/// containment `K ⊆ P₁ ∪ … ∪ Pₙ` over the region cells: every point of K
+/// lies in SOME premise cell, and a blocking residual blocks exactly the
+/// claims whose surface intersects ANY cell.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v6";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -3449,6 +3456,14 @@ impl EvidenceRegion {
     pub fn contains(&self, k: &ClaimScope) -> bool {
         self.cells.iter().any(|cell| cell.contains(k))
     }
+
+    /// Whether a surface (a residual's scope) intersects the region: it
+    /// intersects ANY cell. The blocker rule generalizes to multi-premise
+    /// claims exactly here — an unexplained divergence on any claimed cell's
+    /// surface blocks the claim.
+    pub fn intersects(&self, surface: &ClaimScope) -> bool {
+        self.cells.iter().any(|cell| cell.intersects(surface))
+    }
 }
 
 /// The exact candidate artifact a compiled claim is attributed to.
@@ -3464,10 +3479,15 @@ pub struct ClaimCandidate {
 /// observable axis: the content-addressed challenge records that proved it.
 /// Admission requires every claimed axis to have at least one such record;
 /// the claim carries the exact ids so the coverage re-derives from the
-/// evidence, never from a boolean.
+/// evidence, never from a boolean. v6: the entry binds the PREMISE RECEIPT
+/// the coverage belongs to (a multi-premise claim's cells can come from
+/// different courts, and each cell's axes must be covered by challenges of
+/// ITS court).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimCapability {
+    /// The premise receipt the covered axes belong to.
+    pub receipt: String,
     /// The claimed observable axis this capability covers.
     pub axis: String,
     /// The challenge records that demonstrated sensitivity on `axis`
@@ -3476,20 +3496,23 @@ pub struct ClaimCapability {
     pub challenge_ids: Vec<String>,
 }
 
-/// A compiled claim (written ONLY by `frf claim compile`, from a verified
-/// receipt). The IR is the full scope algebra:
+/// A compiled claim (written ONLY by `frf claim compile`, from verified
+/// premise receipts). The IR is the full scope algebra:
 ///
-/// - `scope` is K — the region of the evidence space the claim asserts
-///   parity over (never beyond the premises' surface, checked literally);
+/// - `scope` is K — the REGION of the evidence space the claim asserts
+///   parity over, as DNF cells (one per premise's clean surface; never
+///   beyond the premises' surface, checked literally — every point of K
+///   lies in SOME premise cell);
 /// - `blockers` are the residuals that REFUSE the claim: `open`/`unknown`
-///   residuals whose surface intersects K (a human or LLM cannot promote
-///   evidence by relabeling it — an unexplained divergence on the claimed
-///   surface blocks, wherever it was recorded), and `harness` residuals on a
-///   premise run (run-level invalidation);
+///   residuals whose surface intersects ANY K cell (a human or LLM cannot
+///   promote evidence by relabeling it — an unexplained divergence on the
+///   claimed surface blocks, wherever it was recorded), and `harness`
+///   residuals on a premise run (run-level invalidation);
 /// - `excluded_evidence` are the observed divergences this claim does NOT
 ///   cover (residuals outside K's surface);
 /// - `requires` are the premise receipts, and admission is
-///   `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`;
+///   `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — the union is the cell list, never a
+///   merged product;
 /// - `knowledge_snapshot` is the EVIDENCE UNIVERSE the absence search ran
 ///   over: no unresolved residual IN that universe intersects K. A claim is
 ///   admissible relative to an explicitly committed state of knowledge —
@@ -3515,9 +3538,11 @@ pub struct ClaimRecord {
     /// The machine-readable proposition: what parity is asserted, of whom,
     /// over which surface, on whose evidence.
     pub proposition: String,
-    /// Claim IR — the structured scope K.
-    pub scope: ClaimScope,
-    /// Claim IR — the axes covered (projection of `scope.observables`).
+    /// Claim IR — K, the structured scope as a REGION of DNF cells (one per
+    /// premise's clean surface). Admission is the literal containment
+    /// `K ⊆ P₁ ∪ … ∪ Pₙ` over these cells.
+    pub scope: EvidenceRegion,
+    /// Claim IR — the axes covered (flat union across the scope cells).
     pub observable_scope: Vec<String>,
     /// Claim IR — the residuals that block this claim (see the doc header).
     pub blockers: Vec<String>,

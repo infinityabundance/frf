@@ -1096,7 +1096,7 @@ fn open_residual_blocks_only_its_own_axis() {
     // surface, and the open text residual does NOT block it (different
     // axis — intersection is empty), while it IS recorded as evidence the
     // claim excludes.
-    assert_eq!(claim_json["scope"]["observables"][0], "exit");
+    assert_eq!(claim_json["scope"]["cells"][0]["observables"][0], "exit");
     assert_eq!(claim_json["requires"][0], receipt);
     assert_eq!(claim_json["blockers"].as_array().unwrap().len(), 0);
 }
@@ -1218,9 +1218,9 @@ fn claim_json_renderer_emits_the_ir_canonically() {
     let first = stdout(&out);
     let value: serde_json::Value = serde_json::from_str(&first).unwrap();
     assert_eq!(value["receipt"], receipt);
-    assert_eq!(value["schema_version"], "frf-claim-v5");
+    assert_eq!(value["schema_version"], "frf-claim-v6");
     assert_eq!(value["policy"], "baseline");
-    assert_eq!(value["scope"]["observables"][0], "exit");
+    assert_eq!(value["scope"]["cells"][0]["observables"][0], "exit");
     // Determinism: a second emission is byte-identical (canonical form).
     let out = frf(
         &work,
@@ -1655,7 +1655,9 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     )
     .unwrap();
     let k = frf::scope::claim_scope(&receipt_doc);
-    let blockers_old = frf::commands::claim::store_blockers(&store, &k, &snapshot1_typed).unwrap();
+    let k_region = frf::model::EvidenceRegion::cell(k);
+    let blockers_old =
+        frf::commands::claim::store_blockers(&store, &k_region, &snapshot1_typed).unwrap();
     assert!(
         blockers_old.is_empty(),
         "the claim's own universe carries no blocker for its scope"

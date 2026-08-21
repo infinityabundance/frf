@@ -33,6 +33,17 @@ fn run_xtask(cwd: &Path, args: &[&str]) -> Output {
     cmd.output().unwrap()
 }
 
+/// Run the Go verifier (the third triangle point; shares no parsing library
+/// with either Rust implementation). The verifier lives in the repo's
+/// `verifier-go/`; the bundle path is passed absolutely so the verifier runs
+/// from its own directory.
+fn go_verifier(args: &[&str]) -> Output {
+    let go_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("verifier-go");
+    let mut cmd = Command::new("go");
+    cmd.args(["run", "."]).args(args).current_dir(go_dir);
+    cmd.output().unwrap()
+}
+
 fn copy_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {
@@ -118,6 +129,149 @@ fn export_bundle(work: &Workdir, receipt_final: &str, name: &str) {
         ],
     );
     assert_success(&out, "bundle export");
+}
+
+/// The second premise manifest: the SAME authority and the SAME candidate
+/// artifact (candidate-fixed.sh) observed on a surface the resolution court
+/// never covered — a stdout-only court whose axis passes for the fixed
+/// candidate.
+const STDOUT_ONLY_MANIFEST: &str = r#"
+court:
+  id: cli-stdout-only
+  question: >-
+    For malformed input in fixture family malformed-input, does the candidate
+    preserve the admitted reference's stdout?
+  falsifier: >-
+    The candidate's stdout diverges from the admitted reference on a fixture
+    in family malformed-input.
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: "0.1.0-fixed"
+    build_profile: debug
+    path: golden/work/candidate-fixed.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments: ["--strict", "{fixture}"]
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [stdout]
+    normalizers: []
+    replay_scope: single-run
+"#;
+
+/// The multi-premise case of the conformance triangle: a claim compiled from
+/// TWO premise receipts (the resolution receipt + a stdout-only receipt of
+/// the SAME candidate), exported as a bundle, must verify in the independent
+/// xtask verifier AND the Go verifier, with the per-premise capability
+/// binding re-derived from the bundle alone.
+#[test]
+fn both_verifiers_agree_on_a_multi_premise_claim_bundle() {
+    let work = Workdir::new("independent-multi");
+    work.copy_canonical_tree();
+    let (_resolution_run, receipt_final) = golden_to_claim(&work);
+
+    // The second premise: stdout-only, same authority, same candidate bytes.
+    let manifest = "frf/courts/cli-malformed-input/manifest-stdout-only.yaml";
+    fs::write(work.path(manifest), STDOUT_ONLY_MANIFEST).unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", manifest]);
+    assert_success(&out, "stdout-only court run");
+    let run2 = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run2]);
+    assert_success(&out, "stdout-only receipt emit");
+    let receipt2 = stdout(&out);
+
+    // Sensitivity coverage is PER PREMISE: challenge each premise's court on
+    // its claimed axis, then compile the multi-premise claim under the
+    // sensitivity-backed tier (the capability entries bind the premise).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            MANIFEST,
+            "--operators",
+            "exit-class",
+        ],
+    );
+    assert_success(&out, "court challenge (exit-class)");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            manifest,
+            "--operators",
+            "stdout-first-line",
+        ],
+    );
+    assert_success(&out, "court challenge (stdout-first-line)");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt_final,
+            &receipt2,
+            "--policy",
+            "sensitivity-backed",
+        ],
+    );
+    assert_success(&out, "multi-premise claim compile");
+
+    // The claim file is named after the first premise and names BOTH.
+    let claim: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt_final}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(claim["schema_version"], "frf-claim-v6");
+    assert_eq!(
+        claim["requires"],
+        serde_json::json!([receipt_final, receipt2])
+    );
+    assert_eq!(
+        claim["observable_scope"],
+        serde_json::json!(["exit", "stdout"])
+    );
+
+    // Export: the closure must carry BOTH premise receipts and BOTH premise
+    // runs (the second premise is not the bundle root).
+    export_bundle(&work, &receipt_final, "portable-multi.frf");
+    let bundle = work.path("portable-multi.frf");
+    assert!(
+        bundle.join(format!("receipts/{receipt2}.json")).is_file(),
+        "the bundle must carry the second premise receipt"
+    );
+    assert!(
+        bundle.join(format!("captures/{run2}")).is_dir(),
+        "the bundle must carry the second premise's run"
+    );
+
+    // The independent verifiers re-derive the policy admission from the
+    // bundle alone (per-premise capability binding included).
+    let out = run_xtask(&work.dir, &["verify", "bundle", "portable-multi.frf"]);
+    assert!(
+        out.status.success(),
+        "xtask refused the multi-premise bundle:\nstdout: {}\nstderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let bundle_abs = work.path("portable-multi.frf");
+    let out = go_verifier(&["verify", "bundle", bundle_abs.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "the Go verifier refused the multi-premise bundle:\nstdout: {}\nstderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
 }
 
 #[test]
