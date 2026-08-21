@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 mod experiment;
+mod experiment_external;
 mod jcs;
 mod rederive;
 mod regen;
@@ -1452,7 +1453,8 @@ fn main() {
                cargo xtask verify bundle <bundle.frf/>\n\
                cargo xtask verify corpus <conformance-dir>\n\
                cargo xtask regen corpus <conformance-dir>\n\
-               cargo xtask experiment [OUT.json] [--no-check]\n"
+               cargo xtask experiment [OUT.json] [--no-check]\n\
+               cargo xtask external-experiment [OUT.json] [--no-check]\n"
         );
         std::process::exit(2);
     }
@@ -1514,6 +1516,24 @@ fn main() {
                 }
             }
             experiment::run(repo_root, &out, check);
+        }
+        "external-experiment" => {
+            // The EXTERNAL empirical program: real historical defects across
+            // domains (external-corpus/), measured with the reference engine
+            // (--no-check disables the metric gates).
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let mut out = repo_root
+                .join("golden")
+                .join("work")
+                .join("external-experiment.json");
+            let mut check = true;
+            for a in &args[2..] {
+                match a.as_str() {
+                    "--no-check" => check = false,
+                    other => out = PathBuf::from(other),
+                }
+            }
+            experiment_external::run(repo_root, &out, check);
         }
         other => {
             eprintln!("unknown mode {other:?}");

@@ -99,6 +99,9 @@ jobs:
       - name: The empirical program — seeded mutations over the cross-domain corpus
         run: |
           cargo xtask experiment golden/work/experiment.json
+      - name: The external empirical program — real historical defects across domains
+        run: |
+          cargo xtask external-experiment golden/work/external-experiment.json
 
   go-verifier:
     name: "Go verifier: the third triangle point"

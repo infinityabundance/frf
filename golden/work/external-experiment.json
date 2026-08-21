@@ -1,0 +1,275 @@
+{
+  "cases": [
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "exit",
+          "stderr"
+        ]
+      ],
+      "claim_on_defect": [
+        false,
+        []
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-ssl-handshake-check-9ed745d8c4990ff07ec5d9f988d68548bdaa5668a550be8332134becdc205158",
+      "domain": "cli",
+      "evidence_bytes": 7443,
+      "id": "goto-fail",
+      "minimization": {
+        "attempts": 4,
+        "final_lines": "2",
+        "minimality": {
+          "granularity": "line",
+          "kind": "one-minimal",
+          "proven": true
+        },
+        "original_lines": "2",
+        "reduction": "ebafdafec337c76b91ace9f03b613fde3308467120c7c64a61b96696a227ca8d",
+        "residual": "cli-exit-0001"
+      },
+      "name": "Apple Secure Transport 'goto fail'",
+      "replays_ok": 3,
+      "residual_axes": [
+        "exit",
+        "stderr"
+      ],
+      "residual_surfaces": [
+        "",
+        "first-diagnostic-line"
+      ]
+    },
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "stdout",
+          "exit"
+        ]
+      ],
+      "claim_on_defect": [
+        true,
+        [
+          "exit"
+        ]
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-env-import-check-18d241890a458ac0e8a9b489751b1c373aad93285b8aa8b0ca860f22fb52246d",
+      "domain": "cli",
+      "evidence_bytes": 6303,
+      "id": "shellshock",
+      "minimization": {
+        "attempts": 3,
+        "final_lines": "1",
+        "minimality": {
+          "granularity": "line",
+          "kind": "one-minimal",
+          "proven": true
+        },
+        "original_lines": "2",
+        "reduction": "0bcbb0318e7e3f0d13875c2669a81907bda3db1929290903bd2164c131d05eb4",
+        "residual": "cli-text-0001"
+      },
+      "name": "bash 'Shellshock'",
+      "replays_ok": 3,
+      "residual_axes": [
+        "stdout"
+      ],
+      "residual_surfaces": [
+        "first-stdout-line"
+      ]
+    },
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "bytes.wire"
+        ]
+      ],
+      "claim_on_defect": [
+        false,
+        []
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-heartbeat-responder-05f8c2e7220e611e2c8e7322067c921f407d017d493cab4c06da9192e328e17f",
+      "domain": "wire",
+      "evidence_bytes": 6181,
+      "id": "heartbleed",
+      "minimization": null,
+      "name": "OpenSSL 'Heartbleed'",
+      "replays_ok": 3,
+      "residual_axes": [
+        "bytes.wire"
+      ],
+      "residual_surfaces": [
+        ""
+      ]
+    },
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "structured.state"
+        ]
+      ],
+      "claim_on_defect": [
+        false,
+        []
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-lookup-resolver-a2ba39920a8fc3d82d25f729ef584a9ccf8b88464978ae8c990b0644e12a768b",
+      "domain": "state",
+      "evidence_bytes": 6130,
+      "id": "log4shell",
+      "minimization": null,
+      "name": "Log4j 'Log4Shell'",
+      "replays_ok": 3,
+      "residual_axes": [
+        "structured.state"
+      ],
+      "residual_surfaces": [
+        "$.resolved"
+      ]
+    },
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "structured.state"
+        ]
+      ],
+      "claim_on_defect": [
+        false,
+        []
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-thruster-command-1defb59f616e90a57ebc567a2dad2b3898bafbb61bb47b9e558cf87473dd725e",
+      "domain": "state",
+      "evidence_bytes": 6076,
+      "id": "mars-climate-orbiter",
+      "minimization": null,
+      "name": "Mars Climate Orbiter unit mismatch",
+      "replays_ok": 3,
+      "residual_axes": [
+        "structured.state"
+      ],
+      "residual_surfaces": [
+        "$.impulse_n_s"
+      ]
+    },
+    {
+      "challenge_passed": true,
+      "claim_on_clean": [
+        true,
+        [
+          "structured.state"
+        ]
+      ],
+      "claim_on_defect": [
+        false,
+        []
+      ],
+      "clean_run_residuals": 0,
+      "defect_run": "run-date-parser-2295cd14f863ed16a999ba89e0fb2692e6a0acba05f8ba5e6eaa88a00d8b2c8b",
+      "domain": "state",
+      "evidence_bytes": 6027,
+      "id": "two-digit-year",
+      "minimization": null,
+      "name": "The two-digit-year (Y2K) date bug",
+      "replays_ok": 3,
+      "residual_axes": [
+        "structured.state"
+      ],
+      "residual_surfaces": [
+        "$.date"
+      ]
+    }
+  ],
+  "challenge": {
+    "courts_challenged": 6,
+    "insensitive": [],
+    "sensitivity_proven": 6
+  },
+  "claims": {
+    "claims_compiled_scoped_to_clean_axes": 1,
+    "clean_runs": 6,
+    "compiled_on_clean": 6,
+    "defect_runs": 6,
+    "inflated": 0,
+    "inflated_cases": [],
+    "scope_coverage_misses": []
+  },
+  "corpus": {
+    "cases": 6,
+    "domains": [
+      "cli",
+      "wire",
+      "state"
+    ]
+  },
+  "defect_discovery": {
+    "detected": 6,
+    "historical_defects": 6,
+    "rate": 1.0,
+    "undetected": []
+  },
+  "evidence_overhead": {
+    "baseline_bytes": 288,
+    "frf_bytes": 38160,
+    "per_case_bytes": {
+      "goto-fail": 7443,
+      "heartbleed": 6181,
+      "log4shell": 6130,
+      "mars-climate-orbiter": 6076,
+      "shellshock": 6303,
+      "two-digit-year": 6027
+    },
+    "ratio": 132.5
+  },
+  "minimization": [
+    {
+      "attempts": 4,
+      "case": "goto-fail",
+      "final_lines": "2",
+      "minimality": {
+        "granularity": "line",
+        "kind": "one-minimal",
+        "proven": true
+      },
+      "original_lines": "2",
+      "reduction": "ebafdafec337c76b91ace9f03b613fde3308467120c7c64a61b96696a227ca8d",
+      "residual": "cli-exit-0001"
+    },
+    {
+      "attempts": 3,
+      "case": "shellshock",
+      "final_lines": "1",
+      "minimality": {
+        "granularity": "line",
+        "kind": "one-minimal",
+        "proven": true
+      },
+      "original_lines": "2",
+      "reduction": "0bcbb0318e7e3f0d13875c2669a81907bda3db1929290903bd2164c131d05eb4",
+      "residual": "cli-text-0001"
+    }
+  ],
+  "replay": {
+    "attempts": 18,
+    "reproduced": 18,
+    "stability": 1.0
+  },
+  "schema_version": "frf-external-experiment-v1",
+  "specificity": {
+    "clean_runs": 6,
+    "false_positive_cases": [],
+    "false_positives": 0,
+    "rate": 1.0
+  }
+}

@@ -287,7 +287,7 @@ const TIMING_COMPARATOR: &str = "#!/usr/bin/env python3\n# timing envelope compa
 // Harness plumbing
 // ---------------------------------------------------------------------------
 
-fn dir_size(path: &Path) -> u64 {
+pub(crate) fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     if path.is_file() {
         return path.metadata().map(|m| m.len()).unwrap_or(0);
@@ -820,7 +820,7 @@ fn admit(frf: &Path, corpus: &Path, path: &str, name: &str, version: &str) {
 
 /// The frf reference-engine binary: `FRF_BIN` env, else
 /// `<repo>/target/release/frf`.
-fn frf_bin(repo_root: &Path) -> PathBuf {
+pub(crate) fn frf_bin(repo_root: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("FRF_BIN") {
         return PathBuf::from(path);
     }
