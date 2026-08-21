@@ -24,8 +24,9 @@
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+mod experiment;
 mod jcs;
 mod rederive;
 mod regen;
@@ -807,41 +808,76 @@ fn sorted_names(dir: &Path) -> Vec<String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 4 {
+    if args.len() < 2 {
         eprintln!(
-            "xtask — the independent FRF verifier\n\n\
-             usage:\n  cargo xtask verify bundle <bundle.frf/>\n  cargo xtask verify corpus <conformance-dir>\n  cargo xtask regen corpus <conformance-dir>"
+            "xtask — the independent FRF verifier + the empirical program\n\n\
+             usage:\n\
+               cargo xtask verify bundle <bundle.frf/>\n\
+               cargo xtask verify corpus <conformance-dir>\n\
+               cargo xtask regen corpus <conformance-dir>\n\
+               cargo xtask experiment [OUT.json] [--no-check]\n"
         );
         std::process::exit(2);
     }
     let result = std::panic::catch_unwind(|| match args[1].as_str() {
-        "verify" => match args[2].as_str() {
-            "bundle" => {
-                let path = Path::new(&args[3]);
-                if path.is_file() {
-                    // A single-file bundle: verify from a temp extraction;
-                    // the archive itself is never mutated.
-                    let bytes = read(path);
-                    let temp = TempRoot::new();
-                    extract_tar(&bytes, &temp.0);
-                    let _ = verify_bundle(&temp.0, "single-tar");
-                } else {
-                    let _ = verify_bundle(path, "directory");
+        "verify" => {
+            if args.len() < 4 {
+                eprintln!("xtask: verify needs a target argument");
+                std::process::exit(2);
+            }
+            match args[2].as_str() {
+                "bundle" => {
+                    let path = Path::new(&args[3]);
+                    if path.is_file() {
+                        // A single-file bundle: verify from a temp extraction;
+                        // the archive itself is never mutated.
+                        let bytes = read(path);
+                        let temp = TempRoot::new();
+                        extract_tar(&bytes, &temp.0);
+                        let _ = verify_bundle(&temp.0, "single-tar");
+                    } else {
+                        let _ = verify_bundle(path, "directory");
+                    }
+                }
+                "corpus" => verify_corpus(Path::new(&args[3])),
+                other => {
+                    eprintln!("unknown verify target {other:?}");
+                    std::process::exit(2);
                 }
             }
-            "corpus" => verify_corpus(Path::new(&args[3])),
-            other => {
-                eprintln!("unknown verify target {other:?}");
+        }
+        "regen" => {
+            if args.len() < 4 {
+                eprintln!("xtask: regen needs a target argument");
                 std::process::exit(2);
             }
-        },
-        "regen" => match args[2].as_str() {
-            "corpus" => regen::regen_corpus(Path::new(&args[3])),
-            other => {
-                eprintln!("unknown regen target {other:?}");
-                std::process::exit(2);
+            match args[2].as_str() {
+                "corpus" => regen::regen_corpus(Path::new(&args[3])),
+                other => {
+                    eprintln!("unknown regen target {other:?}");
+                    std::process::exit(2);
+                }
             }
-        },
+        }
+        "experiment" => {
+            // The empirical program: seeded mutations over the cross-domain
+            // corpus, measured against conventional suites (drives the
+            // reference-engine binary as a subprocess; --no-check disables
+            // the metric gates).
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let mut out = repo_root
+                .join("golden")
+                .join("work")
+                .join("experiment.json");
+            let mut check = true;
+            for a in &args[2..] {
+                match a.as_str() {
+                    "--no-check" => check = false,
+                    other => out = PathBuf::from(other),
+                }
+            }
+            experiment::run(repo_root, &out, check);
+        }
         other => {
             eprintln!("unknown mode {other:?}");
             std::process::exit(2);

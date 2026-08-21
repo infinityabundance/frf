@@ -1,5 +1,5 @@
 schema_version: frf-capture-v9
-run: run-cli-malformed-input-58dc30fde842ad157b4345821f972c43737c2b084bfc78491c5d560b792615ca
+run: run-cli-malformed-input-7c085ad17ae9273b783fe3f25845627996119fc807451604c4bb3e07f62d9851
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest.yaml
@@ -27,7 +27,7 @@ court_spec:
     name: cand-cli
     version_or_commit: 0.1.0
     build_profile: debug
-    path: frf/challenges/.mutant-stderr-first-line-2818141-1787290914232518710.sh
+    path: frf/challenges/.mutant-stderr-first-line-2846722-1787293520046643529.sh
   fixture:
     id: malformed-path.conf
     path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
@@ -60,15 +60,15 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.27
-    frf_executable_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    frf_version: 0.1.28
+    frf_executable_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
   comparator_implementations:
   - id: exit
-    implementation_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
-    runner_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    implementation_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+    runner_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
   - id: stderr
-    implementation_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
-    runner_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    implementation_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+    runner_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
