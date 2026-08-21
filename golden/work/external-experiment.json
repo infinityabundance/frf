@@ -14,7 +14,7 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-ssl-handshake-check-51dae85b097a4373c74b36673c470b104fce22040a77b9ad100a3d60cb2c058a",
+      "defect_run": "run-ssl-handshake-check-43c90e8f57f3fc62468b0d2db2cb6e1ed8fc4b162e66d31b0faf75e6bf66357d",
       "domain": "cli",
       "evidence_bytes": 7443,
       "id": "goto-fail",
@@ -27,7 +27,7 @@
           "proven": true
         },
         "original_lines": "2",
-        "reduction": "347fa6a0251623578414dc150df445803ffe1fae9ca65183c31d49962711423b",
+        "reduction": "3511dca0cb2053773a4d5f190302c65c62379d0885027a2d987668677f7f9ed2",
         "residual": "cli-exit-0001"
       },
       "name": "Apple Secure Transport 'goto fail'",
@@ -57,7 +57,7 @@
         ]
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-env-import-check-7c695a74442436e0fd7abdb200e0eafa7b3b8192a3a7bfcd43e1e3bde783f2b6",
+      "defect_run": "run-env-import-check-ff6f38a871c99c8c81cd560d83d2128b726e550e6c28393a4505fbfaa27ed82d",
       "domain": "cli",
       "evidence_bytes": 6303,
       "id": "shellshock",
@@ -70,7 +70,7 @@
           "proven": true
         },
         "original_lines": "2",
-        "reduction": "cb648f0072c4e8633fab1c917c51749232c5d185521d161eee64b489bcad5904",
+        "reduction": "b4400d10c27333b5666e2f0b56dc22ed5274597a58b46231e8557b45b9010a79",
         "residual": "cli-text-0001"
       },
       "name": "bash 'Shellshock'",
@@ -95,7 +95,7 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-heartbeat-responder-0ab48c78a6313c1ec3fbe5544cfeac8e1e60abb9848303177bd1ca0e6e1b0aba",
+      "defect_run": "run-heartbeat-responder-35fc927cbad567317ca7f928b7fc046031e7fd66a54f1d56f6cc66d5ed9f2690",
       "domain": "wire",
       "evidence_bytes": 6181,
       "id": "heartbleed",
@@ -122,7 +122,7 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-lookup-resolver-c9650d7e6450938f4fea269875684a612cec70819c1005a7f68e0a774cb9b259",
+      "defect_run": "run-lookup-resolver-71504c45c043f9b9d052462f42ea21dd637dc72a4df8a548b15240d7c0dd0ee4",
       "domain": "state",
       "evidence_bytes": 6130,
       "id": "log4shell",
@@ -149,7 +149,7 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-thruster-command-79196bb4406ce4c0c59cbba1d9e4ee493b638d60b2a26659d67db14e200d79b1",
+      "defect_run": "run-thruster-command-f8b977b9a1fc1840ca67a8e8be7031de5f552dcc118ea61bffcd8e6594901765",
       "domain": "state",
       "evidence_bytes": 6076,
       "id": "mars-climate-orbiter",
@@ -176,7 +176,7 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-date-parser-3005a1c1138a8a7df3bf4939e8b849fdc7f01aa0e72959b2457d05dd672d09ab",
+      "defect_run": "run-date-parser-40e2fb7e94c154286ef2d471faed0252b832464ea4107106146e5b84f89e0122",
       "domain": "state",
       "evidence_bytes": 6027,
       "id": "two-digit-year",
@@ -243,7 +243,7 @@
         "proven": true
       },
       "original_lines": "2",
-      "reduction": "347fa6a0251623578414dc150df445803ffe1fae9ca65183c31d49962711423b",
+      "reduction": "3511dca0cb2053773a4d5f190302c65c62379d0885027a2d987668677f7f9ed2",
       "residual": "cli-exit-0001"
     },
     {
@@ -256,7 +256,7 @@
         "proven": true
       },
       "original_lines": "2",
-      "reduction": "cb648f0072c4e8633fab1c917c51749232c5d185521d161eee64b489bcad5904",
+      "reduction": "b4400d10c27333b5666e2f0b56dc22ed5274597a58b46231e8557b45b9010a79",
       "residual": "cli-text-0001"
     }
   ],

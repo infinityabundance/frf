@@ -101,6 +101,23 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 json,
                 policy,
             } => claim::run(store, &receipt, json, &policy),
+            ClaimCmd::Render { receipt, format } => {
+                // The renderers are PURE functions of the compiled Claim IR:
+                // the claim file (canonical JSON) is loaded and verified
+                // (schema + binding) and rendered without any re-derivation.
+                let path = store.claim_path(&receipt).map_err(|e| {
+                    crate::error::FrfError::new(format!("invalid claim render target: {e}"))
+                })?;
+                if !path.is_file() {
+                    return Err(crate::error::FrfError::new(format!(
+                        "no compiled claim for receipt '{receipt}': run `frf claim compile {receipt}` first — the renderers present the compiled IR"
+                    )));
+                }
+                let claim: crate::model::ClaimRecord = store.parse_evidence(&path)?;
+                let out = crate::render::render(&claim, &format, env!("CARGO_PKG_VERSION"))?;
+                println!("{out}");
+                Ok(())
+            }
         },
         Command::Replay { id, policy } => {
             // Tree replay: the sides execute from the invocation cwd, so the

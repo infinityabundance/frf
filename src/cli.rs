@@ -212,6 +212,17 @@ pub enum ClaimCmd {
         #[arg(long, default_value = "baseline")]
         policy: String,
     },
+    /// Render a COMPILED claim into a presentation format (prose, json,
+    /// sarif, ci, badge). The renderers are pure functions of the Claim IR
+    /// — presentation only, never new epistemic meaning; the claim must
+    /// already be compiled (`claims/<receipt>.json`)
+    Render {
+        /// Receipt id (printed by `frf receipt emit`); the claim must exist
+        receipt: String,
+        /// The presentation format
+        #[arg(long, value_name = "prose|json|sarif|ci|badge")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]

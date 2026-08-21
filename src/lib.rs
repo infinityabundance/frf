@@ -18,6 +18,7 @@ pub mod model;
 pub mod mutation;
 pub mod normalizers;
 pub mod produced;
+pub mod render;
 pub mod scope;
 pub mod semantics;
 pub mod sentences;
