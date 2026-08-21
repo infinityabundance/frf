@@ -169,7 +169,15 @@ pub struct ProcessOutcome {
 /// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
 /// before failing; everything else fails immediately.
 pub fn run_process(program: &Path, args: &[String]) -> Result<ProcessOutcome> {
-    run_impl(program, args, None)
+    run_impl(program, args, None, None)
+}
+
+/// [`run_process`] with a declared working directory: the side runs from
+/// `cwd`, so recorded root-relative argv paths resolve against the layout
+/// the replay reconstructed (bundle replay executes sides from the temp
+/// invocation root, never from the user's cwd).
+pub fn run_process_in(program: &Path, args: &[String], cwd: &Path) -> Result<ProcessOutcome> {
+    run_impl(program, args, None, Some(cwd))
 }
 
 /// Execute `program` with `args` and the given bytes on stdin (used by the
@@ -183,15 +191,34 @@ pub fn run_process_with_stdin(
     args: &[String],
     stdin: &[u8],
 ) -> Result<ProcessOutcome> {
-    run_impl(program, args, Some(stdin))
+    run_impl(program, args, Some(stdin), None)
 }
 
-fn run_impl(program: &Path, args: &[String], stdin: Option<&[u8]>) -> Result<ProcessOutcome> {
+/// [`run_process_with_stdin`] with a declared working directory (bundle
+/// replay invokes the snapshotted comparator from the reconstructed root).
+pub fn run_process_with_stdin_in(
+    program: &Path,
+    args: &[String],
+    stdin: &[u8],
+    cwd: &Path,
+) -> Result<ProcessOutcome> {
+    run_impl(program, args, Some(stdin), Some(cwd))
+}
+
+fn run_impl(
+    program: &Path,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    cwd: Option<&Path>,
+) -> Result<ProcessOutcome> {
     // Every side runs in its own process group (unix) so the harness can
     // terminate the entire tree — direct process plus any descendants that
     // inherited the capture pipes — when the side exits, times out, or
     // overflows its capture cap.
     let mut command = Command::new(program);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     command
         .args(args)
         .stdin(if stdin.is_some() {

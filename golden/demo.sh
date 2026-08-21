@@ -107,6 +107,20 @@ BUNDLE=golden/work/portable.frf
 # and trajectory records the receipt's evidence participates in).
 (cd golden/work && "$FRF_BIN" bundle verify portable.frf)
 
+step "7b. the single-file bundle — one sealed archive, verified and replayed alone"
+# The same evidence graph sealed as ONE deterministic tar archive (the
+# manifest inside declares the container). Verification never depends on
+# where it runs; replay from a foreign directory is a SEMANTIC reproduction
+# (the working directory is part of the execution provenance, so the foreign
+# cwd is admitted and reported), and exact replay works from the bundle
+# alone from the observation's own cwd. No tree, no exporting installation.
+BUNDLE_SINGLE=golden/work/portable-single.frf
+"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE_SINGLE" --single
+(cd golden/work && \
+  "$FRF_BIN" bundle verify portable-single.frf && \
+  "$FRF_BIN" bundle replay portable-single.frf --policy semantic)
+"$FRF_BIN" bundle replay "$BUNDLE_SINGLE" --policy exact
+
 step "8. minimization — the routed reducer turns the failure into a reproducer"
 # The exit residual's kappa token routes to cli-exit-minimize; deterministic
 # ddmin reduces the fixture (holding candidate/authority/comparator/

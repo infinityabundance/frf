@@ -172,8 +172,23 @@ pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
 /// Bundle manifest schema (OpenReceipt bundle: the receipt + its portable
 /// object closure — see `spec/openreceipt.md`). v2 closure: the admitted
 /// authority record is part of the evidence graph the receipt cites, so it
-/// travels with the bundle.
-pub const SCHEMA_BUNDLE: &str = "frf-bundle-v2";
+/// is included as an `authority` inventory entry, and the capture's typed
+/// EVIDENCE REFERENCES
+/// drive the object closure (authority/candidate/fixture snapshots AND every
+/// external comparator implementation) — adding an evidence kind needs no
+/// closure-walker edit. v3 declares the bundle's own CONTAINER form
+/// (`directory` or `single-tar`): the same manifest + closure layout is the
+/// protocol, whether it lives as a tree of files or sealed as one
+/// deterministic tar archive with the manifest inside.
+pub const SCHEMA_BUNDLE: &str = "frf-bundle-v3";
+
+/// The bundle container forms. A bundle is the same evidence graph either
+/// way: a `directory` tree, or a `single-tar` archive carrying the identical
+/// layout (manifest.json at its root). The manifest declares its own
+/// container, and a verifier refuses a mismatch (a directory whose manifest
+/// claims to be a tar, or vice versa).
+pub const BUNDLE_CONTAINER_DIRECTORY: &str = "directory";
+pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 
 /// Residual trajectory schema v2: the trajectory's SUBJECT is the residual
 /// LINEAGE identity (stable across candidate revisions, authority versions,

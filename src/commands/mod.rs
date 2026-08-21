@@ -86,19 +86,37 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             ClaimCmd::Compile { receipt, json } => claim::run(store, &receipt, json),
         },
         Command::Replay { id, policy } => {
-            replay::run(store, &id, &policy)?;
+            // Tree replay: the sides execute from the invocation cwd, so the
+            // recorded argv paths resolve against the tree (whose objects are
+            // verified before execution).
+            let cwd = std::env::current_dir().map_err(|e| {
+                crate::error::FrfError::new(format!("cannot resolve the current directory: {e}"))
+            })?;
+            replay::run(store, &id, &policy, &cwd)?;
             Ok(())
         }
         Command::Bundle { sub } => match sub {
-            BundleCmd::Export { receipt, output } => {
+            BundleCmd::Export {
+                receipt,
+                output,
+                single,
+            } => {
+                let container = if single {
+                    crate::commands::bundle::Container::SingleTar
+                } else {
+                    crate::commands::bundle::Container::Directory
+                };
                 let output = output.unwrap_or_else(|| {
                     std::path::PathBuf::from("bundles").join(format!("{receipt}.frf"))
                 });
-                let path = bundle::export(store, &receipt, &output)?;
+                let path = crate::commands::bundle::export(store, &receipt, &output, container)?;
                 println!("{}", path.display());
                 Ok(())
             }
-            BundleCmd::Verify { path } => bundle::verify(&path),
+            BundleCmd::Verify { path } => crate::commands::bundle::verify(&path),
+            BundleCmd::Replay { path, policy } => {
+                crate::commands::bundle::replay_bundle(&path, &policy)
+            }
         },
     }
 }

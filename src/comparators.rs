@@ -367,8 +367,9 @@ pub fn run_external(
     axis: &ObservableId,
     request_bytes: &[u8],
     request_cid: &str,
+    cwd: &Path,
 ) -> Result<(ComparatorOutcome, Vec<u8>)> {
-    let out = host::run_process_with_stdin(snapshot, &[], request_bytes)?;
+    let out = host::run_process_with_stdin_in(snapshot, &[], request_bytes, cwd)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",
