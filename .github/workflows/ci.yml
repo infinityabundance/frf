@@ -8,6 +8,11 @@
 #                 artifacts drift from the code, this fails); the demo job
 #                 additionally regenerates the tree, verifies it, and runs
 #                 the independent xtask verifier against the bundle + corpus
+#   go-verifier - the THIRD triangle point: a Go implementation that shares
+#                 no parsing library with either Rust implementation runs
+#                 gofmt/vet/tests and passes the conformance corpus on the
+#                 checked-in corpus; the demo job additionally runs it
+#                 against the freshly regenerated bundle + corpus
 #   fuzzing     - libFuzzer smoke runs of all three targets (yaml_types,
 #                 cli_args, store_ids) under nightly
 #
@@ -84,9 +89,36 @@ jobs:
           cargo xtask verify bundle golden/work/portable.frf
           cargo xtask verify bundle golden/work/portable-single.frf
           cargo xtask verify corpus conformance
+      - name: The Go verifier agrees on the regenerated bundle + corpus
+        working-directory: verifier-go
+        run: |
+          go test ./...
+          go run . verify bundle ../golden/work/portable.frf
+          go run . verify bundle ../golden/work/portable-single.frf
+          go run . verify corpus ../conformance
       - name: The empirical program — seeded mutations over the cross-domain corpus
         run: |
           cargo xtask experiment golden/work/experiment.json
+
+  go-verifier:
+    name: "Go verifier: the third triangle point"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: verifier-go
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: verifier-go/go.mod
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Tests (corpus pins + bundle tests when the golden bundle is present)
+        run: go test ./...
+      - name: The Go verifier passes the conformance corpus
+        run: go run . verify corpus ../conformance
 
   fuzz:
     name: libFuzzer smoke

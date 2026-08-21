@@ -78,7 +78,7 @@ Three suites, mirroring the framework's own discipline:
 | verification | `cargo test --test verify_tree` | walks the checked-in `frf/` tree and re-derives every artifact with the tool's own pure functions — authority hashes, raw-capture hashes, κ tokens, content-addressed receipt ids (re-serialized as canonical RFC 8785 JSON), and claim sentences byte-for-byte. The tree is *self-authenticating*: every capture and receipt is consumed through the verified loaders, which rederive run identities and receipt ids from recorded fields and refuse any drift. Fails if any generated file was hand-edited. The canonicalizer itself is pinned against the RFC's own vectors plus a cross-implementation hash in `src/canon.rs` |
 | fuzzing | `cargo test --test fuzz` (deterministic, seeded, runs in CI) · `cargo +nightly fuzz run yaml_types\|cli_args\|store_ids` (libFuzzer, corpus-guided) | the negative controls: the YAML manifest parser and the canonical-JSON evidence deserializers never panic and never produce a forbidden disposition state, the CLI parser never panics, and ids that pass validation can never escape the store root |
 | conformance | `cargo test --test conformance` | walks the OpenReceipt protocol corpus in `conformance/` at TWO levels: **structural** — every `valid/` fixture must parse, deserialize, canonicalize to the pinned bytes, and hash to the pinned digest; `invalid/` fixtures must be refused; the JSON Schema (`spec/openreceipt.schema.json`) is enforced, including the closed disposition set and the schema version — and **semantic** — every `invalid-semantic/` fixture (structurally valid, semantically broken) must fail `validate_semantics`: disposition cross-field rules, rederivable environment digest + court semantic identity, verdict consistency, replay target, κ-token rederivation, interpreter-chain consistency, argv/declared-argument correspondence |
-| independent | `cargo test --test independent` · `cargo xtask verify corpus conformance` · `cargo xtask verify bundle golden/work/portable.frf` | the protocol-separation milestone: a deliberately small SECOND implementation of FRF (`cargo xtask verify`, xtask/, Rust, no execution, no dependency on the frf library) must agree with the Rust reference engine on the same corpus and the same bundle — canonical bytes, pinned hashes, structural + semantic refusals (duplicate property names refused per RFC 8785 I-JSON; unknown properties refused per schema key sets), rederived run/court/fingerprint/event identities, κ tokens, disposition-event chains, trajectory signs reclassified from the observations, resolution edges, and the admissible Claim IR — and must refuse a tampered bundle. Two implementations agreeing on one bundle is the difference between a protocol and a Rust file format |
+| independent | `cargo test --test independent` · `cargo xtask verify corpus conformance` · `cargo xtask verify bundle golden/work/portable.frf` · `go test ./verifier-go/...` · `go run ./verifier-go verify bundle golden/work/portable.frf` | the protocol-separation milestone: TWO deliberately small SECOND implementations of FRF must agree with the Rust reference engine on the same corpus and the same bundle. The Rust xtask verifier (`cargo xtask verify`, xtask/, no execution, no dependency on the frf library) rederives canonical bytes, pinned hashes, structural + semantic refusals (duplicate property names refused per RFC 8785 I-JSON; unknown properties refused per schema key sets), run/court/fingerprint/event identities, κ tokens, disposition-event chains, trajectory signs, resolution edges, and the admissible Claim IR. The GO verifier (verifier-go/, same contract, sharing no parsing library with either Rust implementation — it parses evidence with its own strict JSON reader and its own RFC 8785 encoder, not even `encoding/json`) must reach the same verdicts on the same corpus and the same bundles. Three implementations agreeing on one bundle is the difference between a protocol and a Rust file format |
 | empirical | `make experiment` · `cargo xtask experiment golden/work/experiment.json` | the empirical program (spec/empirical-program.md): seeded mutations over the cross-domain corpus (CLI, filesystem tree, byte/wire, structured state, timing — 7 seeded defects + 5 clean controls), measured against conventional suites — defect discovery (every seed detected), specificity (zero false positives), claim inflation (no claim covers a seeded-defect axis; every clean claim is bounded), minimization cost (ddmin attempts + reduction), replay stability (36/36 byte-identical replays), and evidence overhead (FRF bytes vs a pass/fail baseline). Exits non-zero if any measurement violates the standards |
 
 `make test`, `make verify`, and `make fuzz-iters` wrap the same commands
@@ -104,49 +104,63 @@ frf/
   claims/        compiled claims, written only by `frf claim compile`
 ```
 
-`cargo xtask verify` (xtask/) is the independent second implementation (Rust,
-no execution, no dependency on the `frf` library): it verifies bundles and
-runs the conformance corpus without any frf installation, so a bundle's
+`cargo xtask verify` (xtask/) and `frf-verifier-go` (verifier-go/) are two
+independent implementations (Rust without the frf library; Go without any
+shared parsing library), neither executing anything: both verify bundles and
+run the conformance corpus without any frf installation, so a bundle's
 evidence graph can be authenticated on a machine that never built the
 reference engine.
 
 ## Independent verifier
 
-FRF is a protocol, not a Rust file format, only if a second implementation can
-take the same evidence and reach the same verdict. `cargo xtask verify` is
-that second implementation, deliberately small and deliberately boring:
+FRF is a protocol, not a Rust file format, only if an independent implementation
+can take the same evidence and reach the same verdict. There are now TWO
+independent implementations, each deliberately small and deliberately boring:
 
-- **No execution, no dependency.** It never spawns a court, a comparator, or a
-  candidate, and its crate depends on nothing from the reference engine. It
-  loads a bundle and rederives everything: the RFC 8785 canonical bytes and
-  pinned hashes of every receipt (hashed as the DOCUMENT — strict I-JSON
-  parsing refuses duplicate property names, and every object is checked
-  against its schema's key set, mirroring `deny_unknown_fields`), the run
-  identity from the capture's own recorded fields, the court semantic
-  identity, residual fingerprints, κ tokens and `blocks_claims`,
-  disposition-event chains (content-addressed, parent-hashed), trajectory
-  signs (the drift/slew classification REDERIVES from the observations — it
-  is not read from the file), resolution edges, and the admissible Claim IR
-  with the full scope algebra.
+- **`cargo xtask verify`** (xtask/, Rust) — no execution, no dependency on the
+  reference engine's library. It loads a bundle and rederives everything: the
+  RFC 8785 canonical bytes and pinned hashes of every receipt (hashed as the
+  DOCUMENT — strict I-JSON parsing refuses duplicate property names, and every
+  object is checked against its schema's key set, mirroring
+  `deny_unknown_fields`), the run identity from the capture's own recorded
+  fields, the court semantic identity, residual fingerprints, κ tokens and
+  `blocks_claims`, disposition-event chains (content-addressed, parent-hashed),
+  trajectory signs (the drift/slew classification REDERIVES from the
+  observations — it is not read from the file), resolution edges, and the
+  admissible Claim IR with the full scope algebra.
+- **`frf-verifier-go`** (verifier-go/, Go) — the same contract, written in a
+  genuinely different ecosystem. It shares not a single parsing library with
+  either Rust implementation: it never reads court manifests, and it parses
+  every evidence document as strict canonical JSON with its OWN RFC 8785
+  encoder (duplicate property names refused, UTF-16 code-unit key sorting,
+  numbers refused at canonical encode — the FRF value domain), not even
+  `encoding/json`. Given only `conformance/` + a bundle, it rederives the same
+  JCS bytes, the same CIDs, the same run/court/fingerprint identities, the same
+  κ tokens, the same disposition chains, the same knowledge-snapshot root, and
+  the same admissible Claim IR.
+
+Both verifiers share the same two oracles:
+
 - **Same corpus, same verdict.** The structural (`conformance/invalid/`) and
   semantic (`conformance/invalid-semantic/`) corpora are the shared oracle:
-  the Rust engine and the xtask verifier must both accept every `valid/`
-  fixture byte-for-byte (canonical form + digest) and refuse every `invalid*/`
-  fixture. `cargo xtask verify corpus conformance` is that check.
-- **Same bundle, same claim set.** `cargo xtask verify bundle <dir>` verifies
-  a portable bundle against itself — manifest hash proof, receipt
-  content-addressing, capture run-identity rederivation, side-file rehash,
-  event-chain/sign/token rederivation, resolution-edge verification, closure
-  completeness — and prints the Claim IR the Rust claim compiler would
-  license. A tampered bundle is refused with the corruption named.
+  the Rust engine, the xtask verifier, and the Go verifier must ALL accept
+  every `valid/` fixture byte-for-byte (canonical form + digest) and refuse
+  every `invalid*/` fixture. `cargo xtask verify corpus conformance` and
+  `go run ./verifier-go verify corpus conformance` are that check.
+- **Same bundle, same claim set.** `cargo xtask verify bundle <dir>` and
+  `go run ./verifier-go verify bundle <dir>` each verify a portable bundle
+  against itself — manifest hash proof, receipt content-addressing, capture
+  run-identity rederivation, side-file rehash, event-chain/sign/token
+  rederivation, resolution-edge verification, closure completeness — and print
+  the Claim IR the Rust claim compiler would license. A tampered bundle is
+  refused with the corruption named.
 
-The integration suite (`tests/independent.rs`) runs all three properties in
-CI: the verifier accepts the golden bundle, passes the corpus, and refuses a
-tampered bundle. The demo job additionally runs `cargo xtask verify` against
-the regenerated bundle and corpus. The verifier shares not a single parsing
-library with the reference engine: it reads court manifests never, and all
-evidence as strict canonical JSON with its own reader (serde_json), so the
-conformance triangle is over bytes, not over a shared parser.
+The integration suite (`tests/independent.rs`) runs the Rust verifier's three
+properties in CI: it accepts the golden bundle, passes the corpus, and refuses
+a tampered bundle. The demo job additionally runs `cargo xtask verify` AND the
+Go verifier against the regenerated bundle and corpus, so the conformance
+triangle — Rust reference engine, Rust xtask verifier, Go verifier — is over
+bytes, not over a shared parser.
 
 ## Dogfood
 
