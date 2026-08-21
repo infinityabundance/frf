@@ -56,7 +56,7 @@ Allow five minutes; it takes about five seconds.
 | `frf court challenge MANIFEST [--operators exit-class,stderr-first-line,…]` | the negative controls (spec/challenge.md + spec/mutation.md): a passing court proves nothing unless it can SEE the defect classes it declares. For every built-in mutation operator whose targeted axis the court declares (default) or the requested set, the challenge runs the court against a MUTANT candidate — a deterministic wrapper of the admitted reference that alters exactly one observable dimension (`exit-class`, `stderr-first-line`, `stdout-first-line`; the wrapper resolves the reference relative to itself, so the mutant bytes are root-independent and rederivable) — and requires a divergence on the targeted axis and ONLY on it. Domain surfaces are covered by DECLARED EXTERNAL MUTATION PROVIDERS (`mutations:`, spec/mutation.md): the provider receives the court's question + the exact reference and fixture artifacts (canonical JSON request) and PROPOSES one mutant candidate; the court runs the proposal and independently derives the verdicts from the run — the extension proposes, the court decides, and the proposal's request/response/invocation/result evidence is preserved under `challenges/<id>/mutation/` and cross-verified on read. Each challenge writes a content-addressed `CourtChallenge` (`challenges/<id>.json`; the verdicts `saw_defect`/`specificity_clean` rederive from the run, never from the file); the mutant runs are ordinary content-addressed runs that replay like any other. A court that is BLIND to a seeded defect, or conflates it with another axis, is refused — the records remain as evidence, the command exits non-zero |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable, content-addressed disposition EVENT to `residuals/<id>.events/` (`fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`); a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). Events are hash-chained: each carries its own `event_id` (SHA-256 of its content), its `parent_event_id`, and its `evidence_refs` (the resolution run). The observation file is never rewritten; the current disposition is the projection of the last event |
 | `frf receipt emit RUN_ID` | binds court + authority + candidate + fixture + captures + residuals + dispositions into an OpenReceipt, written as canonical JSON (RFC 8785) and content-addressed by the full SHA-256 of those canonical bytes; the runner, comparators, artifact, and semantic identities are copied from the capture, never reconstructed, each residual binds the EXACT disposition event (`disposition_event_id`) that supplied its state, and each residual carries TRAJECTORY EVIDENCE per coordinate system (`sign.trajectory_evidence`, OpenReceipt v12) — every entry PINs the exact ExecutionSeries snapshot its drift/slew were derived from — so a receipt points at immutable nodes in the evidence graph, it does not merely copy state. v13 also copies the normalizer relations applied to the compared streams and the normalizer/capture-adapter/minimizer implementations the court bound at observation time. v14 copies the capture-adapter relations (`adapter_semantics`) — the extraction schemes that defined the observations delivered to externally served axes, part of the court's question (FRF/COURT/v2) |
-| `frf claim compile RECEIPT_ID [RECEIPT_ID …] [--json] [--policy baseline\|sensitivity-backed\|independently-witnessed\|high-assurance]` | the only path that can emit a positive claim, and it accepts ONLY *verified* premise receipts (MULTI-PREMISE since v6): each id must equal the SHA-256 of the canonical DOCUMENT (hashed as raw strict JSON — duplicate property names refused, unknown properties refused — never as a typed projection), each document must pass OpenReceipt semantic conformance, and each must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). All premises must bind the SAME authority and the SAME candidate artifact — a claim asserts parity of one candidate against one reference over the surface the premises jointly observed. The full Claim IR is the paper's scope algebra, checked literally: K is a REGION of cells (one per premise's clean surface — a union of Cartesian products is never merged into the product of dimension-wise unions, so no unsupported surface is ever invented), P is the premises' full-surface region, and admission is `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — every point of every K cell must lie in SOME premise cell — plus the absence scan over the committed evidence universe U (the claim carries U, so the negative search is as portable as the premises). `harness` invalidates a premise run; `open`/`unknown` residuals block EXACTLY the claims whose region intersects their surface — wherever the divergence was recorded — so an unexplained divergence on any claimed candidate/axis/fixture/environment blocks even a later passing run, while a divergence about a different candidate or axis never does. An axis a premise observed diverging is never parity from that premise, however its residuals are disposed (the refusal names the resolution run to compile from instead). The claim is compiled under a declared ADMISSION POLICY (spec/claim.md §0), PER PREMISE: `baseline` (observation evidence only), `sensitivity-backed` (every claimed axis of every premise must have CHALLENGE coverage — that premise's court demonstrated it can SEE the surface's defect class: same court semantic identity, same reference artifact, targeted axis, verdicts recomputed from the mutant run), `independently-witnessed` (sensitivity + a verified witness attestation of EVERY premise receipt), `high-assurance` (independently witnessed + every premise observed under the reference execution profile and capture bounds). The compiled claim CARRIES the capability evidence — per-premise per-axis challenge ids, witness ids, the replay profile — so admission re-derives from the claim alone, and the bundle export carries that evidence (every premise receipt and its run, the challenge records and mutant runs, the witness statements + preserved documents). Emits one conservative sentence per premise cell + the non-claim, attributed to the exact candidate artifact the runs executed; `--json` renders the same IR canonically (prose is one renderer) |
+| `frf claim compile RECEIPT_ID [RECEIPT_ID …] [--json] [--policy baseline\|sensitivity-backed\|independently-witnessed\|high-assurance]` | the only path that can emit a positive claim, and it accepts ONLY *verified* premise receipts (MULTI-PREMISE since v6): each id must equal the SHA-256 of the canonical DOCUMENT (hashed as raw strict JSON — duplicate property names refused, unknown properties refused — never as a typed projection), each document must pass OpenReceipt semantic conformance, and each must derive from its verified capture (fingerprints, κ tokens, disposition events, and `fixed` resolution edges re-checked). All premises must bind the SAME authority and the SAME candidate artifact — a claim asserts parity of one candidate against one reference over the surface the premises jointly observed. The full Claim IR is the paper's scope algebra, checked literally: K is a REGION of cells (one per premise's clean surface — a union of Cartesian products is never merged into the product of dimension-wise unions, so no unsupported surface is ever invented), P is the premises' full-surface region, and admission is `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — every point of every K cell must lie in SOME premise cell — plus the absence scan over the committed evidence universe U (the claim carries U, so the negative search is as portable as the premises). `harness` invalidates a premise run; `open`/`unknown` residuals block EXACTLY the claims whose region intersects their surface — wherever the divergence was recorded — so an unexplained divergence on any claimed candidate/axis/fixture/environment blocks even a later passing run, while a divergence about a different candidate or axis never does. An axis a premise observed diverging is never parity from that premise, however its residuals are disposed (the refusal names the resolution run to compile from instead). The claim is compiled under a declared ADMISSION POLICY (spec/claim.md §0), PER PREMISE: `baseline` (observation evidence only), `sensitivity-backed` (every claimed axis of every premise must have CHALLENGE coverage — that premise's court demonstrated it can SEE the surface's defect class: same court semantic identity, same reference artifact, targeted axis, verdicts recomputed from the mutant run), `independently-witnessed` (sensitivity + a verified witness attestation of EVERY premise receipt AND at least one admissible INDEPENDENCE relation per premise — an affirming witness with zero declared independence is witnessed, not independently witnessed), `high-assurance` (independently witnessed + every premise observed under the reference execution profile and the REFERENCE capture bounds — protocol constants that no `FRF_EXEC_*` override can redefine). The compiled claim CARRIES the capability evidence — per-premise per-axis challenge ids, witness ids, independence records, the replay profile — so admission re-derives from the claim alone, and the bundle export carries that evidence (every premise receipt and its run, the challenge records and mutant runs, the witness statements + preserved documents). Emits one conservative sentence per premise cell + the non-claim, attributed to the exact candidate artifact the runs executed; `--json` renders the same IR canonically (prose is one renderer) |
 | `frf claim render RECEIPT_ID --format prose\|json\|sarif\|ci\|badge` | presents a COMPILED claim (refuses when `claims/<receipt>.json` does not exist — the renderers are pure functions of the verified IR, never a new source of meaning): `prose` re-states the compiled sentences, `json` emits the IR canonically, `sarif` emits a SARIF 2.1.0 document (the admissible claim as a `none`-level result carrying the proposition/scope/policy in `properties`, each carried residual as a `note` — or `error` for a blocker — so the claim drops into SARIF-consuming pipelines), `ci` emits the compact gate document (`frf-ci-status-v1`, `status: pass|fail` + scope + premises + blockers), `badge` emits a deterministic shields-style SVG (`admissible · exit`, green). All renderers are byte-deterministic |
 | `frf replay RUN_ID \| RECEIPT_ID [--policy exact\|semantic]` | rederives the run identity from the capture's own recorded fields (the name is a claim until recomputed) and re-executes the exact snapshotted artifacts + captured argv under a checked environment, requiring the observation to reproduce byte-for-byte (identical sides, matching residual fingerprints, no new/missing residuals). Each declared axis is re-observed with the SAME comparator that observed it: a built-in axis rederives its projection; an externally served axis RE-INVOKES the exact snapshotted comparator program against the reproduced sides — the rebuilt request must rederive to the recorded `request_cid` and the outcome must match the recorded result. The comparison surface is re-built first: the declared NORMALIZERS are re-invoked (exact: each rebuilt request must rederive; semantic: the normalized surface must reproduce) and the CAPTURE ADAPTERS are re-invoked to reproduce the adapted observations. A receipt id additionally enforces its `expected_run_identity`. The reproduction policy is declared, never implicit: **exact** (default) additionally requires the same execution profile + capture bounds, the same environment digest, working directory, and interpreter chains (kernel interpreter, env resolver, downstream interpreter, PATH digest) — any provenance drift REFUSES; **semantic** admits and REPORTS provenance differences (env, interpreters, profile, bounds) and requires the same bounded observation anyway. Writes nothing: replay is evidence verification, not re-observation |
 | `frf bundle export RECEIPT_ID [--output PATH] [--single]` | exports a receipt's portable closure — manifest + receipt + captures (+ the externally served axes' comparator request/response/invocation/result evidence + the normalizer/capture-adapter invocation evidence and any external-minimizer refusal evidence) + content-addressed objects (the executed artifacts AND the comparator/normalizer/adapter/minimizer instrumentation, walked via the capture's typed `evidence_refs`) + the admitted authority record + residuals + disposition-event chains (+ the compiled claim when present, WITH its capability evidence — the challenge records and mutant runs a sensitivity-backed claim was compiled under, and the witness statements + preserved documents an independently-witnessed claim names), sealed read-only, only after the receipt verifies against the source tree. The manifest (frf-bundle-v3) declares its own CONTAINER: a `directory` tree (default, `bundles/<receipt-id>.frf`), or `--single` — ONE deterministic tar archive with the manifest inside: fixed metadata, entries in path order, so two exports of the same receipt are byte-identical |
@@ -68,6 +68,103 @@ Residual creation and endoduction happen inside `court run`; re-run
 `receipt emit` after disposing to bind the new dispositions. `--root DIR`
 (default `.frf`, or `$FRF_ROOT`) is the evidence root; paths in manifests and
 authority records are working-directory-relative.
+
+## Protocol registry — the machine-readable inventory
+
+`protocol/registry.json` is the single machine-readable inventory of the
+FRF evidence protocol: every protocol object, identity domain, schema,
+relation, admission policy, and execution profile. The registry is the
+AUTHORITY, the tables below are generated projections of it, and
+`tests/protocol_registry.rs` makes drift a build failure: every schema
+version / domain tag / policy / profile used anywhere in the reference
+engine, the independent verifiers, the test suite, or the specification
+documents must occur in the registry, and these tables must carry every
+registered id. Status values: `active` · `superseded` · `future` ·
+`reserved-invalid` (deliberately refused negative-test values) ·
+`test-only` (unit-test fixtures, never protocol).
+
+### Protocol objects
+
+| object | meaning | schema / identity | status |
+|---|---|---|---|
+| artifact | Exact executable/data bytes under `objects/sha256/<H>` | content-addressed bytes | active |
+| authority | Admitted reference executable and its provenance | frf-authority-v1 | active |
+| environment | Execution environment identity | frf-environment-v2 | active |
+| court | Semantic question + falsifier + envelope (human-authored manifest) | YAML, not evidence | active |
+| comparator-spec | Meaning of a comparison relation | FRF/COMPARATOR-SPEC/v2 | active |
+| normalizer-spec | Meaning of a comparison-surface transform | FRF/NORMALIZER-SPEC/v2 | active |
+| capture-adapter-spec | Meaning of an adapted observation for an external axis | FRF/CAPTURE-ADAPTER-SPEC/v2 | active |
+| minimizer-spec | Meaning of a reduction relation | FRF/MINIMIZER-SPEC/v2 | active |
+| mutation-spec | Meaning of a mutation relation | FRF/MUTATION-SPEC/v1 | active |
+| witness-spec | Meaning of a witness attestation relation | FRF/WITNESS-SPEC/v2 | active |
+| execution | What was actually executed (a run) | frf-capture-v11 · FRF/RUN/v1 | active |
+| observation | Raw captured result (side capture + produced tree) | frf-produced-v1 | active |
+| residual | Preserved disagreement | frf-residual-v1 · FRF/RESIDUAL-FINGERPRINT/v1 | active |
+| residual-lineage | Stable comparison question/surface/feature | FRF/RESIDUAL-LINEAGE/v1 | active |
+| disposition-event | Interpretation/state transition of a residual (hash-chained) | frf-disposition-v2 · FRF/DISPOSITION-EVENT/v1 | active |
+| resolution | Evidence that a residual closed (fixed event + resolution run) | frf-disposition-v2 | active |
+| series | Ordered experimental coordinates over content-addressed runs | frf-series-v3 · FRF/SERIES/v2 | active |
+| trajectory | Ordered residual observations with deterministic classification | frf-trajectory-v4 | active |
+| reduction | Minimization attempt + preservation predicate | frf-reduction-v4 · FRF/REDUCTION/v3 | active |
+| token | Deterministic endoduction result routing the residual | frf-token-v1 | active |
+| challenge | Court capability evidence (a seen defect class) | frf-challenge-v1 · FRF/CHALLENGE/v1 | active |
+| witness-statement | Independent attestation of a rederived subject | frf-witness-statement-v3 · FRF/WITNESS-STATEMENT/v1 | active |
+| independence | Declared independence relation about an attestation | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
+| knowledge-snapshot | The committed evidence universe U | frf-claim-v7 · FRF/KNOWLEDGE/v2 | active |
+| claim | Machine-readable bounded proposition compiled from evidence | frf-claim-v7 | active |
+| receipt | Immutable evidence snapshot/root (OpenReceipt) | frf-receipt-v15 | active |
+| bundle | Portable closure of referenced evidence | frf-bundle-v3 | active |
+| ci-status | CI gate presentation of a compiled claim | frf-ci-status-v1 | active |
+| comparator-invocation | Extension evidence: what was invoked, against which request | frf-comparator-invocation-v1 · FRF/COMPARATOR-INVOCATION/v1 | active |
+| comparator-result | Extension evidence: which response answered which request | frf-comparator-result-v1 · FRF/COMPARATOR-RESULT/v1 | active |
+| normalizer-invocation | Normalizer invocation evidence | frf-normalizer-invocation-v1 · FRF/NORMALIZER-INVOCATION/v1 | active |
+| normalizer-result | Normalizer result evidence | frf-normalizer-result-v1 · FRF/NORMALIZER-RESULT/v1 | active |
+| minimizer-invocation | Minimizer invocation evidence | frf-minimizer-invocation-v1 · FRF/MINIMIZER-INVOCATION/v1 | active |
+| minimizer-result | Minimizer result evidence | frf-minimizer-result-v1 · FRF/MINIMIZER-RESULT/v1 | active |
+| mutation-invocation | Mutation provider invocation evidence | frf-mutation-invocation-v1 · FRF/MUTATION-INVOCATION/v1 | active |
+| mutation-result | Mutation provider result evidence | frf-mutation-result-v1 · FRF/MUTATION-RESULT/v1 | active |
+| capture-adapter-invocation | Capture adapter invocation evidence | frf-capture-invocation-v1 · FRF/CAPTURE-ADAPTER-INVOCATION/v1 | active |
+| capture-adapter-result | Capture adapter result evidence | frf-capture-result-v1 · FRF/CAPTURE-ADAPTER-RESULT/v1 | active |
+
+### Identity domains (domain-separated preimages)
+
+| domain | status |
+|---|---|
+| FRF/RUN/v1 · FRF/COURT/v2 · FRF/COMPARATOR-SPEC/v2 · FRF/NORMALIZER-SPEC/v2 · FRF/MINIMIZER-SPEC/v2 · FRF/CAPTURE-ADAPTER-SPEC/v2 · FRF/WITNESS-SPEC/v2 · FRF/MUTATION-SPEC/v1 | active |
+| FRF/RESIDUAL-FINGERPRINT/v1 · FRF/RESIDUAL-LINEAGE/v1 · FRF/SERIES/v2 · FRF/REDUCTION/v3 · FRF/KNOWLEDGE/v2 · FRF/CHALLENGE/v1 · FRF/DISPOSITION-EVENT/v1 | active |
+| FRF/COMPARATOR-INVOCATION/v1 · FRF/COMPARATOR-RESULT/v1 · FRF/NORMALIZER-INVOCATION/v1 · FRF/NORMALIZER-RESULT/v1 · FRF/MINIMIZER-INVOCATION/v1 · FRF/MINIMIZER-RESULT/v1 | active |
+| FRF/MUTATION-INVOCATION/v1 · FRF/MUTATION-RESULT/v1 · FRF/CAPTURE-ADAPTER-INVOCATION/v1 · FRF/CAPTURE-ADAPTER-RESULT/v1 · FRF/WITNESS-IDENTITY/v1 · FRF/WITNESS-STATEMENT/v1 · FRF/INDEPENDENCE-SPEC/v1 · FRF/INDEPENDENCE/v1 | active |
+| FRF/REDUCTION/v2 | superseded |
+| FRF/X/v1 · FRF/Y/v1 | test-only |
+
+### Schemas (evidence documents)
+
+| id | status |
+|---|---|
+| frf-authority-v1 · frf-capture-v11 · frf-residual-v1 · frf-disposition-v2 · frf-receipt-v15 · frf-claim-v7 · frf-runner-v1 · frf-environment-v2 · frf-provenance-v3 | active |
+| frf-challenge-v1 · frf-mutation-request-v1 · frf-mutation-response-v1 · frf-mutation-invocation-v1 · frf-mutation-result-v1 · frf-bundle-v3 · frf-trajectory-v4 · frf-series-v3 | active |
+| frf-comparator-request-v4 · frf-comparator-response-v2 · frf-comparator-invocation-v1 · frf-comparator-result-v1 · frf-normalizer-request-v1 · frf-normalizer-response-v1 · frf-normalizer-invocation-v1 · frf-normalizer-result-v1 | active |
+| frf-minimizer-request-v1 · frf-minimizer-response-v1 · frf-minimizer-invocation-v1 · frf-minimizer-result-v1 · frf-capture-request-v1 · frf-capture-response-v1 · frf-capture-invocation-v1 · frf-capture-result-v1 | active |
+| frf-witness-request-v1 · frf-witness-response-v3 · frf-witness-statement-v3 · frf-independence-v1 · frf-produced-v1 · frf-token-v1 · frf-ci-status-v1 · frf-reduction-v4 | active |
+| frf-experiment-v1 · frf-external-corpus-v1 · frf-external-experiment-v1 · frf-external-experiment-v2 | active (xtask empirical-program reports) |
+| frf-receipt-v12 · frf-receipt-v7 · frf-receipt-v5 · frf-bundle-v2 · frf-comparator-request-v3 | superseded |
+| frf-bundle-v9 · frf-comparator-response-v9 | reserved-invalid |
+
+### Admission policies
+
+| policy | requires (per premise) | status |
+|---|---|---|
+| baseline | observation evidence only (verified premises + the absence scan over U) | active |
+| sensitivity-backed | every claimed axis has challenge coverage | active |
+| independently-witnessed | sensitivity + a verified affirming witness attestation of every premise + at least one admissible independence relation per premise | active |
+| high-assurance | independently witnessed + every premise observed under the reference execution profile and the reference capture bounds | active |
+
+### Execution profiles
+
+| id | meaning | status |
+|---|---|---|
+| frf-exec-linux-v1 | The reference profile; the reference capture bounds are protocol constants, never overridable | active |
+| frf-exec-linux-v2 | Designed: cgroup v2 aggregate envelope (pids.max / memory.max / cpu.max / io.max) — the per-side, per-tree contract RLIMIT_* cannot give | future |
 
 ## Testing: regression, verification, fuzzing
 
@@ -177,8 +274,12 @@ says no more than that receipt licenses.
 - **Taste Codex gates** (representation, boundary quarantine, misuse
   resistance, performance grounding) — the one executable piece (disposition
   requires a reason) is implemented; the rest is a later milestone.
-- **Corpus admission, version ladders, environment matrices, independent
-  witness maps** — v0 proves the kernel on one authority, one candidate, one fixture.
+- **Corpus admission and independent witness maps** — v0 proves the kernel on
+  one authority, one candidate, one fixture. Version ladders, environment
+  matrices, and authority transitions are already executable: the external
+  empirical program (`cargo xtask external-experiment-v2`, spec/empirical-
+  program.md) drives real historical defect reproducers across version and
+  environment coordinates.
 - **Observable axes are OPEN PROTOCOL IDENTIFIERS, not a closed enum** —
   the in-binary registry serves SIX built-in comparators: the three
   Section-12 CLI surfaces (`exit`, `stderr`, `stdout`) and three
@@ -305,9 +406,10 @@ says no more than that receipt licenses.
   pipeline runs on every surface — capture, residuals, tokens, receipts,
   claim gating, replay, bundles — and the golden demo now runs the
   filesystem-tree court. v0 produced capture refuses symlinks and
-  non-regular files; a mutation operator for the domain surfaces (and
-  produced trees in the challenge battery) awaits the mutation extension
-  protocol.
+  non-regular files; domain surfaces are challenged through EXTERNAL
+  MUTATION PROVIDERS (spec/mutation.md — the extension proposes, the court
+  decides, and the proposal evidence is preserved and cross-verified); the
+  built-in operators remain CLI-only.
 - **Residual trajectories are executable over five axes**: the repeat
   axis (`--repeat N`), the candidate-revision axis (`--candidate-revisions`),
   the authority-version axis (`--authority-versions`), and the
@@ -331,13 +433,17 @@ says no more than that receipt licenses.
   coordinate system (`sign.trajectory_evidence`, OpenReceipt v13), each
   entry pinning the exact series snapshot its drift/slew were derived
   from, so later experiments that reference the same content-addressed run
-  can never change what an emitted receipt means. The classification is a
+  the run can never change what an emitted receipt means. The classification is a
   deterministic table: drift
   (persistent/transient/recurrent) × slew (stable/abrupt/burst/recurrent)
   plus localization (start/end/both/interior — the paper's
   boundary-localized) and bands (2+ = the paper's version-stratified along
-  a version axis). `gradual` needs a magnitude dimension (presence is
-  binary) and is deliberately not claimed; `fixture_reduction` belongs to
+  a version axis). `gradual` is executable too: the per-observation
+  magnitude measure (declared per comparator — exit-code-distance,
+  line-edit-distance, value-edit-distance) drives the derivation's
+  monotonic `trend` (increasing/decreasing) on surfaces whose projections
+  carry a degree; identity projections (filesystem.tree, bytes.wire,
+  external axes) never claim a trend. `fixture_reduction` belongs to
   the minimization protocol.
 - **Execution profiles are declared contracts, and replay distinguishes exact
   from semantic reproduction** (`spec/execution-profile.md`): the reference
@@ -347,10 +453,17 @@ says no more than that receipt licenses.
   via `FRF_EXEC_TIMEOUT_MS`, a test hook), 16 MiB per-stream capture caps
   (overflow REFUSES the run — truncated output is never evidence), and child
   resource limits (`RLIMIT_AS` 2 GiB, `RLIMIT_CPU` 30 s, `RLIMIT_NOFILE`
-  1024; a side that hits one dies by the kernel's signal outcome, which the
-  capture records). The profile + the exact capture bounds that applied are
+  1024, `RLIMIT_NPROC` 4096 — per real UID, a layer against fork bombs, not
+  a per-side aggregate envelope; the cgroup v2 profile `frf-exec-linux-v2`
+  is the per-side aggregate contract). The profile + the exact capture
+  bounds that applied are
   recorded at observation time (capture v10, OpenReceipt v13) and copied into
   every receipt — a receipt never guesses what the harness enforced.
+  The REFERENCE capture bounds are protocol constants
+  (`host::reference_capture_bounds()`), never overridable: an `FRF_EXEC_*`
+  hook can change what an OBSERVATION ran under (and exact replay then
+  reports the drift), but it can never redefine the reference contract that
+  `high-assurance` admission compares against.
   `frf replay --policy exact` requires the same profile, bounds,
   environment digest (os/arch/kernel/locale/timezone/umask), working
   directory, and interpreter chains, and refuses on any drift;
@@ -396,9 +509,10 @@ says no more than that receipt licenses.
   reductions (the verifier rehashes every object the absence search
   depended on). Claims carry their IR (`scope`, `requires`, `blockers`,
   `excluded_evidence`, `knowledge_snapshot`); prose and `--json` are two
-  renderers. A
-  multi-premise compiler (union admission over several receipts) is future
-  work — the cell-region algebra already defines it without inflation.
+  renderers. The compiler is MULTI-PREMISE (since v6): union admission over
+  several receipts under the region algebra, with the per-premise capability
+  binding and subject coherence (same authority, same candidate) enforced
+  and re-derived by the independent verifiers.
 - **`fixed` never licenses parity from the run that observed the failure**:
   the positive claim must be compiled from the resolution run's receipt, the
   run that actually observed the passing candidate. This is enforced by the

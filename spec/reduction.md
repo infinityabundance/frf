@@ -30,7 +30,7 @@ Every minimization is a content-addressed protocol object
 
 ```text
 ReductionRecord {
-    id                                FRF/REDUCTION/v2 over the record's own
+    id                                FRF/REDUCTION/v3 over the record's own
                                       fields
     residual_id                       the residual being minimized
     source_run                        the run that observed the residual

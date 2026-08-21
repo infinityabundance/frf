@@ -36,8 +36,11 @@ challenge runs the provider once per declared target axis.
 
 ## The canonical request
 
-The court writes `FRF/MUTATION-REQUEST/v1` (canonical JSON) to the
-provider's stdin:
+The court writes the canonical `MutationRequest` document (schema
+`frf-mutation-request-v1`, strict canonical JSON) to the provider's stdin.
+The request's `request_cid` is the SHA-256 of those raw canonical bytes (the
+extension-protocol identity rule: a request is identified by its exact
+canonical bytes, never by a re-serialization):
 
 ```text
 MutationRequest {

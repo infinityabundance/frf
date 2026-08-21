@@ -1,6 +1,6 @@
 # The comparator extension protocol
 
-*Version: `frf-comparator-request-v3` / `frf-comparator-response-v2`
+*Version: `frf-comparator-request-v4` / `frf-comparator-response-v2`
 (`frf-comparator-invocation-v1` / `frf-comparator-result-v1` for the
 preserved invocation evidence).*
 
@@ -78,7 +78,7 @@ Rules:
 
 ```json
 {
-  "schema_version": "frf-comparator-request-v3",
+  "schema_version": "frf-comparator-request-v4",
   "comparator": {
     "id": "stderr",
     "relation_id": "eq",

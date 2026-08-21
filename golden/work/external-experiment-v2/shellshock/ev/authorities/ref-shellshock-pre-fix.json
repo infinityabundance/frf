@@ -1,1 +1,0 @@
-{"executable_sha256":"15e607ab92aae564e3cba6af1abfad055fa17e1b02f672859cdfa3df3012b467","id":"ref-shellshock-pre-fix","kind":"executable_reference","name":"ref-shellshock","path":"scripts/candidate-buggy.sh","platform":"x86_64-linux","schema_version":"frf-authority-v1","version":"pre-fix"}

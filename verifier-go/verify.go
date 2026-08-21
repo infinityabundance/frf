@@ -637,6 +637,9 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 		if len(witnesses) == 0 {
 			fail("claim %s: policy %s requires a witness attestation but names none", receiptID, policy)
 		}
+		// The stable map from each carried witness statement to the premise
+		// receipt it attests — the per-premise independence check needs it.
+		stmtSubject := make(map[string]string)
 		// EVERY premise receipt must have at least one affirming attestation
 		// of ITSELF (the compiler attests each premise before compiling).
 		for _, premID := range requires {
@@ -644,7 +647,11 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 			for _, wid := range witnesses {
 				stmt := obj(loadEvidence(safeJoin(bundle, "witnesses/"+wid+".json")))
 				subj := obj(recVal(stmt, "subject"))
-				if str(subj, "kind") != "receipt" || str(subj, "id") != premID {
+				if str(subj, "kind") != "receipt" {
+					continue
+				}
+				stmtSubject[wid] = str(subj, "id")
+				if str(subj, "id") != premID {
 					continue
 				}
 				// The statement's identity rederives from its own fields (the
@@ -708,6 +715,24 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				fail("claim %s: independence record %s binds a witness statement the claim does not carry", receiptID, iid)
 			}
 		}
+		// The tier is NAMED independently-witnessed: EVERY premise must be
+		// covered by at least one admissible independence relation bound to an
+		// attestation of THAT premise — an affirming witness with zero
+		// declared independence is witnessed, not independently witnessed.
+		independence := asStrArray(recVal(claim, "independence_evidence"))
+		for _, premID := range requires {
+			covered := false
+			for _, iid := range independence {
+				rec := obj(loadEvidence(safeJoin(bundle, "independence/"+iid+".json")))
+				if stmtSubject[str(rec, "witness_statement")] == premID {
+					covered = true
+					break
+				}
+			}
+			if !covered {
+				fail("claim %s: premise receipt %s has no admissible independence relation — an attestation alone is witnessed, not independently witnessed", receiptID, premID)
+			}
+		}
 	}
 
 	if policy == "high-assurance" {
@@ -723,7 +748,7 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				str(bounds, "rlimit_as_mb") != "2048" ||
 				str(bounds, "rlimit_cpu_s") != "30" ||
 				str(bounds, "rlimit_nofile") != "1024" ||
-				str(bounds, "rlimit_nproc") != "512" {
+				str(bounds, "rlimit_nproc") != "4096" {
 				fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract) for premise %s", receiptID, premID)
 			}
 		}

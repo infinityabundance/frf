@@ -702,6 +702,10 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
                 "claim {receipt_id}: policy {policy} requires a witness attestation but names none"
             );
         }
+        // The stable map from each carried witness statement to the premise
+        // receipt it attests — the per-premise independence check needs it.
+        let mut stmt_subject: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         // EVERY premise receipt must have at least one affirming attestation
         // of ITSELF (the compiler attests each premise before compiling).
         for prem_id in &requires {
@@ -709,9 +713,11 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             for wid in &witnesses {
                 let wid = as_str(wid).to_string();
                 let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
-                if as_str(&stmt["subject"]["kind"]) != "receipt"
-                    || as_str(&stmt["subject"]["id"]) != *prem_id
-                {
+                if as_str(&stmt["subject"]["kind"]) != "receipt" {
+                    continue;
+                }
+                stmt_subject.insert(wid.clone(), as_str(&stmt["subject"]["id"]).to_string());
+                if as_str(&stmt["subject"]["id"]) != *prem_id {
                     continue;
                 }
                 // The statement's identity rederives from its own fields
@@ -790,6 +796,24 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
                     panic!("claim {receipt_id}: independence record {iid} binds a witness statement the claim does not carry");
                 }
             }
+            // The tier is NAMED independently-witnessed: EVERY premise must
+            // be covered by at least one admissible independence relation
+            // bound to an attestation of THAT premise — an affirming witness
+            // with zero declared independence is witnessed, not
+            // independently witnessed.
+            let independence_ids: Vec<String> = claim["independence_evidence"]
+                .as_array()
+                .map(|a| a.iter().map(|v| as_str(v).to_string()).collect())
+                .unwrap_or_default();
+            for prem_id in &requires {
+                let covered = independence_ids.iter().any(|iid| {
+                    let rec = load_evidence(&safe_rel(bundle, &format!("independence/{iid}.json")));
+                    stmt_subject.get(as_str(&rec["witness_statement"])) == Some(prem_id)
+                });
+                if !covered {
+                    panic!("claim {receipt_id}: premise receipt {prem_id} has no admissible independence relation — an attestation alone is witnessed, not independently witnessed");
+                }
+            }
         }
     }
 
@@ -800,7 +824,7 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             "rlimit_as_mb": "2048",
             "rlimit_cpu_s": "30",
             "rlimit_nofile": "1024",
-            "rlimit_nproc": "512",
+            "rlimit_nproc": "4096",
         });
         // EVERY premise was observed under the reference execution contract.
         for prem_id in &requires {

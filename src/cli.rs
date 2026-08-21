@@ -205,9 +205,12 @@ pub enum ClaimCmd {
         /// evidence only), sensitivity-backed (every claimed axis must have
         /// challenge coverage — the court demonstrated it can see the
         /// surface's defect class), independently-witnessed (sensitivity
-        /// plus a verified witness attestation of the receipt),
+        /// plus a verified witness attestation of the receipt AND at least
+        /// one admissible independence relation per premise — an affirming
+        /// witness alone is witnessed, not independently witnessed),
         /// high-assurance (independently witnessed, observed under the
-        /// reference execution profile + capture bounds). The compiled
+        /// reference execution profile + the reference capture bounds, which
+        /// no FRF_EXEC_* override can redefine). The compiled
         /// claim carries the capability evidence that satisfied the tier
         #[arg(long, default_value = "baseline")]
         policy: String,

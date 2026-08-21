@@ -118,7 +118,7 @@ not an event: it is the projection of no events, so open entries carry
 ## 4. Schema
 
 `spec/openreceipt.schema.json` (JSON Schema draft-07) is the normative
-machine-readable definition. `schema_version` MUST be `frf-receipt-v12`; a
+machine-readable definition. `schema_version` MUST be `frf-receipt-v15`; a
 conformant parser refuses any other version.
 
 ### 4.1 Observable axes and residual kinds — protocol identifiers
