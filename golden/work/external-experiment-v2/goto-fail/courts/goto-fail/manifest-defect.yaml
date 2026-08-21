@@ -1,0 +1,23 @@
+court:
+  id: ssl-handshake-check
+  question: >-
+    For the TLS handshake record family, does the candidate accept exactly
+    the records the reference accepts?
+  falsifier: >-
+    The candidate's verdict diverges on some handshake record.
+  authority: ref-ssl-2014
+  candidate:
+    name: cand
+    version_or_commit: "1.0"
+    build_profile: debug
+    path: scripts/candidate-buggy.sh
+  fixture:
+    id: handshake.conf
+    path: fixtures/tampered.handshake
+    arguments: ["{fixture}"]
+  admissibility_envelope:
+    fixture_family: tls-handshake
+    platforms: ["x86_64-linux"]
+    observables: [exit, stderr]
+    normalizers: []
+    replay_scope: single-run
