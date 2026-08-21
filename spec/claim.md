@@ -3,10 +3,11 @@
 Claims are not produced by humans or by evidence producers. They are COMPILED
 by `frf claim compile` from one or more verified premise receipts
 (`ReceiptVerified`) — the only code path that can emit a positive claim
-sentence — and written to `claims/<first-premise-receipt-id>.json` (or
-rendered canonically with `--json`).
+sentence — and written to `claims/<claim-id>.json` with a by-receipt index at
+`claims/by-receipt/<first-premise-receipt>/<claim-id>` (or rendered canonically
+with `--json`).
 
-The claim schema is `frf-claim-v7`. The core of the protocol is the paper's
+The claim schema is `frf-claim-v8`. The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of knowledge:
 
 ```text
@@ -19,6 +20,41 @@ premises — and it is blocked by exactly the residuals whose surface
 intersects any of K's cells. The absence of blockers is established by a scan
 over U, the EVIDENCE UNIVERSE committed at compile time, and the compiled
 claim CARRIES U: the negative search is as portable as the premises.
+
+## 0. Identity and immutability
+
+A claim is a content-addressed IMMUTABLE protocol object:
+
+```text
+claim_id = SHA-256("FRF/CLAIM/v1\n" ‖ JCS(claim document minus the id field))
+```
+
+The same receipt compiled under a different evidence universe U or a
+different admission policy is a DIFFERENT claim with a different id, and they
+coexist forever — a claim is never a slot on a receipt, and `claims/<id>.json`
+is never overwritten (re-compiling an identical claim is a verified no-op;
+re-compiling anything else is a new claim). The `claims/by-receipt/` index is
+NON-NORMATIVE: it maps a receipt to its projections; the claims themselves
+are the evidence.
+
+Prose is NOT stored as authoritative Claim IR: `positive`/`non_claims` are
+renderer outputs, deterministically derived from the verified premises. The
+stored IR is the proposition + the evidence graph; the identity
+cryptographically binds the exact proposition — not a sentence someone
+happened to write.
+
+`frf claim render` accepts ONLY a `ClaimVerified`: the target is a claim id
+or a receipt (resolved through the index; several claims for one receipt
+must be rendered by id), and the claim is RE-VERIFIED against the evidence
+tree before a single field is rendered — identity rederives, every premise
+is a `ReceiptVerified`, subject coherence holds, K rederives and is contained
+in P, the universe rederives and the blocker search over the COMMITTED U is
+empty, the policy evidence (capability / witness / independence / replay
+contract) re-verifies, and the IR fields (proposition, relation, environment
+label, court, fixture family, observable scope, excluded evidence) all
+rederive. A hand-written canonical file at `claims/<id>.json` — even one
+whose id rederives — is REFUSED, never rendered: data becomes evidence only
+after verification.
 
 ## 0. Admission policies — the assurance grades
 
@@ -43,8 +79,11 @@ the admission from the claim alone (the independent verifiers do).
 
 ```text
 ClaimRecord {
-    schema_version     frf-claim-v7
-    receipt            the FIRST premise receipt (the claim file's name)
+    id                 content address: FRF/CLAIM/v1 over the canonical
+                       document minus the id (Section 0)
+    schema_version     frf-claim-v8
+    receipt            the FIRST premise receipt (the claim's root into the
+                       evidence graph; the by-receipt index maps it)
     authority          prose id of the admitted reference (all premises bind
                        the SAME authority and the SAME candidate artifact —
                        a claim asserts parity of one candidate against one
@@ -82,12 +121,14 @@ ClaimRecord {
     replay_profile     the execution contract the evidence was observed under
                        (high-assurance requires the reference profile for
                        every premise)
-    positive           prose renderer output (one sentence per premise cell)
-    non_claims         the non-claim renderer output
+    positive           NOT STORED — derived by the renderers from the
+                       verified premises (one sentence per premise cell)
+    non_claims         NOT STORED — derived by the renderers from the
+                       premise fixture family
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v7
+    schema_version     frf-claim-v8
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

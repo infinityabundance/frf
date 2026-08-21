@@ -1491,105 +1491,61 @@ fn challenges_are_self_consistent() {
 #[test]
 fn claims_are_re_derivable_from_receipts() {
     let store = store();
+    let claims_dir = store.root.join("claims");
+    let mut names: Vec<String> = fs::read_dir(&claims_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".json"))
+        .collect();
+    names.sort();
     let mut found = 0;
-    for entry in fs::read_dir(store.root.join("claims")).unwrap() {
-        let path = entry.unwrap().path();
-        let receipt_id = path.file_stem().unwrap().to_string_lossy().to_string();
-        let claim: ClaimRecord = load(&path);
+    for name in names {
+        let claim_id = name.trim_end_matches(".json").to_string();
+        // The claim VERIFIES as a whole — identity rederives (FRF/CLAIM/v1
+        // over the canonical document minus the id), every premise is a
+        // verified receipt, subject coherence holds, K rederives and is
+        // contained in P, the knowledge universe rederives from the store,
+        // the blocker search over the COMMITTED U is empty, the policy
+        // evidence (capability / witness / independence / replay contract)
+        // re-verifies, and the derived projections rederive. This is the
+        // same gate `frf claim render` applies — a hand-written canonical
+        // claim file is refused here.
+        let verified = frf::verify::load_claim_verified(&store, &claim_id)
+            .unwrap_or_else(|e| panic!("claim {claim_id} fails verification: {e}"));
+        let claim = verified.claim();
         assert_eq!(claim.schema_version, SCHEMA_CLAIM);
-        assert_eq!(
-            claim.receipt, receipt_id,
-            "claim must reference its receipt"
-        );
-
-        let verified = frf::verify::load_receipt_verified(&store, &receipt_id)
-            .unwrap_or_else(|e| panic!("claim {receipt_id}: receipt fails verification: {e}"));
-        let rec = verified.body();
+        let receipt_id = claim.receipt.clone();
+        let rec = verified.premises()[0].body();
         let family = &rec.court.admissibility_envelope.fixture_family;
 
-        // A claim may only exist over a receipt whose run's evidence is not
-        // invalidated by harness (run-level). Open/unknown residuals block
-        // only their own axis, so a scoped claim can coexist with them.
-        assert!(
-            sentences::harness_refusal_lines(&rec.residuals, family).is_empty(),
-            "claim {receipt_id} exists over a harness-invalidated run"
+        // The prose is DERIVED, never stored as authoritative Claim IR: the
+        // render view derives the positive sentence and the non-claims from
+        // the VERIFIED premises.
+        let view = frf::render::RenderView::from_verified(&verified).unwrap();
+        assert_eq!(
+            view.positive,
+            vec![sentences::positive_claim(rec).expect("claimable receipt")],
+            "claim {claim_id}: the derived prose drifted from its receipt"
         );
+        assert_eq!(view.non_claims, sentences::non_claims(family));
 
-        // Exactly one conservative sentence, byte-for-byte re-derivable.
-        let expected = sentences::positive_claim(rec).expect("claimable receipt");
-        assert_eq!(
-            claim.positive,
-            vec![expected],
-            "claim {receipt_id} drifted from its receipt"
-        );
-        // The full Claim IR re-derives. K is the REGION of per-premise clean
-        // surfaces (one cell per premise; the golden tree is single-premise);
-        // the premise region P is the premises' full executed surfaces;
-        // admission is the literal containment Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)
-        // over the cells — every point of every K cell lies in SOME premise
-        // cell.
-        let k = frf::scope::claim_region(&[rec]);
-        let p = frf::scope::premise_region(&[rec]);
+        // The by-receipt index binds the claim to its root receipt. v8
+        // semantics: the same receipt compiled under a different universe or
+        // policy is a DIFFERENT claim, and they coexist — the index is a
+        // non-normative directory over immutable claim objects, so the check
+        // is membership, not a singleton.
         assert!(
-            k.cells.iter().all(|cell| p.contains(cell)),
-            "Scope(K) ⊄ Scope(P₁ ∪ … ∪ Pₙ) for {receipt_id}"
+            store
+                .claim_index_path(&receipt_id, &claim_id)
+                .unwrap()
+                .is_file(),
+            "claim {claim_id} is missing from the by-receipt index"
         );
-        assert_eq!(claim.scope, k, "claim {receipt_id} scope drifted");
-        assert_eq!(
-            claim.observable_scope,
-            frf::scope::region_observables(&k),
-            "claim {receipt_id} observable scope drifted"
-        );
-        // A claim exists only when NO blocking residual (open/unknown)
-        // intersects K — the compiler refuses otherwise, so every compiled
-        // claim must re-derive an empty blocker set with the SAME scan over
-        // the SAME committed knowledge universe the claim carries. The
-        // snapshot is self-consistent (its cid rederives from its own
-        // fields); a later store mutation is a NEW universe and does not
-        // change what the claim means.
-        let universe = &claim.knowledge_snapshot;
-        assert_eq!(
-            frf::semantics::knowledge_snapshot_identity(universe).unwrap(),
-            universe.cid,
-            "claim {receipt_id}: the knowledge snapshot cid must rederive"
-        );
-        let blockers = frf::commands::claim::store_blockers(&store, &k, universe).unwrap();
+        let bound = store.claim_ids_for_receipt(&receipt_id).unwrap();
         assert!(
-            blockers.is_empty(),
-            "claim {receipt_id} exists while {} blocking residual(s) intersect its scope",
-            blockers.len()
-        );
-        assert_eq!(claim.blockers, Vec::<String>::new());
-        // The golden tree is single-premise: the claim names exactly its own
-        // receipt. (The multi-premise form is exercised in claim_policy.rs.)
-        assert_eq!(claim.requires, vec![receipt_id.to_string()]);
-        let expected_excluded: Vec<String> = rec.residuals.iter().map(|r| r.id.clone()).collect();
-        assert_eq!(claim.excluded_evidence, expected_excluded);
-        assert_eq!(
-            claim.relation,
-            rec.observables
-                .iter()
-                .filter(|obs| !rec.residuals.iter().any(|r| r.axis == obs.axis))
-                .map(|obs| obs.comparator.clone())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        assert!(!claim.proposition.is_empty(), "proposition must exist");
-        assert_eq!(claim.non_claims, sentences::non_claims(family));
-        assert_eq!(
-            claim.authority,
-            format!("{}-{}", rec.authority.name, rec.authority.version)
-        );
-        assert_eq!(claim.court, rec.court.id);
-        assert_eq!(claim.fixture_family, *family);
-        assert_eq!(
-            claim.environment,
-            format!(
-                "{}-{} ({})",
-                rec.environment.architecture,
-                rec.environment.os,
-                &rec.environment.digest[..8]
-            )
+            bound.contains(&claim_id),
+            "claim {claim_id} is not bound to receipt {receipt_id} in the by-receipt index (found {bound:?})"
         );
 
         // The claimed receipt reflects the current residual dispositions.
@@ -1615,7 +1571,7 @@ fn claims_are_re_derivable_from_receipts() {
         let cap = store.load_capture(run).unwrap();
         assert_eq!(
             claim.candidate.identity_hash, cap.candidate_artifact.sha256,
-            "claim {receipt_id} is attributed to a candidate artifact the run did not execute"
+            "claim {claim_id} is attributed to a candidate artifact the run did not execute"
         );
         found += 1;
     }
@@ -1655,11 +1611,20 @@ fn tree_mirrors_section_19_3() {
         .join("courts/cli-malformed-input/fixtures/malformed-path.conf")
         .is_file());
     // No stray non-JSON droppings in the generated directories: generated
-    // evidence is canonical JSON; YAML is only human-authored manifests.
-    for sub in ["authorities", "receipts", "claims"] {
+    // evidence is canonical JSON; YAML is only human-authored manifests. The
+    // claims/ by-receipt INDEX is the one declared subdirectory.
+    for sub in ["authorities", "receipts"] {
         for entry in fs::read_dir(store.root.join(sub)).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().to_string();
             assert!(name.ends_with(".json"), "unexpected file {sub}/{name}");
         }
+    }
+    let claims_dir = store.root.join("claims");
+    for entry in fs::read_dir(&claims_dir).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().to_string();
+        assert!(
+            name.ends_with(".json") || name == "by-receipt",
+            "unexpected file claims/{name}"
+        );
     }
 }

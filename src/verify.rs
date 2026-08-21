@@ -657,6 +657,125 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
 }
 
 // ---------------------------------------------------------------------------
+// Verified witness statements
+// ---------------------------------------------------------------------------
+
+/// A witness statement whose identity AND SUBJECT have been verified against
+/// the evidence tree. Private fields: the only constructor is
+/// [`load_witness_statement_verified`].
+///
+/// The subject REBINDING is the load's decisive step: the statement's
+/// `subject.cid` must equal the content address freshly rederived from the
+/// ACTUAL subject object (a run's identity digest, a receipt's digest, or a
+/// residual's fingerprint — each itself verified first). The witness
+/// creation command could never create a misbound statement; verification
+/// additionally proves that an arbitrary evidence tree cannot CONTAIN a
+/// self-consistent but misbound one.
+pub struct WitnessStatementVerified {
+    id: String,
+    statement: crate::model::WitnessStatement,
+}
+
+impl WitnessStatementVerified {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn statement(&self) -> &crate::model::WitnessStatement {
+        &self.statement
+    }
+
+    /// The subject this attestation is BOUND to (kind + id + content
+    /// address, all rederived from the actual evidence object).
+    pub fn subject(&self) -> &crate::model::WitnessSubject {
+        &self.statement.subject
+    }
+}
+
+/// Load + verify a witness statement: the store loader establishes the
+/// document identity (canonical bytes, id rederives, preserved request
+/// hashes to its cid AND carries the same subject block, response hashes to
+/// its cid and names its request, the attestation names the recorded
+/// statement). This loader then REBINDS the subject to the actual evidence
+/// object — the subject's content address must rederive from the verified
+/// subject itself.
+pub fn load_witness_statement_verified(
+    store: &Store,
+    id: &str,
+) -> Result<WitnessStatementVerified> {
+    let statement = store.load_witness_statement(id)?;
+    rebind_subject(store, id, &statement)?;
+    Ok(WitnessStatementVerified {
+        id: id.to_string(),
+        statement,
+    })
+}
+
+/// Rebind a witness statement's subject to the actual evidence object: the
+/// content address recorded in the statement must be freshly rederived from
+/// the verified subject — a self-consistent but misbound statement (kind/id
+/// naming one object, cid naming another, or a cid that does not match the
+/// object's real address) is refused.
+pub fn rebind_subject(
+    store: &Store,
+    id: &str,
+    statement: &crate::model::WitnessStatement,
+) -> Result<()> {
+    let subject = &statement.subject;
+    let fresh: String = match subject.kind.as_str() {
+        "run" => {
+            // The run is verified first; its identity DIGEST is recomputed
+            // from the verified capture + residuals.
+            let verified = load_capture_verified(store, &subject.id)?;
+            let residuals: Vec<crate::model::ResidualRecord> = verified
+                .capture
+                .residuals
+                .iter()
+                .map(|rid| store.load_residual(rid))
+                .collect::<Result<_>>()?;
+            verified.digest(&residuals)?
+        }
+        "receipt" => {
+            // The receipt is verified first; the digest is its id's own
+            // suffix (a receipt is content-addressed).
+            load_receipt_verified(store, &subject.id)?;
+            subject
+                .id
+                .strip_prefix("receipt-")
+                .and_then(|rest| rest.rsplit_once('-'))
+                .map(|(_, d)| d.to_string())
+                .ok_or_else(|| {
+                    FrfError::new(format!(
+                        "witness statement {id}: subject id {:?} is not a receipt id",
+                        subject.id
+                    ))
+                })?
+        }
+        "residual" => {
+            // The residual is verified first; its fingerprint is recomputed
+            // from the verified record.
+            let verified = load_residual_verified(store, &subject.id)?;
+            crate::semantics::residual_fingerprint(verified.record())?
+        }
+        other => {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: subject kind {other:?} is not run, receipt, or residual — a statement can only attest a verified evidence object"
+            )))
+        }
+    };
+    if fresh != subject.cid {
+        return Err(FrfError::new(format!(
+            "witness statement {id}: its subject content address does not rederive from the actual {} {} (recorded {}, fresh {}) — a self-consistent but misbound statement is not evidence",
+            subject.kind,
+            subject.id,
+            &subject.cid[..16],
+            &fresh[..16]
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Verified receipts
 // ---------------------------------------------------------------------------
 
@@ -1195,6 +1314,533 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     Ok(ReceiptVerified {
         id: id.to_string(),
         body,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Verified compiled claims
+// ---------------------------------------------------------------------------
+
+/// A compiled claim whose identity AND full admission have been re-verified
+/// against the evidence tree. Private fields: the only constructor is
+/// [`load_claim_verified`], so a `ClaimVerified` cannot be fabricated — a
+/// hand-written canonical file at `claims/<id>.json` is REFUSED, not
+/// rendered. The renderers accept only this type: data becomes evidence only
+/// after verification.
+pub struct ClaimVerified {
+    id: String,
+    claim: crate::model::ClaimRecord,
+    premises: Vec<ReceiptVerified>,
+}
+
+impl ClaimVerified {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn claim(&self) -> &crate::model::ClaimRecord {
+        &self.claim
+    }
+
+    /// The verified premise receipts (the claim's `requires`, each itself
+    /// identity + derivation verified). The renderers derive prose from
+    /// THESE — never from anything stored in the claim file.
+    pub fn premises(&self) -> &[ReceiptVerified] {
+        &self.premises
+    }
+}
+
+/// Verify one recorded capability entry (per-premise, per-axis challenge
+/// coverage) against the evidence: every challenge id must be a
+/// content-addressed record of the premise's court wrapping the premise's
+/// reference artifact, targeting exactly that axis, whose mutant run
+/// answered the same question — and the verdicts (`saw_defect`,
+/// `specificity_clean`) must RECOMPUTE from the verified mutant run's
+/// residuals. This is the same admission the compiler enforced, re-run
+/// against the recorded evidence — never trusted from the claim file.
+fn verify_capability_entry(
+    store: &Store,
+    entry: &crate::model::ClaimCapability,
+    premise_id: &str,
+    premise: &Receipt,
+) -> Result<()> {
+    if entry.receipt != premise_id {
+        return Err(FrfError::new(format!(
+            "claim capability for axis {} binds premise {}, but the premise is {}",
+            entry.axis, entry.receipt, premise_id
+        )));
+    }
+    if entry.challenge_ids.is_empty() {
+        return Err(FrfError::new(format!(
+            "claim capability for axis {} names no challenge",
+            entry.axis
+        )));
+    }
+    for cid in &entry.challenge_ids {
+        let ch = store.load_challenge(cid)?; // content-addressed
+        if ch.court != premise.court.id {
+            return Err(FrfError::new(format!(
+                "claim capability: challenge {cid} is not a challenge of premise {}'s court",
+                premise_id
+            )));
+        }
+        if ch.target_axis != entry.axis {
+            return Err(FrfError::new(format!(
+                "claim capability: challenge {cid} targets {} not {}",
+                ch.target_axis, entry.axis
+            )));
+        }
+        if ch.reference_sha256 != premise.authority.identity_hash {
+            return Err(FrfError::new(format!(
+                "claim capability: challenge {cid} does not wrap premise {}'s reference artifact",
+                premise_id
+            )));
+        }
+        let mut_cap = load_capture_verified(store, &ch.run)?;
+        if mut_cap.capture.court_semantic_identity != premise.court.semantic_identity {
+            return Err(FrfError::new(format!(
+                "claim capability: challenge {cid} did not run premise {}'s question",
+                premise_id
+            )));
+        }
+        // The verdicts recompute from the VERIFIED mutant residuals.
+        let mut on_target = false;
+        let mut on_unaffected = false;
+        for rid in &mut_cap.capture.residuals {
+            let rec = load_residual_verified(store, rid)?;
+            if rec.record().axis.as_str() == ch.target_axis {
+                on_target = true;
+            } else {
+                on_unaffected = true;
+            }
+        }
+        if !on_target || on_unaffected {
+            return Err(FrfError::new(format!(
+                "claim capability: challenge {cid} does not demonstrate sensitivity on {} (recomputed: saw_defect={on_target}, specificity_clean={})",
+                entry.axis,
+                !on_unaffected
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Verify that a committed knowledge universe U is reproducible WITHIN the
+/// current store — the containment direction of claim re-verification. A
+/// claim compiled under U stays admissible exactly as long as nothing U named
+/// was lost or mutated:
+///
+/// - every residual head still exists as the exact immutable observation the
+///   universe committed (verified load, then the record content address and
+///   the fingerprint must rederive to the committed values);
+/// - every committed object (receipt/run/authority/series/reduction) still
+///   exists and its content address rederives to the committed cid;
+/// - the snapshot's own cid rederives from its fields.
+///
+/// The store may have GROWN since compile time — new runs, new residuals,
+/// new series, later disposition events. Those are outside U and do not
+/// rewrite the claim: the claim remains a projection of the exact universe it
+/// names (a baseline claim compiled early stays renderable after later
+/// evidence exists). What is refused is a store that LOST or MUTATED evidence
+/// U depended on — recompilation against a fresh universe is the only remedy.
+/// The blocker search itself (the negative side) re-runs over the COMMITTED
+/// U, not the current store, via [`crate::commands::claim::store_blockers`].
+pub fn verify_knowledge_universe(store: &Store, universe: &KnowledgeSnapshot) -> Result<()> {
+    // The snapshot's own identity rederives from its fields (defense in
+    // depth: the claim's content address already covers these bytes, but the
+    // universe must also stand on its own).
+    let rederived = crate::semantics::knowledge_snapshot_identity(universe)?;
+    if rederived != universe.cid {
+        return Err(FrfError::new(format!(
+            "the committed knowledge universe's cid does not rederive from its fields ({} != {}) — the universe is not self-authenticating",
+            &rederived[..16],
+            &universe.cid[..16]
+        )));
+    }
+
+    // Every residual head: the exact immutable observation still exists and
+    // still matches the committed record content address and fingerprint.
+    for head in &universe.residual_heads {
+        let verified = load_residual_verified(store, &head.id).map_err(|e| {
+            FrfError::new(format!(
+                "the committed knowledge universe names residual {} but it is not verifiable evidence in this store: {e}",
+                head.id
+            ))
+        })?;
+        let record_cid = crate::semantics::record_content_identity(verified.record())?;
+        if record_cid != head.record_cid {
+            return Err(FrfError::new(format!(
+                "residual {} no longer matches the committed knowledge universe: its record content address rederives to {} but the universe committed {} — a store that mutated evidence the claim names cannot re-verify it",
+                head.id,
+                &record_cid[..16],
+                &head.record_cid[..16]
+            )));
+        }
+        let fingerprint = crate::semantics::residual_fingerprint(verified.record())?;
+        if fingerprint != head.fingerprint {
+            return Err(FrfError::new(format!(
+                "residual {} no longer matches the committed knowledge universe: its fingerprint rederives to {} but the universe committed {} — the exact disagreement the claim's absence search depended on is gone",
+                head.id,
+                &fingerprint[..16],
+                &head.fingerprint[..16]
+            )));
+        }
+    }
+
+    // Every committed object, by kind: the object exists and its content
+    // address rederives to the committed cid.
+    for obj in &universe.objects {
+        let ok = match obj.kind.as_str() {
+            "receipt" => {
+                // load_receipt_verified proves the canonical body hashes to
+                // the id's digest component; the committed cid IS that digest.
+                load_receipt_verified(store, &obj.id)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "the committed knowledge universe names receipt {} but it is not verifiable evidence in this store: {e}",
+                            obj.id
+                        ))
+                    })?;
+                obj.id
+                    .strip_prefix("receipt-")
+                    .and_then(|rest| rest.rsplit_once('-'))
+                    .map(|(_, d)| d == obj.cid)
+                    .unwrap_or(false)
+            }
+            "run" => {
+                // load_capture_verified proves the recorded fields hash to
+                // the run identity; the committed cid IS its digest.
+                load_capture_verified(store, &obj.id)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "the committed knowledge universe names run {} but it is not verifiable evidence in this store: {e}",
+                            obj.id
+                        ))
+                    })?;
+                obj.id
+                    .strip_prefix("run-")
+                    .and_then(|rest| rest.rsplit_once('-'))
+                    .map(|(_, d)| d == obj.cid)
+                    .unwrap_or(false)
+            }
+            "authority" => {
+                // An authority id is a LABEL; the committed cid is the
+                // canonical hash of its record — the exact bytes the blocker
+                // scan's lineage computation reads.
+                let record = store.load_authority(&obj.id).map_err(|e| {
+                    FrfError::new(format!(
+                        "the committed knowledge universe names authority {} but it is not present in this store: {e}",
+                        obj.id
+                    ))
+                })?;
+                crate::semantics::record_content_identity(&record)? == obj.cid
+            }
+            "series" => {
+                // The series id IS its content address; the loader proves it
+                // rederives from the record's fields. The committed cid must
+                // equal that id.
+                store.load_series(&obj.id).map_err(|e| {
+                    FrfError::new(format!(
+                        "the committed knowledge universe names series {} but it is not verifiable evidence in this store: {e}",
+                        obj.id
+                    ))
+                })?;
+                obj.cid == obj.id
+            }
+            "reduction" => {
+                // The reduction id IS its content address; the loader proves
+                // it rederives from the record's fields.
+                store.load_reduction(&obj.id).map_err(|e| {
+                    FrfError::new(format!(
+                        "the committed knowledge universe names reduction {} but it is not verifiable evidence in this store: {e}",
+                        obj.id
+                    ))
+                })?;
+                obj.cid == obj.id
+            }
+            other => {
+                return Err(FrfError::new(format!(
+                    "the committed knowledge universe names an unknown object kind {other:?} — only receipt/run/authority/series/reduction are universe members"
+                )))
+            }
+        };
+        if !ok {
+            return Err(FrfError::new(format!(
+                "object {} ({}) in the committed knowledge universe no longer matches its committed content address — a store that mutated evidence the claim names cannot re-verify it",
+                obj.id, obj.kind
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Load + verify a COMPILED claim before anything may consume it — the
+/// renderers' admission gate:
+///
+/// 1. the document is strict canonical JSON and the claim id rederives
+///    (`FRF/CLAIM/v1` over the canonical document minus the id);
+/// 2. every premise receipt is [`ReceiptVerified`];
+/// 3. subject coherence: the premises bind the same authority and the same
+///    candidate artifact, matching the claim's recorded ones;
+/// 4. K rederives from the verified premises and EQUALS the recorded scope;
+///    containment `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` is re-checked literally;
+/// 5. the committed knowledge universe U is reproducible WITHIN the store
+///    (containment: U's objects must still exist and match — the store may
+///    have grown, but must not have lost or mutated anything U names), and
+///    the blocker search re-runs over the COMMITTED universe U (an
+///    open/unknown residual in U intersecting K refuses the claim — a claim
+///    with a blocker is not renderable);
+/// 6. the policy's evidence re-verifies: capability coverage per claimed
+///    axis, an affirming, subject-REBOUND witness attestation per premise,
+///    an admissible independence relation per premise, and the replay
+///    contract for `high-assurance`;
+/// 7. the derived projections (`observable_scope`, `excluded_evidence`)
+///    rederive.
+pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
+    let claim = store.load_claim(id)?;
+
+    // 2. Every premise is a verified receipt.
+    let mut premises: Vec<ReceiptVerified> = Vec::new();
+    for prem_id in &claim.requires {
+        premises.push(load_receipt_verified(store, prem_id)?);
+    }
+    if premises.is_empty() {
+        return Err(FrfError::new(format!(
+            "claim {id} names no premise receipts"
+        )));
+    }
+    let bodies: Vec<&Receipt> = premises.iter().map(|p| p.body()).collect();
+    let first = bodies[0];
+
+    // 3. Subject coherence: all premises bind the same authority and the
+    //    same candidate artifact — matching the claim's recorded ones.
+    for r in &bodies[1..] {
+        if r.authority.name != first.authority.name
+            || r.authority.version != first.authority.version
+            || r.authority.identity_hash != first.authority.identity_hash
+        {
+            return Err(FrfError::new(format!(
+                "claim {id}: the premises bind different authorities — a claim asserts parity against ONE reference"
+            )));
+        }
+        if r.candidate.identity_hash != first.candidate.identity_hash {
+            return Err(FrfError::new(format!(
+                "claim {id}: the premises bind different candidate artifacts — a claim asserts parity of ONE candidate"
+            )));
+        }
+    }
+    if claim.authority != format!("{}-{}", first.authority.name, first.authority.version) {
+        return Err(FrfError::new(format!(
+            "claim {id}: its recorded authority does not match the premises"
+        )));
+    }
+    if claim.candidate.identity_hash != first.candidate.identity_hash {
+        return Err(FrfError::new(format!(
+            "claim {id}: its recorded candidate artifact does not match the premises"
+        )));
+    }
+
+    // 4. K rederives and EQUALS the recorded scope; containment re-checks.
+    let k = crate::scope::claim_region(&bodies);
+    if k != claim.scope {
+        return Err(FrfError::new(format!(
+            "claim {id}: its recorded scope does not rederive from the verified premises"
+        )));
+    }
+    let p = crate::scope::premise_region(&bodies);
+    for cell in &k.cells {
+        if !p.contains(cell) {
+            return Err(FrfError::new(format!(
+                "claim {id}: Scope(K) ⊄ Scope(P₁ ∪ … ∪ Pₙ) — the recorded claim exceeds the premises' observed surface"
+            )));
+        }
+    }
+
+    // 5. The committed universe U must be reproducible WITHIN this store
+    //    (containment, not equality: the store may have grown since compile
+    //    time — later runs, residuals, series — but nothing U named may be
+    //    lost or mutated), and the blocker search re-runs over the COMMITTED
+    //    U — the claim stays a projection of the exact universe it names.
+    verify_knowledge_universe(store, &claim.knowledge_snapshot)?;
+    let blockers = crate::commands::claim::store_blockers(store, &k, &claim.knowledge_snapshot)?;
+    if !blockers.is_empty() {
+        let names: Vec<&str> = blockers.iter().map(|(b, _, _)| b.as_str()).collect();
+        return Err(FrfError::new(format!(
+            "claim {id} is blocked: unresolved residual(s) {} intersect its scope in the committed universe — a blocked claim is not renderable evidence",
+            names.join(", ")
+        )));
+    }
+    if !claim.blockers.is_empty() {
+        return Err(FrfError::new(format!(
+            "claim {id} records blockers in its IR but the blocker search over U finds none — the IR is inconsistent"
+        )));
+    }
+
+    // 6. The admission policy's evidence re-verifies (per premise).
+    if claim.policy != "baseline" {
+        // Capability: every claimed axis of every premise has a verified
+        // challenge record.
+        for entry in &claim.capability {
+            let premise = premises
+                .iter()
+                .find(|p| p.id() == entry.receipt)
+                .ok_or_else(|| {
+                    FrfError::new(format!(
+                        "claim {id}: capability entry for axis {} binds premise {} which the claim does not require",
+                        entry.axis, entry.receipt
+                    ))
+                })?;
+            verify_capability_entry(store, entry, premise.id(), premise.body())?;
+        }
+        // Every claimed axis must have coverage.
+        for axis in &claim.observable_scope {
+            if !claim.capability.iter().any(|c| c.axis == *axis) {
+                return Err(FrfError::new(format!(
+                    "claim {id}: claimed axis {axis} has no capability coverage — the court never demonstrated it can see that surface"
+                )));
+            }
+        }
+    }
+    if matches!(
+        claim.policy.as_str(),
+        "independently-witnessed" | "high-assurance"
+    ) {
+        if claim.witness_statements.is_empty() {
+            return Err(FrfError::new(format!(
+                "claim {id}: policy {} requires a witness attestation but names none",
+                claim.policy
+            )));
+        }
+        // EVERY premise must have an affirming, subject-REBOUND attestation
+        // of ITSELF among the carried statements.
+        let mut witnesses: Vec<WitnessStatementVerified> = Vec::new();
+        for wid in &claim.witness_statements {
+            witnesses.push(load_witness_statement_verified(store, wid)?);
+        }
+        for prem_id in &claim.requires {
+            let affirmed = witnesses.iter().any(|w| {
+                w.subject().kind == "receipt"
+                    && w.subject().id == *prem_id
+                    && w.statement().attestation.outcome == "affirm"
+            });
+            if !affirmed {
+                return Err(FrfError::new(format!(
+                    "claim {id}: no named witness affirms premise receipt {prem_id}"
+                )));
+            }
+        }
+        // At least one admissible independence relation per premise, bound
+        // to an attestation of THAT premise.
+        for prem_id in &claim.requires {
+            let covered = claim.independence_evidence.iter().any(|iid| {
+                store
+                    .load_independence(iid)
+                    .map(|rec| {
+                        witnesses
+                            .iter()
+                            .any(|w| w.id() == rec.witness_statement && w.subject().id == *prem_id)
+                    })
+                    .unwrap_or(false)
+            });
+            if !covered {
+                return Err(FrfError::new(format!(
+                    "claim {id}: premise receipt {prem_id} has no admissible independence relation — an attestation alone is witnessed, not independently witnessed"
+                )));
+            }
+        }
+    }
+    if claim.policy == "high-assurance" {
+        for r in &bodies {
+            if r.execution_profile != crate::model::EXECUTION_PROFILE_LINUX {
+                return Err(FrfError::new(format!(
+                    "claim {id}: high-assurance requires the reference execution profile for every premise"
+                )));
+            }
+            if r.capture_bounds != crate::host::reference_capture_bounds() {
+                return Err(FrfError::new(format!(
+                    "claim {id}: high-assurance requires the reference capture bounds for every premise"
+                )));
+            }
+        }
+        if claim.replay_profile != crate::model::EXECUTION_PROFILE_LINUX {
+            return Err(FrfError::new(format!(
+                "claim {id}: its replay_profile does not record the reference profile"
+            )));
+        }
+    }
+
+    // 7. The derived projections rederive.
+    if claim.observable_scope != crate::scope::region_observables(&k) {
+        return Err(FrfError::new(format!(
+            "claim {id}: its observable_scope does not rederive from its scope"
+        )));
+    }
+    let excluded = crate::scope::region_excluded_evidence(&bodies, &k);
+    if claim.excluded_evidence != excluded {
+        return Err(FrfError::new(format!(
+            "claim {id}: its excluded_evidence does not rederive from the premises"
+        )));
+    }
+    // The remaining IR fields are pure renderings of the verified evidence
+    // and must rederive exactly: the proposition is the deterministic
+    // rendering of K, the relation is the clean axes' comparators, the
+    // environment label is the first premise's arch-os + digest prefix, and
+    // the court + fixture family are the first premise's. A tampered
+    // proposition or label is a tampered claim, not a rendering of it.
+    let expected_proposition = format!(
+        "parity(cells=[{}])",
+        k.cells
+            .iter()
+            .map(crate::commands::claim::cell_proposition)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    if claim.proposition != expected_proposition {
+        return Err(FrfError::new(format!(
+            "claim {id}: its proposition does not rederive from its scope — the claim does not say what its evidence says"
+        )));
+    }
+    let mut expected_relation: Vec<String> = Vec::new();
+    for r in &bodies {
+        for obs in &r.observables {
+            if !r.residuals.iter().any(|res| res.axis == obs.axis)
+                && !expected_relation.contains(&obs.comparator)
+            {
+                expected_relation.push(obs.comparator.clone());
+            }
+        }
+    }
+    if claim.relation != expected_relation.join(", ") {
+        return Err(FrfError::new(format!(
+            "claim {id}: its relation does not rederive from the premises' clean axes"
+        )));
+    }
+    let expected_env = format!(
+        "{}-{} ({})",
+        first.environment.architecture,
+        first.environment.os,
+        &first.environment.digest[..8]
+    );
+    if claim.environment != expected_env {
+        return Err(FrfError::new(format!(
+            "claim {id}: its environment label does not rederive from the first premise"
+        )));
+    }
+    if claim.court != first.court.id {
+        return Err(FrfError::new(format!(
+            "claim {id}: its court does not match the first premise"
+        )));
+    }
+    if claim.fixture_family != first.court.admissibility_envelope.fixture_family {
+        return Err(FrfError::new(format!(
+            "claim {id}: its fixture family does not match the first premise"
+        )));
+    }
+
+    Ok(ClaimVerified {
+        id: id.to_string(),
+        claim,
+        premises,
     })
 }
 

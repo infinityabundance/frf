@@ -81,31 +81,44 @@ fn scan_schema_tokens(text: &str) -> BTreeSet<String> {
     out
 }
 
-/// Scan for `FRF/<NAME>/v<N>` domain tags.
+/// Scan for `FRF/<NAME>/v<N>` domain tags. The lexical scan accepts the
+/// whole token shape (`FRF/` + uppercase/hyphen names + `/v` + digits) and
+/// then VALIDATES the shape — a scanner that stops at the first lowercase
+/// character would never recognize an ordinary domain tag like `FRF/RUN/v1`
+/// (the `v` is lowercase), and a tag whose name part still contains a `/`
+/// after `rsplit_once('/')` is likewise not a domain tag. Both failure
+/// modes made the old scan vacuously pass; the unit tests below pin the
+/// recognition.
 fn scan_domain_tokens(text: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut rest = text;
     while let Some(pos) = rest.find("FRF/") {
         let after = &rest[pos + "FRF/".len()..];
         let end = after
-            .find(|c: char| !(c.is_ascii_uppercase() || c == '-' || c == '/'))
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '/'))
             .unwrap_or(after.len());
         let token = format!("FRF/{}", &after[..end]);
-        if let Some((name, ver)) = token.rsplit_once('/') {
-            if !name.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '-')
-                // Allow a lowercase v in the version part (v1).
-                && ver.starts_with('v')
-                && ver[1..].chars().all(|c| c.is_ascii_digit())
-            {
-                out.insert(token);
-            }
+        if is_domain_tag(&token) {
+            out.insert(token);
         }
         rest = &after[end..];
     }
     out
+}
+
+/// The domain-tag shape: `FRF/<NAME>/v<N>` where NAME is one or more
+/// uppercase letters/hyphens (no slashes) and N is one or more digits.
+fn is_domain_tag(token: &str) -> bool {
+    let Some((head, ver)) = token.rsplit_once("/v") else {
+        return false;
+    };
+    if ver.is_empty() || !ver.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let Some(name) = head.strip_prefix("FRF/") else {
+        return false;
+    };
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '-')
 }
 
 fn collect(registry: &serde_json::Value, key: &str, id_key: &str) -> BTreeSet<String> {
@@ -144,12 +157,14 @@ fn every_schema_and_domain_used_in_code_is_registered() {
     }
 
     let mut missing: Vec<String> = Vec::new();
+    let mut found_any = false;
     for root in ["src", "xtask/src", "verifier-go", "tests", "spec"] {
         for (path, text) in walk(root) {
             if path.contains("/target/") {
                 continue;
             }
             for token in scan_schema_tokens(&text) {
+                found_any = true;
                 if !schemas.contains(&token) && !profiles.contains(&token) {
                     missing.push(format!(
                         "{path}: schema/profile {token} is not in the registry"
@@ -157,6 +172,7 @@ fn every_schema_and_domain_used_in_code_is_registered() {
                 }
             }
             for token in scan_domain_tokens(&text) {
+                found_any = true;
                 if !domains.contains(&token) {
                     missing.push(format!(
                         "{path}: identity domain {token} is not in the registry"
@@ -165,6 +181,14 @@ fn every_schema_and_domain_used_in_code_is_registered() {
             }
         }
     }
+    // The scanners must actually RECOGNIZE tags, or this test is vacuous —
+    // a scanner that recognizes nothing reports nothing missing. The code
+    // below has an identity domain in it (FRF/KNOWLEDGE/v2 in the comment),
+    // so a healthy scanner always finds at least the schema and domain sets.
+    assert!(
+        found_any,
+        "the scanners recognized no protocol tags at all — this test would be vacuous"
+    );
     assert!(
         missing.is_empty(),
         "unregistered protocol identifiers (spec drift is a protocol defect):\n{}",
@@ -173,26 +197,98 @@ fn every_schema_and_domain_used_in_code_is_registered() {
 }
 
 #[test]
-fn the_readme_registry_tables_carry_every_registered_id() {
-    let reg = registry();
-    let readme = fs::read_to_string(Path::new(MANIFEST).join("README.md")).unwrap();
-    let mut ids: Vec<String> = Vec::new();
-    ids.extend(collect(&reg, "objects", "id"));
-    ids.extend(collect(&reg, "identities", "domain"));
-    ids.extend(collect(&reg, "schemas", "id"));
-    ids.extend(collect(&reg, "policies", "id"));
-    ids.extend(collect(&reg, "execution_profiles", "id"));
-
-    let mut missing: Vec<String> = Vec::new();
-    for id in ids {
-        // Every entry's id must occur in the README's registry tables.
-        if !readme.contains(&id) {
-            missing.push(id);
-        }
-    }
+fn the_readme_registry_tables_are_generated_projections() {
+    // The README block between the PROTOCOL-REGISTRY markers must BE the
+    // projection of the registry — not merely "contain" each id somewhere.
+    // The xtask generator rewrites the block from protocol/registry.json;
+    // this test runs its --check mode, which byte-compares the committed
+    // block against the generated one and exits non-zero on any drift.
+    let xtask = Path::new(MANIFEST).join("xtask/Cargo.toml");
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--manifest-path"])
+        .arg(&xtask)
+        .args(["--", "regen-readme", "--check"])
+        .current_dir(MANIFEST)
+        .output()
+        .expect("cargo xtask regen-readme --check must run");
     assert!(
-        missing.is_empty(),
-        "the README registry tables are missing entries (regenerate from protocol/registry.json):\n{}",
-        missing.join("\n")
+        out.status.success(),
+        "README.md's protocol registry tables drifted from protocol/registry.json — run `cargo xtask regen-readme` and commit the result.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn the_domain_scanner_recognizes_ordinary_domain_tags() {
+    // The regression that motivated the rewrite: the scanner stopped at the
+    // first lowercase character (the `v` in `/v1`) and then failed the name
+    // check because the name still contained a `/`. It could not recognize
+    // an ordinary domain tag at all, so the registry test passed vacuously.
+    let cases: &[(&str, &[&str])] = &[
+        ("x FRF/RUN/v1 y", &["FRF/RUN/v1"]),
+        (
+            "FRF/CAPTURE-ADAPTER-RESULT/v1",
+            &["FRF/CAPTURE-ADAPTER-RESULT/v1"],
+        ),
+        ("FRF/COURT/v2", &["FRF/COURT/v2"]),
+        (
+            "FRF/RUN/v1 and FRF/COURT/v2 and FRF/REDUCTION/v3",
+            &["FRF/COURT/v2", "FRF/REDUCTION/v3", "FRF/RUN/v1"],
+        ),
+        // Invalid shapes must not be recognized.
+        ("FRF/run/v1", &[]),
+        ("FRF/RUN/v", &[]),
+        ("FRF/RUN/v1x", &[]),
+        ("FRF/RUN", &[]),
+        ("FRF/RUN/1", &[]),
+    ];
+    for (input, expected) in cases {
+        let got: Vec<String> = scan_domain_tokens(input).into_iter().collect();
+        assert_eq!(
+            got, *expected,
+            "scan_domain_tokens({input:?}) — a scanner that misses a real tag or accepts a fake one breaks the registry guarantee"
+        );
+    }
+    // The specific regression: an ordinary tag must be recognized.
+    assert!(scan_domain_tokens("FRF/RUN/v1").contains("FRF/RUN/v1"));
+    assert!(scan_domain_tokens("FRF/CAPTURE-ADAPTER-RESULT/v1")
+        .contains("FRF/CAPTURE-ADAPTER-RESULT/v1"));
+}
+
+#[test]
+fn the_schema_scanner_recognizes_ordinary_schema_ids() {
+    let cases: &[(&str, &[&str])] = &[
+        ("frf-receipt-v15", &["frf-receipt-v15"]),
+        ("frf-mutation-request-v1", &["frf-mutation-request-v1"]),
+        (
+            "frf-receipt-v15 and frf-claim-v7",
+            &["frf-claim-v7", "frf-receipt-v15"],
+        ),
+        // Invalid shapes must not be recognized.
+        ("frf-receipt", &[]),
+        ("frf-receipt-v", &[]),
+        ("frf-receipt-v15x", &[]),
+        ("frf-Receipt-v15", &[]),
+    ];
+    for (input, expected) in cases {
+        let got: Vec<String> = scan_schema_tokens(input).into_iter().collect();
+        assert_eq!(got, *expected, "scan_schema_tokens({input:?})");
+    }
+}
+
+#[test]
+fn the_registry_has_no_vacuous_domains() {
+    // The registry's identity list must contain real domains (the scan above
+    // depends on them), and every registered domain must be recognizable by
+    // the scanner itself — otherwise a registry entry that is not a domain
+    // tag would be unfindable by construction.
+    let reg = registry();
+    let domains = collect(&reg, "identities", "domain");
+    for d in &domains {
+        assert!(
+            is_domain_tag(d),
+            "registry domain {d} is not a valid FRF/<NAME>/v<N> tag"
+        );
+    }
 }

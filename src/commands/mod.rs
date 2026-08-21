@@ -102,19 +102,16 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 policy,
             } => claim::run(store, &receipt, json, &policy),
             ClaimCmd::Render { receipt, format } => {
-                // The renderers are PURE functions of the compiled Claim IR:
-                // the claim file (canonical JSON) is loaded and verified
-                // (schema + binding) and rendered without any re-derivation.
-                let path = store.claim_path(&receipt).map_err(|e| {
-                    crate::error::FrfError::new(format!("invalid claim render target: {e}"))
-                })?;
-                if !path.is_file() {
-                    return Err(crate::error::FrfError::new(format!(
-                        "no compiled claim for receipt '{receipt}': run `frf claim compile {receipt}` first — the renderers present the compiled IR"
-                    )));
-                }
-                let claim: crate::model::ClaimRecord = store.parse_evidence(&path)?;
-                let out = crate::render::render(&claim, &format, env!("CARGO_PKG_VERSION"))?;
+                // The renderers present a VERIFIED claim only: the target is
+                // resolved (a claim content address, or a receipt via the
+                // by-receipt index) and the claim is re-verified against the
+                // evidence tree (identity, premises, scope, universe, policy
+                // evidence) before a single field is rendered — a hand-
+                // written canonical file is refused, never rendered.
+                let id = crate::commands::claim::resolve_claim(store, &receipt)?;
+                let verified = crate::verify::load_claim_verified(store, &id)?;
+                let view = crate::render::RenderView::from_verified(&verified)?;
+                let out = crate::render::render(&view, &format, env!("CARGO_PKG_VERSION"))?;
                 println!("{out}");
                 Ok(())
             }

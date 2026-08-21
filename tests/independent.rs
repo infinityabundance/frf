@@ -227,12 +227,21 @@ fn both_verifiers_agree_on_a_multi_premise_claim_bundle() {
     );
     assert_success(&out, "multi-premise claim compile");
 
-    // The claim file is named after the first premise and names BOTH.
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt_final}.json"))).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v7");
+    // The receipt now has TWO compiled claims (the baseline from
+    // `golden_to_claim` and this one — a different policy is a different
+    // claim, and they coexist); resolve the multi-premise one through the
+    // index. The claim names BOTH premises.
+    let claims = claim_json_all(&work, &receipt_final);
+    let claim = claims
+        .iter()
+        .find(|c| {
+            c["requires"]
+                .as_array()
+                .map(|r| r.len() == 2)
+                .unwrap_or(false)
+        })
+        .expect("the multi-premise claim");
+    assert_eq!(claim["schema_version"], "frf-claim-v8");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt_final, receipt2])

@@ -1086,10 +1086,8 @@ fn open_residual_blocks_only_its_own_axis() {
     ));
 
     // The claim file carries the IR: scope = [exit], exclusions = [text].
-    let claim_json: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    let claim_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     assert_eq!(claim_json["observable_scope"][0], "exit");
     assert_eq!(claim_json["excluded_evidence"][0], "cli-text-0001");
     // The full scope algebra: the claim's scope carries the executed
@@ -1218,7 +1216,7 @@ fn claim_json_renderer_emits_the_ir_canonically() {
     let first = stdout(&out);
     let value: serde_json::Value = serde_json::from_str(&first).unwrap();
     assert_eq!(value["receipt"], receipt);
-    assert_eq!(value["schema_version"], "frf-claim-v7");
+    assert_eq!(value["schema_version"], "frf-claim-v8");
     assert_eq!(value["policy"], "baseline");
     assert_eq!(value["scope"]["cells"][0]["observables"][0], "exit");
     // Determinism: a second emission is byte-identical (canonical form).
@@ -1586,10 +1584,11 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     let receipt = stdout(&out);
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_success(&out, "claim compile (universe U1)");
-    let claim1: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    // The receipt now has one claim (universe U1); after the recompile below
+    // it will have TWO — a different knowledge universe is a DIFFERENT claim
+    // and they coexist forever. Resolve each by its snapshot cid.
+    let claims = claim_json_all(&work, &receipt);
+    let claim1 = claims[0].clone();
     let snapshot1 = claim1["knowledge_snapshot"].clone();
     let cid1 = snapshot1["cid"].as_str().unwrap().to_string();
     // The snapshot's cid rederives from its own fields.
@@ -1627,10 +1626,14 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     assert_success(&out, "re-dispose cli-text-0001 (universe mutation)");
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_success(&out, "claim recompile (universe U2)");
-    let claim2: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    // TWO claims now coexist for the same receipt — U1's and U2's.
+    let claims = claim_json_all(&work, &receipt);
+    assert_eq!(claims.len(), 2, "U1's claim and U2's claim coexist forever");
+    let claim2 = claims
+        .iter()
+        .find(|c| c["knowledge_snapshot"]["cid"] != cid1)
+        .expect("the U2 claim")
+        .clone();
     let snapshot2 = claim2["knowledge_snapshot"].clone();
     let cid2 = snapshot2["cid"].as_str().unwrap().to_string();
     assert_ne!(

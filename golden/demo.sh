@@ -254,14 +254,35 @@ IND_ID=$("$FRF_BIN" --root "$ROOT" witness independence "$WIT_RECEIPT_ID" \
 echo "independence evidence: $IND_ID"
 echo "-- the independence record is content-addressed and binds the statement:"
 grep -o '"relation":"[^"]*"' "$ROOT"/independence/"$IND_ID".json
-if ! "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL" --policy high-assurance; then
+COMPILE_OUT=$("$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL" --policy high-assurance 2>&1) || {
   echo "FAIL: the high-assurance claim did not compile" >&2
+  echo "$COMPILE_OUT" >&2
+  exit 1
+}
+# The claim is content-addressed (FRF/CLAIM/v1): the compile prints its id,
+# and the by-receipt index maps the receipt to its claim(s).
+CLAIM_ID=$(printf '%s\n' "$COMPILE_OUT" | grep -o '^claim [0-9a-f]\{64\}$' | cut -d' ' -f2)
+if [ -z "$CLAIM_ID" ]; then
+  echo "FAIL: the claim id was not printed" >&2
   exit 1
 fi
+CLAIM_FILE="$ROOT"/claims/"$CLAIM_ID".json
+if [ ! -f "$CLAIM_FILE" ]; then
+  echo "FAIL: the content-addressed claim file is missing" >&2
+  exit 1
+fi
+if [ ! -f "$ROOT"/claims/by-receipt/"$RECEIPT_FINAL"/"$CLAIM_ID" ]; then
+  echo "FAIL: the by-receipt index does not bind the claim" >&2
+  exit 1
+fi
+echo "claim id: $CLAIM_ID"
 echo "-- the claim carries the independence evidence:"
-grep -o '"independence_evidence":\[[^]]*\]' "$ROOT"/claims/"$RECEIPT_FINAL".json
+grep -o '"independence_evidence":\[[^]]*\]' "$CLAIM_FILE"
 echo "-- the claim's capability evidence (carried in the IR):"
-grep -o '"capability":\[[^]]*\]' "$ROOT"/claims/"$RECEIPT_FINAL".json
+grep -o '"capability":\[[^]]*\]' "$CLAIM_FILE"
+echo "-- the renderer VERIFIES the claim before presenting it (a hand-written claim file is refused):"
+"$FRF_BIN" --root "$ROOT" claim render "$CLAIM_ID" --format ci
+"$FRF_BIN" --root "$ROOT" claim render "$RECEIPT_FINAL" --format prose >/dev/null
 BUNDLE=golden/work/portable.frf
 "$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
 BUNDLE_SINGLE=golden/work/portable-single.frf
@@ -275,4 +296,4 @@ find "$ROOT" -type f | sort
 
 echo
 printf 'Done. Receipt (canonical JSON): %s/receipts/%s.json\n' "$ROOT" "$RECEIPT_FINAL"
-echo "Claim:    $ROOT/claims/$RECEIPT_FINAL.json"
+echo "Claim:    $CLAIM_FILE"

@@ -123,7 +123,14 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v15";
 /// receipt at `independently-witnessed` and above: an affirming witness
 /// with zero declared independence is witnessed, not independently
 /// witnessed.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v7";
+/// v8: the claim is a content-addressed IMMUTABLE protocol object
+/// (`FRF/CLAIM/v1` over the canonical document minus the id; stored at
+/// `claims/<id>.json` with the `claims/by-receipt/<receipt>/<id>` index —
+/// the same receipt under a different universe or policy is a different
+/// claim, and they coexist forever), and the stored prose fields
+/// (`positive`/`non_claims`) are GONE — prose is a renderer output derived
+/// from the verified IR, never stored as authoritative Claim IR.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v8";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -3690,7 +3697,7 @@ impl EvidenceRegion {
 }
 
 /// The exact candidate artifact a compiled claim is attributed to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimCandidate {
     pub name: String,
@@ -3741,12 +3748,28 @@ pub struct ClaimCapability {
 ///   admissible relative to an explicitly committed state of knowledge —
 ///   the compiled claim carries the universe, so the negative search (not
 ///   merely the positive premises) is portable and reproducible;
-/// - prose (`positive`) is ONE renderer of the IR; `--json` emits the same
-///   IR canonically.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// - prose is NOT stored as authoritative Claim IR: `positive`/`non_claims`
+///   are renderer outputs, deterministically derived from the verified
+///   premises by the renderers. The stored IR is the proposition + the
+///   evidence graph, and the claim is content-addressed (`FRF/CLAIM/v1` over
+///   the canonical document minus the id), so the identity cryptographically
+///   binds the exact proposition — not a sentence someone happened to write.
+///
+/// v8: the claim is a content-addressed IMMUTABLE protocol object
+/// (`claims/<id>.json` with the `claims/by-receipt/<receipt>/<id>` index —
+/// the same receipt compiled under a different universe or policy is a
+/// DIFFERENT claim, and they coexist forever). The stored prose fields are
+/// gone; the renderers derive them from the verified IR.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimRecord {
+    /// Content address: `FRF/CLAIM/v1` over the canonical document minus
+    /// the id field. Immutable: a different universe, policy, or scope is a
+    /// different claim id.
+    pub id: String,
     pub schema_version: String,
+    /// The FIRST premise receipt (the claim's root into the evidence
+    /// graph; the `claims/by-receipt/<receipt>/<id>` index points here).
     pub receipt: String,
     /// Prose id of the admitted reference (`ref-cli-1.8.2`).
     pub authority: String,
@@ -3806,8 +3829,6 @@ pub struct ClaimRecord {
     /// under (the receipt's execution profile; `high-assurance` requires the
     /// reference profile and the reference capture bounds).
     pub replay_profile: String,
-    pub positive: Vec<String>,
-    pub non_claims: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

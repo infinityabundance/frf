@@ -157,11 +157,7 @@ impl Store {
                 path.display()
             )));
         }
-        let inv: crate::model::ComparatorInvocation = serde_json::from_slice(
-            &fs::read(&path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let inv: crate::model::ComparatorInvocation = self.parse_evidence(&path)?;
         let rederived = crate::semantics::comparator_invocation_identity(
             &crate::semantics::ComparatorInvocationContent {
                 axis: &inv.axis,
@@ -210,11 +206,7 @@ impl Store {
                 path.display()
             )));
         }
-        let res: crate::model::ComparatorResult = serde_json::from_slice(
-            &fs::read(&path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let res: crate::model::ComparatorResult = self.parse_evidence(&path)?;
         let rederived = crate::semantics::comparator_result_identity(
             &crate::semantics::ComparatorResultContent {
                 request_cid: &res.request_cid,
@@ -264,18 +256,7 @@ impl Store {
         }
         let dir = self.comparator_dir(run, axis)?;
         let response: crate::model::ComparatorResponse =
-            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
-                FrfError::new(format!(
-                    "cannot read {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?)
-            .map_err(|e| {
-                FrfError::new(format!(
-                    "cannot parse {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?;
+            self.parse_evidence(&dir.join("response.json"))?;
         if response.request_id != invocation.request_cid {
             return Err(FrfError::new(format!(
                 "run {run}: comparator response for axis {axis} does not name the request it answers"
@@ -306,10 +287,7 @@ impl Store {
     pub fn load_mutation_invocation(&self, id: &str) -> Result<crate::model::MutationInvocation> {
         let dir = self.challenge_mutation_dir(id)?;
         let path = dir.join("invocation.json");
-        let bytes = fs::read(&path)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
-        let inv: crate::model::MutationInvocation = serde_json::from_slice(&bytes)
-            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let inv: crate::model::MutationInvocation = self.parse_evidence(&path)?;
         let rederived = crate::semantics::mutation_invocation_identity(
             &crate::semantics::MutationInvocationContent {
                 operator: &inv.operator,
@@ -345,10 +323,7 @@ impl Store {
     pub fn load_mutation_result(&self, id: &str) -> Result<crate::model::MutationResult> {
         let dir = self.challenge_mutation_dir(id)?;
         let path = dir.join("result.json");
-        let bytes = fs::read(&path)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
-        let res: crate::model::MutationResult = serde_json::from_slice(&bytes)
-            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let res: crate::model::MutationResult = self.parse_evidence(&path)?;
         let rederived =
             crate::semantics::mutation_result_identity(&crate::semantics::MutationResultContent {
                 request_cid: &res.request_cid,
@@ -392,18 +367,7 @@ impl Store {
         }
         let dir = self.challenge_mutation_dir(id)?;
         let response: crate::model::MutationResponse =
-            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
-                FrfError::new(format!(
-                    "cannot read {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?)
-            .map_err(|e| {
-                FrfError::new(format!(
-                    "cannot parse {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?;
+            self.parse_evidence(&dir.join("response.json"))?;
         if response.request_id != invocation.request_cid {
             return Err(FrfError::new(format!(
                 "mutation evidence {id}: the response does not name the request it answers"
@@ -468,11 +432,7 @@ impl Store {
                 path.display()
             )));
         }
-        let inv: crate::model::NormalizerInvocation = serde_json::from_slice(
-            &fs::read(&path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let inv: crate::model::NormalizerInvocation = self.parse_evidence(&path)?;
         if inv.normalizer_id != id || inv.side != side {
             return Err(FrfError::new(format!(
                 "run {run}: normalizer invocation under {id}/{side} names normalizer {} on side {} — the name is a claim",
@@ -527,11 +487,7 @@ impl Store {
                 path.display()
             )));
         }
-        let res: crate::model::NormalizerResult = serde_json::from_slice(
-            &fs::read(&path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let res: crate::model::NormalizerResult = self.parse_evidence(&path)?;
         let rederived = crate::semantics::normalizer_result_identity(
             &crate::semantics::NormalizerResultContent {
                 request_cid: &res.request_cid,
@@ -583,18 +539,7 @@ impl Store {
         }
         let dir = self.normalizer_dir(run, id, side)?;
         let response: crate::model::NormalizerResponse =
-            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
-                FrfError::new(format!(
-                    "cannot read {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?)
-            .map_err(|e| {
-                FrfError::new(format!(
-                    "cannot parse {}: {e}",
-                    dir.join("response.json").display()
-                ))
-            })?;
+            self.parse_evidence(&dir.join("response.json"))?;
         if response.request_id != invocation.request_cid {
             return Err(FrfError::new(format!(
                 "run {run}: normalizer response for {id}/{side} does not name the request it answers"
@@ -624,16 +569,8 @@ impl Store {
                 res_path.display()
             )));
         }
-        let inv: crate::model::CaptureAdapterInvocation = serde_json::from_slice(
-            &fs::read(&inv_path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", inv_path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", inv_path.display())))?;
-        let res: crate::model::CaptureAdapterResult = serde_json::from_slice(
-            &fs::read(&res_path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", res_path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", res_path.display())))?;
+        let inv: crate::model::CaptureAdapterInvocation = self.parse_evidence(&inv_path)?;
+        let res: crate::model::CaptureAdapterResult = self.parse_evidence(&res_path)?;
         if inv.axis != axis || inv.side != side {
             return Err(FrfError::new(format!(
                 "run {run}: capture-adapter invocation under {axis}/{side} names axis {} on side {} — the name is a claim",
@@ -675,11 +612,7 @@ impl Store {
             )));
         }
         let response_path = dir.join("response.json");
-        let response: crate::model::CaptureAdapterResponse =
-            serde_json::from_slice(&fs::read(&response_path).map_err(|e| {
-                FrfError::new(format!("cannot read {}: {e}", response_path.display()))
-            })?)
-            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", response_path.display())))?;
+        let response: crate::model::CaptureAdapterResponse = self.parse_evidence(&response_path)?;
         if response.request_id != inv.request_cid {
             return Err(FrfError::new(format!(
                 "run {run}: capture-adapter response for {axis}/{side} does not name the request it answers"
@@ -698,7 +631,7 @@ impl Store {
     /// `reductions/<id>/minimizer/` — the invocation evidence directory of
     /// the external minimizer that proposed a reduction (request.json,
     /// response.json, invocation.json, result.json). The reduction RECORD
-    /// itself lives at `reductions/<id>.yaml`.
+    /// itself lives at `reductions/<id>.json`.
     pub fn minimizer_dir(&self, reduction_id: &str) -> Result<PathBuf> {
         validate_id("reduction", reduction_id)?;
         Ok(self
@@ -725,11 +658,119 @@ impl Store {
         Ok(self.root.join("receipts").join(format!("{id}.json")))
     }
 
-    pub fn claim_path(&self, receipt_id: &str) -> Result<PathBuf> {
+    /// The content-addressed claim document path: `claims/<id>.json`. The
+    /// id is `FRF/CLAIM/v1` over the canonical document minus the id — a
+    /// claim is an immutable protocol object, never a per-receipt slot.
+    pub fn claim_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("claim", id)?;
+        Ok(self.root.join("claims").join(format!("{id}.json")))
+    }
+
+    /// The non-normative by-receipt index: `claims/by-receipt/<receipt>/`
+    /// lists the claim ids compiled under that receipt (one marker file per
+    /// claim). The receipt is a root into the evidence graph; the claims are
+    /// the projections compiled over it — a receipt compiled under different
+    /// universes or policies yields several claims that coexist forever.
+    pub fn claim_index_dir(&self, receipt_id: &str) -> Result<PathBuf> {
         validate_id("receipt", receipt_id)?;
-        // Claims are canonical JSON (RFC 8785) — the Claim IR's protocol
-        // representation; prose is one renderer of the same document.
-        Ok(self.root.join("claims").join(format!("{receipt_id}.json")))
+        Ok(self.root.join("claims").join("by-receipt").join(receipt_id))
+    }
+
+    /// The marker path of one claim in the by-receipt index.
+    pub fn claim_index_path(&self, receipt_id: &str, claim_id: &str) -> Result<PathBuf> {
+        Ok(self.claim_index_dir(receipt_id)?.join(claim_id))
+    }
+
+    /// The claim ids compiled under one receipt (the by-receipt index,
+    /// sorted). The index is non-normative — the claims themselves are the
+    /// evidence — but it is the portable way to find every projection of a
+    /// receipt.
+    pub fn claim_ids_for_receipt(&self, receipt_id: &str) -> Result<Vec<String>> {
+        let dir = self.claim_index_dir(receipt_id)?;
+        if !dir.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut ids: Vec<String> = std::fs::read_dir(&dir)
+            .map_err(|e| FrfError::new(format!("cannot read the claim index: {e}")))?
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        ids.sort();
+        Ok(ids)
+    }
+
+    /// Load a claim document by its content address: canonical parse (the
+    /// document must BE its own canonical serialization), the embedded id
+    /// must match the requested id, and the id must rederive from the
+    /// document (`FRF/CLAIM/v1` over the canonical bytes minus the id).
+    pub fn load_claim(&self, id: &str) -> Result<crate::model::ClaimRecord> {
+        let path = self.claim_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no claim {id} (missing {})",
+                path.display()
+            )));
+        }
+        let claim: crate::model::ClaimRecord = self.parse_evidence(&path)?;
+        if claim.id != id {
+            return Err(FrfError::new(format!(
+                "claim {id}: the id inside the document is {} — the name is a claim",
+                claim.id
+            )));
+        }
+        let rederived = crate::semantics::claim_identity(&claim)?;
+        if rederived != id {
+            return Err(FrfError::new(format!(
+                "claim {id} is not content-addressed: the canonical document minus the id hashes to {}; refusing to consume a hand-edited or forged claim",
+                &rederived[..16]
+            )));
+        }
+        Ok(claim)
+    }
+
+    /// Write a compiled claim: content-addressed and IMMUTABLE. The document
+    /// is written once at `claims/<id>.json` (an existing object is
+    /// re-verified as the identical document — never overwritten), and the
+    /// non-normative by-receipt index gains its marker. A claim is NOT a
+    /// pure function of the receipt alone (it depends on the committed
+    /// universe and the admission policy), so re-compiling is a NEW claim,
+    /// never an overwrite.
+    pub fn write_claim(&self, claim: &crate::model::ClaimRecord) -> Result<()> {
+        let expected = crate::semantics::claim_identity(claim)?;
+        if expected != claim.id {
+            return Err(FrfError::new(format!(
+                "cannot write claim {}: its fields hash to {} — the id is a claim",
+                claim.id,
+                &expected[..16]
+            )));
+        }
+        let path = self.claim_path(&claim.id)?;
+        let json = crate::canon::canonical(claim)?;
+        if path.exists() {
+            // Content-addressed idempotency: re-verify the existing object IS
+            // this document. "exists" is never "assume okay".
+            let existing = std::fs::read_to_string(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+            if existing != json {
+                return Err(FrfError::new(format!(
+                    "claim {} already exists with different bytes at {}; refusing to overwrite evidence",
+                    claim.id,
+                    path.display()
+                )));
+            }
+        } else {
+            self.write_once(&path, &json)?;
+        }
+        let index = self.claim_index_path(&claim.receipt, &claim.id)?;
+        if !index.exists() {
+            std::fs::create_dir_all(index.parent().unwrap()).map_err(|e| {
+                FrfError::new(format!("cannot create the claim index directory: {e}"))
+            })?;
+            std::fs::write(&index, &claim.receipt)
+                .map_err(|e| FrfError::new(format!("cannot write the claim index: {e}")))?;
+        }
+        Ok(())
     }
 
     /// The EVIDENCE UNIVERSE of the store right now: every residual head
@@ -953,11 +994,7 @@ impl Store {
                 path.display()
             )));
         }
-        let stmt: WitnessStatement = serde_json::from_slice(
-            &fs::read(&path)
-                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
-        )
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let stmt: WitnessStatement = self.parse_evidence(&path)?;
         if stmt.id != id {
             return Err(FrfError::new(format!(
                 "witness statement {id}: the id inside the record is {} — the name is a claim",
@@ -998,6 +1035,24 @@ impl Store {
                 "witness statement {id}: the preserved request does not hash to its recorded request_cid"
             )));
         }
+        // The preserved REQUEST's subject block must equal the statement's
+        // subject block: the witness answered a request about THIS exact
+        // subject (kind + id + content address). A statement whose preserved
+        // request names a different subject is internally inconsistent and is
+        // refused even before the subject is rebound to the evidence tree.
+        let request: serde_json::Value = self.parse_evidence(&request_path)?;
+        let request_subject = request.get("subject").ok_or_else(|| {
+            FrfError::new(format!(
+                "witness statement {id}: the preserved request carries no subject block"
+            ))
+        })?;
+        let stmt_subject = serde_json::to_value(&stmt.subject)
+            .map_err(|e| FrfError::new(format!("cannot serialize the subject: {e}")))?;
+        if request_subject != &stmt_subject {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the preserved request's subject block does not equal the statement's — a statement can only answer the request it records"
+            )));
+        }
         let response_bytes = fs::read(&response_path)
             .map_err(|e| FrfError::new(format!("cannot read {}: {e}", response_path.display())))?;
         if crate::host::sha256_bytes(&response_bytes) != stmt.response_cid {
@@ -1005,8 +1060,7 @@ impl Store {
                 "witness statement {id}: the preserved response does not hash to its recorded response_cid"
             )));
         }
-        let response: WitnessResponse = serde_json::from_slice(&response_bytes)
-            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", response_path.display())))?;
+        let response: WitnessResponse = self.parse_evidence(&response_path)?;
         if response.request_id != stmt.request_cid {
             return Err(FrfError::new(format!(
                 "witness statement {id}: the preserved response does not name the request it answers"
@@ -1698,8 +1752,14 @@ impl Store {
         }
     }
 
-    /// Write a derived artifact (tokens, claims): a pure function of
-    /// immutable inputs, so overwriting with identical output is safe.
+    /// Write a derived artifact. Since claims became content-addressed
+    /// immutable objects (`frf-claim-v8`), the only remaining derived
+    /// artifact here is the κ TOKEN: a pure function of immutable inputs
+    /// (the residual record + the disposition projection of its immutable
+    /// event chain), so overwriting with identical output is safe. Claims
+    /// are written through [`Store::write_claim`] — write-once, never
+    /// overwritten, because a claim depends on the committed universe and
+    /// the admission policy, not on the receipt alone.
     pub fn write_derived(&self, path: &Path, contents: &str) -> Result<()> {
         fs::write(path, contents)
             .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display())))

@@ -83,7 +83,7 @@ fn the_claim_renders_into_every_presentation_without_new_meaning() {
     );
     assert_success(&out, "render json");
     let ir: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(ir["schema_version"], "frf-claim-v7");
+    assert_eq!(ir["schema_version"], "frf-claim-v8");
     assert_eq!(ir["receipt"], receipt);
 
     // sarif: a 2.1.0 document — the claim as a none-level result, the
@@ -175,6 +175,133 @@ fn the_claim_renders_into_every_presentation_without_new_meaning() {
     );
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no compiled claim"));
+}
+
+/// The P0 semantic-non-bypass regression: a SELF-CONSISTENT forged claim
+/// (a canonical document whose id rederives, placed at `claims/<id>.json`
+/// with its by-receipt index marker) must be REFUSED by every renderer —
+/// the renderers present VERIFIED evidence, never a hand-written file, so
+/// "I claim whatever I want" cannot enter SARIF/CI/badge/prose output
+/// without going through claim compilation.
+#[test]
+fn a_self_consistent_forged_claim_is_refused_by_every_renderer() {
+    let work = Workdir::new("render-forgery");
+    work.copy_canonical_tree();
+    let receipt = compiled_claim(&work);
+
+    // The genuine claim document.
+    let genuine: serde_json::Value = claim_json(&work, &receipt);
+
+    // Forge: tamper the proposition (say whatever we want), keep everything
+    // else, and recompute a VALID content address for the tampered document
+    // (FRF/CLAIM/v1 over the canonical document minus the id). The forged
+    // claim is cryptographically self-consistent — the id rederives.
+    let mut forged = genuine.clone();
+    forged["proposition"] = serde_json::json!("parity(cells=[]): I claim whatever I want");
+    let mut doc = forged.clone();
+    doc.as_object_mut().unwrap().remove("id");
+    let canonical = frf::canon::canonical(&doc).unwrap();
+    let forged_id = frf::host::sha256_bytes(format!("FRF/CLAIM/v1\n{canonical}").as_bytes());
+    forged["id"] = serde_json::json!(forged_id);
+    let forged_bytes = frf::canon::canonical(&forged).unwrap();
+    std::fs::write(
+        work.path(&format!("{ROOT}/claims/{forged_id}.json")),
+        &forged_bytes,
+    )
+    .unwrap();
+    std::fs::create_dir_all(work.path(&format!("{ROOT}/claims/by-receipt/{receipt}"))).unwrap();
+    std::fs::write(
+        work.path(&format!("{ROOT}/claims/by-receipt/{receipt}/{forged_id}")),
+        &receipt,
+    )
+    .unwrap();
+
+    // The forged claim's id rederives from its own bytes (it is canonical
+    // and content-addressed), yet every renderer REFUSES it: the claim's
+    // proposition does not rederive from its verified scope.
+    for format in ["prose", "json", "sarif", "ci", "badge"] {
+        let out = frf(
+            &work,
+            &[
+                "--root", ROOT, "claim", "render", &forged_id, "--format", format,
+            ],
+        );
+        assert!(
+            !out.status.success(),
+            "render {format} accepted the forged claim"
+        );
+        assert!(
+            stderr(&out).contains("proposition does not rederive")
+                || stderr(&out).contains("does not rederive"),
+            "render {format} refused for the wrong reason: {}",
+            stderr(&out)
+        );
+    }
+
+    // The genuine claim still renders by its own id (the forged one never
+    // displaced it). Rendering by the RECEIPT is now correctly ambiguous —
+    // two claims are bound to it — and the command names the ambiguity.
+    let genuine_id = genuine["id"].as_str().unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", genuine_id, "--format", "ci",
+        ],
+    );
+    assert_success(&out, "the genuine claim still renders");
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", &receipt, "--format", "ci",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("has 2 compiled claims"),
+        "the ambiguity is named: {}",
+        stderr(&out)
+    );
+}
+
+/// A receipt compiled under two admission policies is TWO claims — a
+/// content-addressed claim is a projection of (receipt, universe, policy),
+/// not a slot on the receipt — and both coexist forever.
+#[test]
+fn a_receipt_compiled_under_two_policies_yields_two_coexisting_claims() {
+    let work = Workdir::new("render-two-claims");
+    work.copy_canonical_tree();
+    let receipt = compiled_claim(&work);
+
+    // Compile again under a different policy.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "high-assurance",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "high-assurance without its evidence refuses"
+    );
+
+    // Render by RECEIPT is now ambiguous (two claims would exist after the
+    // second compile) — the command names the ambiguity instead of picking
+    // one arbitrarily.
+    let claims = claim_json_all(&work, &receipt);
+    assert_eq!(claims.len(), 1, "only the baseline claim compiled");
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", &receipt, "--format", "prose",
+        ],
+    );
+    assert_success(&out, "a single claim renders by receipt");
 }
 
 #[test]
