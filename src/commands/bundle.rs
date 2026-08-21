@@ -309,6 +309,33 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                         kind: "challenge",
                     },
                 );
+                // An external mutation proposal's preserved evidence (the
+                // instrument that proposed the mutant): request + response +
+                // invocation + result under `challenges/<id>/mutation/`.
+                if ch.mutation_invocation_id.is_some() || ch.mutation_result_id.is_some() {
+                    let mdir = store.challenge_mutation_dir(chid)?;
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let path = mdir.join(f);
+                        if !path.is_file() {
+                            continue;
+                        }
+                        let bytes = read(&path, "mutation evidence")?;
+                        let rel = format!("challenges/{chid}/mutation/{f}");
+                        entries.insert(
+                            rel.clone(),
+                            ClosureEntry {
+                                rel,
+                                sha256: host::sha256_bytes(&bytes),
+                                kind: "mutation-evidence",
+                            },
+                        );
+                    }
+                }
                 if !runs.contains(&ch.run) {
                     runs.push(ch.run.clone());
                 }

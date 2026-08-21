@@ -148,9 +148,11 @@ pub enum CourtCmd {
         /// Court declaration (the same manifest `court run` takes)
         manifest: PathBuf,
         /// Mutation operators to apply (default: every built-in operator for
-        /// the court's declared observables): exit-class, stderr-first-line,
-        /// stdout-first-line
-        #[arg(long, value_name = "exit-class,stderr-first-line")]
+        /// the court's declared observables, plus each declared external
+        /// mutation provider for its target axes): exit-class,
+        /// stderr-first-line, stdout-first-line, or a declared mutation
+        /// provider id
+        #[arg(long, value_name = "exit-class,stderr-first-line,provider-id")]
         operators: Option<String>,
     },
 }

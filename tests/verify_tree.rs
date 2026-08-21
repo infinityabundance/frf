@@ -1310,16 +1310,39 @@ fn challenges_are_self_consistent() {
         assert_eq!(r.schema_version, SCHEMA_CHALLENGE, "challenge {name}");
         assert_eq!(r.id, id, "the filename must be the content address");
 
-        // The mutant artifact rederives: regenerate the deterministic wrapper
-        // from (operator, reference hash) and prove the recorded hash.
-        let operator = frf::mutation::MutationOperator::parse(&r.operator).unwrap();
-        assert_eq!(operator.target_axis(), r.target_axis);
-        let wrapper = operator.wrapper(&r.reference_sha256);
-        assert_eq!(
-            host::sha256_bytes(wrapper.as_bytes()),
-            r.mutant_candidate_sha256,
-            "challenge {id}: the mutant artifact must be the deterministic wrapper of the reference"
-        );
+        // The mutant artifact rederives: for a built-in operator it is the
+        // deterministic wrapper from (operator, reference hash); for an
+        // external mutation provider it is the PROPOSED artifact preserved in
+        // the response evidence (rehashed here, cross-verified by the
+        // loader). Either way the recorded hash is a claim until recomputed.
+        match frf::mutation::MutationOperator::parse(&r.operator) {
+            Ok(operator) => {
+                assert_eq!(operator.target_axis(), r.target_axis);
+                let wrapper = operator.wrapper(&r.reference_sha256);
+                assert_eq!(
+                    host::sha256_bytes(wrapper.as_bytes()),
+                    r.mutant_candidate_sha256,
+                    "challenge {id}: the mutant artifact must be the deterministic wrapper of the reference"
+                );
+            }
+            Err(_) => {
+                // An external mutation provider: the preserved response
+                // proposed the mutant; its bytes must rehash to the recorded
+                // mutant hash, and the evidence chain must cross-verify.
+                assert!(
+                    r.mutation_invocation_id.is_some() && r.mutation_result_id.is_some(),
+                    "challenge {id}: an external-mutation challenge must bind its evidence"
+                );
+                let evidence = store.load_mutation_evidence(&id).unwrap();
+                assert_eq!(
+                    evidence.result.mutant_sha256, r.mutant_candidate_sha256,
+                    "challenge {id}: the proposed mutant must rehash to the recorded mutant hash"
+                );
+                assert_eq!(evidence.invocation.operator, r.operator);
+                assert_eq!(evidence.invocation.target_axis, r.target_axis);
+                assert_eq!(evidence.result.outcome, "proposed");
+            }
+        }
         // The reference object exists (content-addressed) and the mutant
         // object exists in the store.
         assert!(store.object_path(&r.reference_sha256).unwrap().is_file());

@@ -2325,9 +2325,66 @@ pub fn challenge(
         ));
     }
 
-    // The operator set: explicitly requested, or every built-in operator
-    // whose targeted axis the court declares.
-    let operators: Vec<crate::mutation::MutationOperator> = match operators_arg {
+    // The declared mutation providers (the extension protocol): each
+    // declares the axes it seeds defects on, all of which must be declared
+    // observables. Ids must be unique and must not collide with the built-in
+    // operators.
+    let mut seen_mutation: Vec<&str> = Vec::new();
+    for m in &manifest.mutations {
+        crate::store::validate_id("mutation provider", &m.id)?;
+        if seen_mutation.contains(&m.id.as_str()) {
+            return Err(FrfError::new(format!(
+                "duplicate mutation provider id '{}' in the manifest",
+                m.id
+            )));
+        }
+        seen_mutation.push(&m.id);
+        if crate::mutation::MutationOperator::parse(&m.id).is_ok() {
+            return Err(FrfError::new(format!(
+                "mutation provider id '{}' collides with a built-in operator; rename the provider",
+                m.id
+            )));
+        }
+        if m.target_axes.is_empty() {
+            return Err(FrfError::new(format!(
+                "mutation provider {} declares no target axes; a provider must declare the axes it seeds defects on",
+                m.id
+            )));
+        }
+        for a in &m.target_axes {
+            if !observables.iter().any(|o| o == a) {
+                return Err(FrfError::new(format!(
+                    "mutation provider {} targets axis '{a}' which the court does not declare; the seeded defect would be unobservable",
+                    m.id
+                )));
+            }
+        }
+    }
+
+    // One requested challenge: a built-in operator (the deterministic
+    // wrapper) or an external mutation provider for one specific target axis
+    // (the provider PROPOSES the mutant; the court decides the verdicts).
+    enum ChallengeOperator<'a> {
+        Builtin(crate::mutation::MutationOperator),
+        External(&'a MutationDeclaration, String),
+    }
+    impl ChallengeOperator<'_> {
+        fn label(&self) -> String {
+            match self {
+                ChallengeOperator::Builtin(op) => op.as_str().to_string(),
+                ChallengeOperator::External(decl, _) => decl.id.clone(),
+            }
+        }
+        fn target_axis(&self) -> &str {
+            match self {
+                ChallengeOperator::Builtin(op) => op.target_axis(),
+                ChallengeOperator::External(_, axis) => axis,
+            }
+        }
+    }
+    let provider_for = |id: &str| manifest.mutations.iter().find(|m| m.id == id);
+
+    let operators: Vec<ChallengeOperator> = match operators_arg {
         Some(list) => {
             let mut ops = Vec::new();
             for raw in list.split(',') {
@@ -2335,43 +2392,72 @@ pub fn challenge(
                 if raw.is_empty() {
                     continue;
                 }
-                let op = crate::mutation::MutationOperator::parse(raw)?;
-                if !observables.iter().any(|o| o == op.target_axis()) {
-                    return Err(FrfError::new(format!(
-                        "operator {} targets axis '{}' which the court does not declare; the seeded defect would be unobservable",
-                        op.as_str(),
-                        op.target_axis()
-                    )));
+                match crate::mutation::MutationOperator::parse(raw) {
+                    Ok(op) => {
+                        if !observables.iter().any(|o| o == op.target_axis()) {
+                            return Err(FrfError::new(format!(
+                                "operator {} targets axis '{}' which the court does not declare; the seeded defect would be unobservable",
+                                op.as_str(),
+                                op.target_axis()
+                            )));
+                        }
+                        ops.push(ChallengeOperator::Builtin(op));
+                    }
+                    Err(_) => {
+                        // A declared external mutation provider: one challenge
+                        // per declared target axis.
+                        let decl = provider_for(raw).ok_or_else(|| {
+                            FrfError::new(format!(
+                                "unknown mutation operator {raw:?}: built-ins are exit-class, stderr-first-line, stdout-first-line, and the declared mutation providers are {}",
+                                manifest
+                                    .mutations
+                                    .iter()
+                                    .map(|m| m.id.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ))
+                        })?;
+                        for a in &decl.target_axes {
+                            ops.push(ChallengeOperator::External(decl, a.clone()));
+                        }
+                    }
                 }
-                ops.push(op);
             }
             if ops.is_empty() {
                 return Err(FrfError::new(
-                    "no mutation operators requested; pass --operators exit-class,stderr-first-line,...",
+                    "no mutation operators requested; pass --operators exit-class,stderr-first-line,... or a declared mutation provider id",
                 ));
             }
             ops
         }
         None => {
             let mut ops = Vec::new();
-            let mut external = Vec::new();
+            let mut skipped: Vec<String> = Vec::new();
             for o in &observables {
                 match crate::mutation::MutationOperator::from_axis(o) {
-                    Some(op) => ops.push(op),
-                    None => external.push(o.clone()),
+                    Some(op) => ops.push(ChallengeOperator::Builtin(op)),
+                    None => match provider_for(o).or_else(|| {
+                        manifest
+                            .mutations
+                            .iter()
+                            .find(|m| m.target_axes.iter().any(|a| a == o))
+                    }) {
+                        Some(decl) => ops.push(ChallengeOperator::External(decl, o.clone())),
+                        None => skipped.push(o.clone()),
+                    },
                 }
             }
             if ops.is_empty() {
                 return Err(FrfError::new(format!(
-                    "no built-in mutation operator applies to this court's observables {:?}; externally served axes ({}) have no built-in mutation surface yet — a court that cannot be challenged cannot prove it can see",
+                    "no mutation operator applies to this court's observables {:?}; declare an external mutation provider for {}",
                     observables,
-                    external.join(", ")
+                    skipped.join(", ")
                 )));
             }
-            if !external.is_empty() {
+            if !skipped.is_empty() {
                 eprintln!(
-                    "court challenge: skipping externally served axes without a built-in mutation operator: {}",
-                    external.join(", ")
+                    "court challenge: skipping axes with no mutation surface (no built-in operator, no declared provider): {}",
+                    skipped.join(", ")
                 );
             }
             ops
@@ -2380,8 +2466,8 @@ pub fn challenge(
 
     // The reference the mutants wrap: the admitted authority artifact. The
     // wrapper resolves it relative to itself (both live in the same
-    // objects/sha256/ directory), so the mutant bytes depend only on the
-    // operator and the reference hash — root-independent and rederivable.
+    // objects/sha256/ directory), so the built-in mutant bytes depend only on
+    // the operator and the reference hash — root-independent and rederivable.
     let authority = store.load_authority(&spec.authority)?;
     let reference_sha256 = authority.executable_sha256.clone();
     let created_by = RunnerIdentity {
@@ -2401,38 +2487,193 @@ pub fn challenge(
     let mut ids: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
     for op in &operators {
-        let operator = *op;
-        let target_axis = operator.target_axis().to_string();
-        let wrapper = operator.wrapper(&reference_sha256);
-        let mutant_sha256 = host::sha256_bytes(wrapper.as_bytes());
+        let label = op.label();
+        let target_axis = op.target_axis().to_string();
 
-        // Write the wrapper to a deterministic transient path, run the court
+        // The mutant artifact: generated (built-in) or PROPOSED (external
+        // provider). For an external proposal, the request + response +
+        // invocation + result are preserved as evidence under the challenge
+        // (the exact instrument that proposed the mutant).
+        let (mutant_sha256, mutant_bytes, mutation_evidence) = match op {
+            ChallengeOperator::Builtin(operator) => {
+                let wrapper = operator.wrapper(&reference_sha256);
+                (
+                    host::sha256_bytes(wrapper.as_bytes()),
+                    wrapper.into_bytes(),
+                    None,
+                )
+            }
+            ChallengeOperator::External(decl, _) => {
+                // The provider is snapshotted + sealed BEFORE it runs; its
+                // semantic identity fixes WHAT kind of mutant is asked for.
+                let snap = crate::ext::snapshot_program(store, Path::new(&decl.program))?;
+                let semantic = MutationSemantic {
+                    id: decl.id.clone(),
+                    relation_id: decl.relation.clone(),
+                    relation_version: decl.relation_version.clone(),
+                    specification_hash: crate::semantics::mutation_specification_hash(
+                        &decl.id,
+                        &decl.relation,
+                        &decl.relation_version,
+                    )?,
+                };
+                let fixture_sha256 = {
+                    // The fixture the court runs the mutant against: read from
+                    // the manifest (the court resolves {fixture} at run time;
+                    // the request carries the exact bytes the provider mutates
+                    // against).
+                    let f = spec
+                        .fixture
+                        .path
+                        .replace("{root}", &store.root.to_string_lossy());
+                    let bytes = host::read_file(Path::new(&f))?;
+                    let sha = host::sha256_bytes(&bytes);
+                    // Ensure the object is materialized so the provider and
+                    // the court see the same content-addressed bytes.
+                    store.materialize_object(&bytes, false)?;
+                    (sha, bytes)
+                };
+                let reference_bytes = {
+                    // The authority artifact bytes: admitted at authority
+                    // admit time (the OBJECT is materialized at court run
+                    // time, so the challenge materializes it first — the
+                    // provider receives the same content-addressed bytes the
+                    // court will execute).
+                    let bytes = host::read_file(Path::new(&authority.path))?;
+                    store.materialize_object(&bytes, true)?;
+                    store.verified_object_bytes(&reference_sha256)?
+                };
+                let request = MutationRequest {
+                    schema_version: SCHEMA_MUTATION_REQUEST,
+                    mutation: &semantic,
+                    court: MutationCourt {
+                        id: &spec.id,
+                        question: &spec.question,
+                        falsifier: &spec.falsifier,
+                        observables: &observables,
+                        fixture_family: &spec.admissibility_envelope.fixture_family,
+                    },
+                    target_axis: &target_axis,
+                    reference_artifact: MutationArtifact {
+                        sha256: &reference_sha256,
+                        contents_base64: &crate::ext::b64(&reference_bytes),
+                    },
+                    fixture: MutationArtifact {
+                        sha256: &fixture_sha256.0,
+                        contents_base64: &crate::ext::b64(&fixture_sha256.1),
+                    },
+                };
+                let request_bytes = crate::canon::canonical(&request)?.into_bytes();
+                let request_cid = crate::ext::request_cid(&request_bytes);
+                let response_bytes =
+                    crate::ext::run_program(&snap.snapshot, &request_bytes, Path::new("."))?;
+                let response_cid = host::sha256_bytes(&response_bytes);
+                // The protocol says canonical JSON: the response must BE its
+                // own canonical serialization.
+                crate::ext::require_canonical_response(&response_bytes, "mutation response")?;
+                let response: MutationResponse =
+                    serde_json::from_slice(&response_bytes).map_err(|e| {
+                        FrfError::new(format!(
+                            "mutation provider {id} produced an unparseable response: {e}",
+                            id = decl.id
+                        ))
+                    })?;
+                if response.schema_version != SCHEMA_MUTATION_RESPONSE {
+                    failures.push(format!(
+                        "mutation provider {}: response has unsupported schema version {:?}",
+                        decl.id, response.schema_version
+                    ));
+                    continue;
+                }
+                if response.request_id != request_cid {
+                    failures.push(format!(
+                        "mutation provider {}: the response does not name the request it answers; a response must cryptographically name the exact request it answers",
+                        decl.id
+                    ));
+                    continue;
+                }
+                if let Some(f) = &response.failure {
+                    failures.push(format!(
+                        "mutation provider {} reported failure: {f}",
+                        decl.id
+                    ));
+                    continue;
+                }
+                let Some(b64) = &response.mutant_base64 else {
+                    failures.push(format!(
+                        "mutation provider {} declined to propose a mutant; a proposal is the only admissible outcome",
+                        decl.id
+                    ));
+                    continue;
+                };
+                let mutant = crate::ext::unb64(b64, "mutation response mutant")
+                    .map_err(|e| FrfError::new(format!("mutation provider {}: {e}", decl.id)))?;
+                if mutant.is_empty() {
+                    failures.push(format!(
+                        "mutation provider {} proposed an EMPTY mutant; a mutant must alter the targeted surface",
+                        decl.id
+                    ));
+                    continue;
+                }
+                let mutant_sha256 = host::sha256_bytes(&mutant);
+                let invocation_id = crate::semantics::mutation_invocation_identity(
+                    &crate::semantics::MutationInvocationContent {
+                        operator: &decl.id,
+                        target_axis: &target_axis,
+                        request_cid: &request_cid,
+                        mutation_semantic_cid: &semantic.specification_hash,
+                        mutation_implementation_artifact: &snap.artifact,
+                        execution_provenance: &created_by,
+                    },
+                )?;
+                let result_id = crate::semantics::mutation_result_identity(
+                    &crate::semantics::MutationResultContent {
+                        request_cid: &request_cid,
+                        response_cid: &response_cid,
+                        outcome: "proposed",
+                        mutant_sha256: &mutant_sha256,
+                        expected_affected_surfaces: &response.expected_affected_surfaces,
+                    },
+                )?;
+                (
+                    mutant_sha256,
+                    mutant,
+                    Some((
+                        request_bytes,
+                        response_bytes,
+                        invocation_id,
+                        result_id,
+                        semantic,
+                        snap,
+                        request_cid,
+                        response.expected_affected_surfaces,
+                    )),
+                )
+            }
+        };
+
+        // Write the mutant to a deterministic transient path, run the court
         // with it as the candidate override, then remove it: the EVIDENCE is
         // the content-addressed mutant object + the run, not the transient
-        // file. The path is derived from the operator + reference hash (the
-        // wrapper is a pure function of those two — root-independent and
-        // rederivable), so the recorded candidate path is reproducible:
-        // regenerating the golden tree twice yields byte-identical captures.
-        let wrapper_rel = format!(
+        // file. The built-in path is derived from the operator + reference
+        // hash (root-independent and rederivable); the external mutant path
+        // carries the provider id so re-runs overwrite deterministically.
+        let mutant_rel = format!(
             "{}/challenges/.mutant-{}-{}.sh",
             store.root.display(),
-            operator.as_str(),
+            label,
             &reference_sha256[..16]
         );
-        let wrapper_path = Path::new(&wrapper_rel);
-        fs::write(wrapper_path, wrapper.as_bytes())
-            .map_err(|e| FrfError::new(format!("cannot write {}: {e}", wrapper_path.display())))?;
+        let mutant_path = Path::new(&mutant_rel);
+        fs::write(mutant_path, &mutant_bytes)
+            .map_err(|e| FrfError::new(format!("cannot write {}: {e}", mutant_path.display())))?;
 
-        let run_result = run_once(store, manifest_path, Some(&wrapper_rel), None, false);
-        let _ = fs::remove_file(wrapper_path);
+        let run_result = run_once(store, manifest_path, Some(&mutant_rel), None, false);
+        let _ = fs::remove_file(mutant_path);
         let run = match run_result {
             Ok(run) => run,
             Err(e) => {
-                failures.push(format!(
-                    "operator {}: the mutant run failed: {}",
-                    operator.as_str(),
-                    e.0
-                ));
+                failures.push(format!("operator {label}: the mutant run failed: {}", e.0));
                 continue;
             }
         };
@@ -2461,17 +2702,74 @@ pub fn challenge(
 
         let id = crate::semantics::challenge_identity(
             &spec.id,
-            operator.as_str(),
+            &label,
             &target_axis,
             &reference_sha256,
             &mutant_sha256,
             &run,
         )?;
+        // The external proposal's evidence, under `challenges/<id>/mutation/`
+        // (request/response/invocation/result, all content-addressed and
+        // cross-verified on read).
+        let (mutation_invocation_id, mutation_result_id) = match &mutation_evidence {
+            Some((
+                request_bytes,
+                response_bytes,
+                invocation_id,
+                result_id,
+                semantic,
+                snap,
+                request_cid,
+                expected_affected_surfaces,
+            )) => {
+                let dir = store.challenge_mutation_dir(&id)?;
+                fs::create_dir_all(&dir)
+                    .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
+                store.write_once(
+                    &dir.join("request.json"),
+                    &String::from_utf8(request_bytes.clone()).map_err(|_| {
+                        FrfError::new("internal error: mutation request is not UTF-8")
+                    })?,
+                )?;
+                store.write_once(
+                    &dir.join("response.json"),
+                    &String::from_utf8(response_bytes.clone()).map_err(|_| {
+                        FrfError::new("internal error: mutation response is not UTF-8")
+                    })?,
+                )?;
+                let invocation = MutationInvocation {
+                    schema_version: SCHEMA_MUTATION_INVOCATION.to_string(),
+                    invocation_id: invocation_id.clone(),
+                    operator: label.clone(),
+                    target_axis: target_axis.clone(),
+                    request_cid: request_cid.clone(),
+                    mutation_semantic_cid: semantic.specification_hash.clone(),
+                    mutation_implementation_artifact: snap.artifact.clone(),
+                    execution_provenance: created_by.clone(),
+                };
+                let result = MutationResult {
+                    schema_version: SCHEMA_MUTATION_RESULT.to_string(),
+                    result_id: result_id.clone(),
+                    request_cid: request_cid.clone(),
+                    response_cid: host::sha256_bytes(response_bytes),
+                    outcome: "proposed".to_string(),
+                    mutant_sha256: mutant_sha256.clone(),
+                    expected_affected_surfaces: expected_affected_surfaces.clone(),
+                };
+                store.write_once(
+                    &dir.join("invocation.json"),
+                    &store.to_evidence(&invocation)?,
+                )?;
+                store.write_once(&dir.join("result.json"), &store.to_evidence(&result)?)?;
+                (Some(invocation_id.clone()), Some(result_id.clone()))
+            }
+            None => (None, None),
+        };
         store.write_challenge(&CourtChallenge {
             schema_version: SCHEMA_CHALLENGE.to_string(),
             id: id.clone(),
             court: spec.id.clone(),
-            operator: operator.as_str().to_string(),
+            operator: label.clone(),
             target_axis: target_axis.clone(),
             reference_sha256: reference_sha256.clone(),
             mutant_candidate_sha256: mutant_sha256,
@@ -2480,18 +2778,18 @@ pub fn challenge(
             unaffected_axes,
             saw_defect,
             specificity_clean,
+            mutation_invocation_id,
+            mutation_result_id,
             created_by: created_by.clone(),
         })?;
         ids.push(id.clone());
 
         if saw_defect && specificity_clean {
             eprintln!(
-                "court challenge {id}: operator {} saw the seeded {} defect on {target_axis} and nothing else — the court can see this defect class",
-                operator.as_str(),
-                operator.as_str()
+                "court challenge {id}: operator {label} saw the seeded defect on {target_axis} and nothing else — the court can see this defect class"
             );
         } else {
-            let mut why = format!("operator {}", operator.as_str());
+            let mut why = format!("operator {label}");
             if !saw_defect {
                 why.push_str(" — the court observed NO divergence on the targeted axis (blind to the seeded defect)");
             }
