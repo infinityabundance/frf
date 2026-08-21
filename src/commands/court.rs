@@ -316,6 +316,212 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
     Ok(written)
 }
 
+/// The attempt budget for one minimization: ddmin is O(n log n) executions;
+/// a bounded budget keeps a hostile or enormous fixture from hanging the
+/// tool, and the derivation honestly records whether minimality was proven.
+const MINIMIZE_MAX_ATTEMPTS: usize = 256;
+
+/// `frf court minimize RESIDUAL_ID` — the routed minimizer. The residual's κ
+/// token routes `cli-exit-minimize`/`cli-diagnostic-minimize`; this version
+/// implements ONE deterministic reducer (ddmin over fixture lines) that both
+/// routes share, holding the candidate, authority, comparator, and
+/// environment fixed while the fixture shrinks. Every attempt is recorded in
+/// a content-addressed [`ReductionRecord`] (`reductions/`); the final
+/// reproducer is court-verified (the residual's LINEAGE survives) and
+/// carries provenance back to the original residual.
+pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
+    let record = store.load_residual(residual_id)?;
+    let capture = store.load_capture(&record.run)?;
+
+    // The fixture being reduced: the exact bytes the residual's run used.
+    let fixture_bytes = store.verified_object_bytes(&capture.fixture_sha256)?;
+    let fixture_text = String::from_utf8(fixture_bytes.clone()).map_err(|_| {
+        FrfError::new(format!(
+            "residual {residual_id}: the fixture is not UTF-8 text; this version's reducer is ddmin over text lines (binary reducers are future domain reducers)"
+        ))
+    })?;
+    let original_lines = fixture_text.lines().count() as u32;
+    if original_lines == 0 {
+        return Err(FrfError::new(format!(
+            "residual {residual_id}: the fixture is empty; there is nothing to reduce"
+        )));
+    }
+
+    // The execution recipe: snapshotted authority + candidate (the exact
+    // artifacts the run executed), the resolved argv with the fixture slot.
+    let authority_program = store.root.join(&capture.authority_artifact.path);
+    let candidate_program = store.root.join(&capture.candidate_artifact.path);
+    let original_fixture_arg = store
+        .root
+        .join("objects")
+        .join("sha256")
+        .join(&capture.fixture_sha256)
+        .to_string_lossy()
+        .into_owned();
+
+    // The preservation predicate: does a given fixture still produce a
+    // divergence of the residual's LINEAGE (kind/axis/surface)? Holds the
+    // candidate, authority, comparator, and environment fixed; the reduced
+    // fixture is executed from a content-addressed snapshot with the same
+    // argv (fixture slot replaced).
+    let mut attempts: Vec<ReductionAttempt> = Vec::new();
+    let preserved =
+        |store: &Store, bytes: &[u8], attempts: &mut Vec<ReductionAttempt>| -> Result<bool> {
+            let snapshot = store.materialize_object(bytes, false)?;
+            let fixture_arg = snapshot.to_string_lossy().into_owned();
+            let arguments: Vec<String> = capture
+                .arguments
+                .iter()
+                .map(|a| {
+                    if a == &original_fixture_arg {
+                        fixture_arg.clone()
+                    } else {
+                        a.clone()
+                    }
+                })
+                .collect();
+            let reference = host::run_process(&authority_program, &arguments)?;
+            let candidate = host::run_process(&candidate_program, &arguments)?;
+            let diverges = match record.axis {
+                Axis::Exit => reference.exit != candidate.exit,
+                Axis::Stderr => first_line(&reference.stderr) != first_line(&candidate.stderr),
+                Axis::Stdout => first_line(&reference.stdout) != first_line(&candidate.stdout),
+            };
+            let sha = host::sha256_bytes(bytes);
+            attempts.push(ReductionAttempt {
+                attempt: attempts.len() as u32 + 1,
+                fixture_sha256: sha,
+                preserved: diverges,
+                kept: diverges,
+            });
+            Ok(diverges)
+        };
+
+    // The initial check: the ORIGINAL fixture must reproduce the lineage
+    // under the minimizer's own comparison (if it does not, the reduction
+    // cannot even start — fail closed).
+    if !preserved(store, &fixture_bytes, &mut attempts)? {
+        return Err(FrfError::new(format!(
+            "residual {residual_id}: the original fixture does not reproduce the {} divergence under this comparator; refusing to minimize",
+            record.axis.as_str()
+        )));
+    }
+
+    // Deterministic ddmin over lines (Zeller). Elements are lines WITH their
+    // trailing newline, so joining them reproduces the file byte-for-byte.
+    let mut elements: Vec<Vec<u8>> = split_keep_newlines(&fixture_text);
+    let mut minimal_proven = true;
+    let mut n = 2usize;
+    while elements.len() >= 2 && attempts.len() < MINIMIZE_MAX_ATTEMPTS {
+        let chunk_size = (elements.len() / n).max(1);
+        let mut reduced_any = false;
+        let mut start = 0usize;
+        while start < elements.len() {
+            let end = (start + chunk_size).min(elements.len());
+            let mut candidate: Vec<Vec<u8>> = elements[..start].to_vec();
+            candidate.extend_from_slice(&elements[end..]);
+            let candidate_bytes: Vec<u8> = candidate.concat();
+            let survives = preserved(store, &candidate_bytes, &mut attempts)?;
+            if survives && !candidate_bytes.is_empty() {
+                elements = candidate;
+                reduced_any = true;
+                n = n.saturating_sub(1).max(2);
+                break;
+            }
+            start += chunk_size;
+        }
+        if !reduced_any {
+            if n >= elements.len() {
+                break;
+            }
+            n = (n * 2).min(elements.len());
+        }
+    }
+    if attempts.len() >= MINIMIZE_MAX_ATTEMPTS && elements.len() >= 2 {
+        minimal_proven = false;
+    }
+
+    let final_bytes: Vec<u8> = elements.concat();
+    let final_sha = host::sha256_bytes(&final_bytes);
+    let final_lines = elements.len() as u32;
+
+    // The final reproducer is court-verified (the last attempt that kept it
+    // ran it); a final explicit confirmation keeps the record honest even
+    // when the budget cut the search short.
+    let survives_final = preserved(store, &final_bytes, &mut attempts)?;
+    if !survives_final {
+        return Err(FrfError::new(format!(
+            "residual {residual_id}: internal error — the final reproducer does not reproduce the lineage"
+        )));
+    }
+
+    let derivation = ReductionDerivation {
+        strategy: "ddmin-lines".to_string(),
+        original_lines,
+        final_lines,
+        minimal: minimal_proven,
+    };
+    let id = crate::semantics::reduction_identity(
+        residual_id,
+        record.axis.as_str(),
+        record.kind,
+        &record.authority,
+        &record.candidate_sha256,
+        &capture.fixture_sha256,
+        &final_sha,
+        &attempts,
+        &derivation,
+    )?;
+    let reduction = ReductionRecord {
+        schema_version: SCHEMA_REDUCTION.to_string(),
+        id: id.clone(),
+        residual_id: residual_id.to_string(),
+        axis: record.axis.as_str().to_string(),
+        kind: record.kind,
+        authority: record.authority.clone(),
+        candidate_sha256: record.candidate_sha256.clone(),
+        original_fixture_sha256: capture.fixture_sha256.clone(),
+        final_fixture_sha256: final_sha.clone(),
+        attempts,
+        derivation: derivation.clone(),
+    };
+    store.write_reduction(&reduction)?;
+
+    eprintln!(
+        "reduction {}: {} -> {} line(s) (ddmin, {} attempt(s), minimal={}); reproducer object {}",
+        &id[..16],
+        derivation.original_lines,
+        derivation.final_lines,
+        reduction.attempts.len(),
+        derivation.minimal,
+        &final_sha[..16]
+    );
+    Ok(id)
+}
+
+/// Split text into lines KEEPING the trailing newline, so concatenation
+/// reproduces the file byte-for-byte.
+fn split_keep_newlines(text: &str) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(idx) = rest.find('\n') {
+        out.push(rest.as_bytes()[..=idx].to_vec());
+        rest = &rest[idx + 1..];
+    }
+    if !rest.is_empty() {
+        out.push(rest.as_bytes().to_vec());
+    }
+    out
+}
+
+fn first_line(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .split('\n')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
 /// One court execution: validate the declaration, snapshot + hash every
 /// artifact BEFORE executing, execute authority and candidate against the
 /// fixture, capture the raw observation immutably, preserve residuals + κ
@@ -843,5 +1049,29 @@ fn write_once(path: std::path::PathBuf, bytes: &[u8]) -> Result<()> {
             "cannot create {}: {e}",
             path.display()
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_keep_newlines_round_trips_byte_for_byte() {
+        let text = "# comment\nserver 1.2.3.4\nservre x\n";
+        let parts = split_keep_newlines(text);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], b"# comment\n");
+        assert_eq!(parts[2], b"servre x\n");
+        assert_eq!(parts.concat(), text.as_bytes());
+
+        // A trailing line without a newline survives.
+        let parts = split_keep_newlines("a\nb");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1], b"b");
+        assert_eq!(parts.concat(), b"a\nb");
+
+        // Empty input yields no elements.
+        assert!(split_keep_newlines("").is_empty());
     }
 }

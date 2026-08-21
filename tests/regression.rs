@@ -1391,3 +1391,97 @@ fn claim_compile_rejects_unknown_receipt() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("no such receipt 'receipt-nope'"));
 }
+
+#[test]
+fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
+    // The routed minimizer (the exit residual's κ token routes to
+    // cli-exit-minimize): deterministic ddmin over the fixture lines, holding
+    // candidate/authority/comparator/environment fixed, every attempt
+    // recorded, the final reproducer court-verified.
+    let work = Workdir::new("minimize");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let _run = run_court(&work);
+
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "minimize", "cli-exit-0001"],
+    );
+    assert_success(&out, "court minimize");
+    let reduction_id = stdout(&out);
+    assert_eq!(reduction_id.len(), 64, "content-addressed reduction id");
+
+    let rec: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rec["schema_version"], "frf-reduction-v1");
+    assert_eq!(rec["residual_id"], "cli-exit-0001");
+    assert_eq!(rec["axis"], "exit");
+    assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");
+    assert_eq!(rec["derivation"]["minimal"], true);
+    assert!(
+        rec["derivation"]["final_lines"].as_u64().unwrap()
+            < rec["derivation"]["original_lines"].as_u64().unwrap(),
+        "the reproducer must be strictly smaller"
+    );
+    // The content address rederives from the record's own fields.
+    let attempts = rec["attempts"].as_sequence().unwrap();
+    assert!(!attempts.is_empty(), "every attempt is recorded");
+    // The FINAL attempt is the court verification: the reproducer fixture
+    // still produces the divergence (preserved) and was kept.
+    let last = attempts.last().unwrap();
+    assert_eq!(last["fixture_sha256"], rec["final_fixture_sha256"]);
+    assert_eq!(last["preserved"], true);
+    assert_eq!(last["kept"], true);
+    // The reproducer object exists (content-addressed, sealed).
+    let final_sha = rec["final_fixture_sha256"].as_str().unwrap();
+    let reproducer =
+        fs::read_to_string(work.path(&format!("frf/objects/sha256/{final_sha}"))).unwrap();
+    // The minimal reproducer is the malformed directive alone.
+    assert!(reproducer.contains("servre"), "reproducer: {reproducer:?}");
+    assert!(!reproducer.contains("server"), "reproducer: {reproducer:?}");
+
+    // The record refuses tampering: a hand-edited field breaks the content
+    // address (the store refuses on read).
+    let mut tampered: serde_yaml::Value = serde_yaml::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    )
+    .unwrap();
+    tampered["axis"] = serde_yaml::Value::String("stdout".to_string());
+    fs::write(
+        work.path(&format!("frf/reductions/{reduction_id}.yaml")),
+        serde_yaml::to_string(&tampered).unwrap(),
+    )
+    .unwrap();
+    let store = frf::store::Store::new(work.path(ROOT));
+    assert!(
+        store.load_reduction(&reduction_id).is_err(),
+        "a tampered reduction must be refused on read"
+    );
+}
+
+#[test]
+fn minimize_refuses_a_non_text_fixture() {
+    // The reducer is ddmin over text lines; a binary fixture is refused
+    // honestly rather than mangled.
+    let work = Workdir::new("minimize-binary");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // A binary fixture (invalid UTF-8): the reducer refuses it honestly
+    // rather than mangling bytes.
+    let fixture_path = work.path("frf/courts/cli-malformed-input/fixtures/malformed-path.conf");
+    fs::write(&fixture_path, b"\xff\xfe\x00binary\n").unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "court run (binary fixture)");
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "minimize", "cli-exit-0001"],
+    );
+    assert!(!out.status.success(), "binary fixtures are refused");
+    assert!(
+        stderr(&out).contains("not UTF-8 text"),
+        "refusal must name the reason: {}",
+        stderr(&out)
+    );
+}

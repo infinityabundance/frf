@@ -108,6 +108,14 @@ pub enum CourtCmd {
         #[arg(long, value_name = "LABEL")]
         time_point: Option<String>,
     },
+    /// Minimize a residual: the routed minimizer (its κ token's next_court)
+    /// reduces the fixture with deterministic ddmin while holding the
+    /// candidate, authority, comparator, and environment fixed, records every
+    /// attempt, and court-verifies the final reproducer
+    Minimize {
+        /// Residual id (e.g. cli-exit-0001)
+        residual: String,
+    },
 }
 
 #[derive(Subcommand)]

@@ -1201,11 +1201,11 @@ pub struct TrajectoryRecord {
     pub derivation: TrajectoryDerivation,
 }
 
-/// The ExecutionSeries protocol object: the experiment. One record per
-/// (court, coordinate system), APPENDED by series courts; the points are the
-/// ordered runs with the divergence fingerprints each observed. The record
-/// is derived (regenerable from the runs) and appendable — the runs are the
-/// immutable evidence, and a run never knows it is in a series.
+/// The reduction protocol object: a minimization experiment on one residual
+/// (`frf court minimize`). Every ddmin attempt is recorded; the final
+/// reproducer is court-verified (the lineage survives) and carries
+/// provenance back to the original residual.
+pub const SCHEMA_REDUCTION: &str = "frf-reduction-v1";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionSeries {
@@ -1228,6 +1228,67 @@ pub struct SeriesPoint {
     /// The content-addressed run this point produced (identical evidence
     /// shares the run).
     pub run: String,
+}
+
+// ---------------------------------------------------------------------------
+// Reduction (minimization) protocol
+// ---------------------------------------------------------------------------
+
+/// One ddmin attempt: the reduced fixture tried, whether the residual
+/// lineage survived it, and whether the reduction was kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReductionAttempt {
+    pub attempt: u32,
+    /// SHA-256 of the reduced fixture tried (content-addressed under
+    /// `objects/`).
+    pub fixture_sha256: String,
+    /// Whether the residual's LINEAGE survived the reduction (the
+    /// preservation predicate: the same kind/axis/surface divergence is
+    /// still observed).
+    pub preserved: bool,
+    /// Whether the reduction was kept (preserved AND the fixture shrank).
+    pub kept: bool,
+}
+
+/// The derivation of a minimization experiment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReductionDerivation {
+    /// The reduction strategy (`ddmin-lines` in this version).
+    pub strategy: String,
+    pub original_lines: u32,
+    pub final_lines: u32,
+    /// Whether minimality was PROVEN (the deterministic ddmin search
+    /// completed within the attempt budget).
+    pub minimal: bool,
+}
+
+/// A minimization experiment: the record of reducing one residual's fixture
+/// until the divergence lineage stops surviving. Content-addressed
+/// (`FRF/REDUCTION/v1`); the final reproducer is court-verified and carries
+/// provenance back to the original residual.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReductionRecord {
+    pub schema_version: String,
+    /// Content address: `FRF/REDUCTION/v1` over the record's own fields.
+    pub id: String,
+    /// The residual being minimized.
+    pub residual_id: String,
+    pub axis: String,
+    pub kind: ResidualKind,
+    pub authority: String,
+    /// The exact candidate artifact the residual was observed against (the
+    /// minimizer holds the candidate fixed).
+    pub candidate_sha256: String,
+    pub original_fixture_sha256: String,
+    /// The minimal reproducer: the smallest fixture (at line granularity)
+    /// still producing the lineage, court-verified.
+    pub final_fixture_sha256: String,
+    /// Every reduction attempt, in order.
+    pub attempts: Vec<ReductionAttempt>,
+    pub derivation: ReductionDerivation,
 }
 
 // ---------------------------------------------------------------------------

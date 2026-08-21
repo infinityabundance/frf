@@ -107,6 +107,16 @@ BUNDLE=golden/work/portable.frf
 # and trajectory records the receipt's evidence participates in).
 (cd golden/work && "$FRF_BIN" bundle verify portable.frf)
 
+step "8. minimization — the routed reducer turns the failure into a reproducer"
+# The exit residual's kappa token routes to cli-exit-minimize; deterministic
+# ddmin reduces the fixture (holding candidate/authority/comparator/
+# environment fixed) until the divergence lineage stops surviving. Every
+# attempt is recorded; the final reproducer is court-verified.
+MIN_ID=$("$FRF_BIN" --root "$ROOT" court minimize cli-exit-0001)
+echo "reduction: $MIN_ID"
+echo "-- the reproducer (1 line vs the original 3):"
+cat "$ROOT"/objects/sha256/$(grep final_fixture_sha256 "$ROOT"/reductions/$MIN_ID.yaml | awk '{print $2}')
+
 step "7. the evidence tree (Section 19.3 layout)"
 find "$ROOT" -type f | sort
 

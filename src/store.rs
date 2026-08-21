@@ -74,6 +74,7 @@ impl Store {
             "residuals",
             "series",
             "trajectories",
+            "reductions",
             "receipts",
             "claims",
         ] {
@@ -121,6 +122,74 @@ impl Store {
     pub fn claim_path(&self, receipt_id: &str) -> Result<PathBuf> {
         validate_id("receipt", receipt_id)?;
         Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
+    }
+
+    /// `reductions/<id>.yaml` — the content-addressed reduction record.
+    pub fn reduction_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("reduction", id)?;
+        Ok(self.root.join("reductions").join(format!("{id}.yaml")))
+    }
+
+    /// Load a reduction record by its content address.
+    pub fn load_reduction(&self, id: &str) -> Result<ReductionRecord> {
+        let path = self.reduction_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no reduction {id} (missing {})",
+                path.display()
+            )));
+        }
+        let record: ReductionRecord = self.parse_yaml(&path)?;
+        if record.id != id {
+            return Err(FrfError::new(format!(
+                "reduction {id}: the id inside the record is {} — the name is a claim",
+                record.id
+            )));
+        }
+        let expected = crate::semantics::reduction_identity(
+            &record.residual_id,
+            &record.axis,
+            record.kind,
+            &record.authority,
+            &record.candidate_sha256,
+            &record.original_fixture_sha256,
+            &record.final_fixture_sha256,
+            &record.attempts,
+            &record.derivation,
+        )?;
+        if expected != id {
+            return Err(FrfError::new(format!(
+                "reduction {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited reduction"
+            )));
+        }
+        Ok(record)
+    }
+
+    /// Write a reduction record (content-addressed, write-once).
+    pub fn write_reduction(&self, record: &ReductionRecord) -> Result<()> {
+        let id = crate::semantics::reduction_identity(
+            &record.residual_id,
+            &record.axis,
+            record.kind,
+            &record.authority,
+            &record.candidate_sha256,
+            &record.original_fixture_sha256,
+            &record.final_fixture_sha256,
+            &record.attempts,
+            &record.derivation,
+        )?;
+        if id != record.id {
+            return Err(FrfError::new(format!(
+                "reduction id mismatch: record says {} but its fields hash to {id}",
+                record.id
+            )));
+        }
+        let path = self.reduction_path(&id)?;
+        if path.exists() {
+            return Ok(());
+        }
+        let yaml = self.to_yaml(record)?;
+        self.write_once(&path, &yaml)
     }
 
     /// `trajectories/<lineage>.<coordinate-system>.<series>.yaml` — the

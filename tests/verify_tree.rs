@@ -980,6 +980,76 @@ fn series_are_self_consistent() {
 }
 
 // ---------------------------------------------------------------------------
+// reductions/ — minimization experiments
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reductions_are_self_consistent() {
+    let store = store();
+    let mut found = 0;
+    for entry in fs::read_dir(store.root.join("reductions")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let id = name.trim_end_matches(".yaml").to_string();
+        let r: ReductionRecord = load(&path);
+        assert_eq!(r.schema_version, SCHEMA_REDUCTION, "reduction {name}");
+        assert_eq!(r.id, id, "the filename must be the content address");
+        // The content address rederives.
+        assert_eq!(
+            frf::semantics::reduction_identity(
+                &r.residual_id,
+                &r.axis,
+                r.kind,
+                &r.authority,
+                &r.candidate_sha256,
+                &r.original_fixture_sha256,
+                &r.final_fixture_sha256,
+                &r.attempts,
+                &r.derivation
+            )
+            .unwrap(),
+            r.id
+        );
+        // The referenced artifacts exist (content-addressed).
+        for sha in [&r.original_fixture_sha256, &r.final_fixture_sha256] {
+            assert!(
+                store.object_path(sha).unwrap().is_file(),
+                "reduction {id}: object {sha} missing"
+            );
+        }
+        // The residual it minimizes exists and is on the same axis/kind.
+        let record = store.load_residual(&r.residual_id).unwrap();
+        assert_eq!(record.axis.as_str(), r.axis);
+        assert_eq!(record.kind, r.kind);
+        assert_eq!(record.candidate_sha256, r.candidate_sha256);
+        // The final reproducer is genuinely smaller or equal, and every
+        // attempt recorded a fixture that exists.
+        assert!(r.derivation.final_lines <= r.derivation.original_lines);
+        assert!(!r.attempts.is_empty());
+        for a in &r.attempts {
+            assert!(
+                store.object_path(&a.fixture_sha256).unwrap().is_file(),
+                "reduction {id}: attempt {} fixture missing",
+                a.attempt
+            );
+        }
+        // A minimal-proven reduction is exactly the deterministic ddmin
+        // outcome; the budget-cut case must say so honestly.
+        if r.derivation.minimal {
+            assert!(
+                r.attempts.len() < 256,
+                "reduction {id}: minimal-proven but the attempt budget was exhausted"
+            );
+        }
+        found += 1;
+    }
+    assert!(
+        found >= 1,
+        "the golden path must leave at least one reduction"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // claims/
 // ---------------------------------------------------------------------------
 
@@ -1109,7 +1179,9 @@ fn tree_mirrors_section_19_3() {
         "captures",
         "objects",
         "residuals",
+        "series",
         "trajectories",
+        "reductions",
         "receipts",
         "claims",
     ] {

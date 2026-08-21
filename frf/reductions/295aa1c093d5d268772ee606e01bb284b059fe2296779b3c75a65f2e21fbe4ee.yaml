@@ -1,0 +1,31 @@
+schema_version: frf-reduction-v1
+id: 295aa1c093d5d268772ee606e01bb284b059fe2296779b3c75a65f2e21fbe4ee
+residual_id: cli-exit-0001
+axis: exit
+kind: exit
+authority: ref-cli-1.8.2
+candidate_sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+original_fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+final_fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+attempts:
+- attempt: 1
+  fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+  preserved: true
+  kept: true
+- attempt: 2
+  fixture_sha256: 1254195159ed170b00bd5cb7fc7bc0cea505d37f631bf99c49edf36f26e6de74
+  preserved: true
+  kept: true
+- attempt: 3
+  fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+  preserved: true
+  kept: true
+- attempt: 4
+  fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+  preserved: true
+  kept: true
+derivation:
+  strategy: ddmin-lines
+  original_lines: 4
+  final_lines: 1
+  minimal: true
