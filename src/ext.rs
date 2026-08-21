@@ -71,11 +71,19 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
 }
 
 /// Execute a snapshotted protocol program with the canonical request on
-/// stdin. Fail-closed: a non-zero exit or an execution error (timeout,
-/// overflow, missing program) is a refusal. Returns the raw stdout bytes —
-/// the caller parses and interprets them against the protocol.
-pub fn run_program(image: &host::ExecImage, request_bytes: &[u8], cwd: &Path) -> Result<Vec<u8>> {
-    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd)?;
+/// stdin, under the declared execution profile (the same harness contract
+/// as the court's sides — the per-side cgroup v2 envelope for
+/// `frf-exec-linux-v2`). Fail-closed: a non-zero exit or an execution error
+/// (timeout, overflow, missing program) is a refusal. Returns the raw
+/// stdout bytes — the caller parses and interprets them against the
+/// protocol.
+pub fn run_program(
+    image: &host::ExecImage,
+    request_bytes: &[u8],
+    cwd: &Path,
+    profile: host::ExecProfile,
+) -> Result<Vec<u8>> {
+    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "extension program {} exited {}; refusing to record evidence from a failed participant",

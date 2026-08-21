@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
   "title": "OpenReceipt",
-  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v15). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance). v14 records the capture-adapter relations that defined the observations delivered to externally served axes (adapter_semantics) — the adapter extraction scheme is part of the court's question, so it enters the court semantic identity (FRF/COURT/v2).",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v16). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance). v14 records the capture-adapter relations that defined the observations delivered to externally served axes (adapter_semantics) — the adapter extraction scheme is part of the court's question, so it enters the court semantic identity (FRF/COURT/v2). v16 records the cgroup v2 per-side aggregate envelope (cgroup_pids_max / cgroup_memory_max / cgroup_cpu_max) when the observation ran under frf-exec-linux-v2 — the fields are ABSENT under the reference profile frf-exec-linux-v1, so a v15-shaped capture_bounds is a valid v16 document.",
   "type": "object",
   "required": [
     "schema_version",
@@ -27,7 +27,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v15"
+      "const": "frf-receipt-v16"
     },
     "run": {
       "type": "string"
@@ -331,6 +331,15 @@
           "type": "string"
         },
         "rlimit_nproc": {
+          "type": "string"
+        },
+        "cgroup_pids_max": {
+          "type": "string"
+        },
+        "cgroup_memory_max": {
+          "type": "string"
+        },
+        "cgroup_cpu_max": {
           "type": "string"
         }
       }

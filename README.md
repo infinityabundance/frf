@@ -118,7 +118,7 @@ not these tables.
 | independence | Declared independence relation about a witness attestation, with its basis | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
 | knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v8 · FRF/KNOWLEDGE/v2 | active |
 | claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored) | frf-claim-v8 · FRF/CLAIM/v1 | active |
-| receipt | Immutable evidence snapshot/root (OpenReceipt) | frf-receipt-v15 | active |
+| receipt | Immutable evidence snapshot/root (OpenReceipt) | frf-receipt-v16 | active |
 | bundle | Portable closure of referenced evidence (directory or single tar) | frf-bundle-v3 | active |
 | ci-status | CI gate presentation of a compiled claim | frf-ci-status-v1 | active |
 | comparator-invocation | Extension evidence: what was invoked, against which request | frf-comparator-invocation-v1 · FRF/COMPARATOR-INVOCATION/v1 | active |
@@ -178,7 +178,8 @@ not these tables.
 | frf-capture-v11 | active |  |
 | frf-residual-v1 | active |  |
 | frf-disposition-v2 | active |  |
-| frf-receipt-v15 | active |  |
+| frf-receipt-v16 | active |  |
+| frf-receipt-v15 | superseded |  |
 | frf-receipt-v12 | superseded |  |
 | frf-receipt-v7 | superseded |  |
 | frf-receipt-v5 | superseded |  |
@@ -282,7 +283,7 @@ not these tables.
 | id | meaning | status |
 |---|---|---|
 | frf-exec-linux-v1 | The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> — no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable) | active |
-| frf-exec-linux-v2 | Designed: cgroup v2 aggregate envelope (pids.max/memory.max/cpu.max/io.max) — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process) | future |
+| frf-exec-linux-v2 | The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run — a declared profile is enforced, never approximated | active |
 <!-- PROTOCOL-REGISTRY:END -->
 
 ## Testing: regression, verification, fuzzing
@@ -572,11 +573,20 @@ says no more than that receipt licenses.
   via `FRF_EXEC_TIMEOUT_MS`, a test hook), 16 MiB per-stream capture caps
   (overflow REFUSES the run — truncated output is never evidence), and child
   resource limits (`RLIMIT_AS` 2 GiB, `RLIMIT_CPU` 30 s, `RLIMIT_NOFILE`
-  1024, `RLIMIT_NPROC` 4096 — per real UID, a layer against fork bombs, not
-  a per-side aggregate envelope; the cgroup v2 profile `frf-exec-linux-v2`
-  is the per-side aggregate contract). The profile + the exact capture
-  bounds that applied are
-  recorded at observation time (capture v10, OpenReceipt v13) and copied into
+  1024, `RLIMIT_NPROC` 4096). The second profile `frf-exec-linux-v2` adds
+  the cgroup v2 per-side AGGREGATE envelope — `pids.max` / `memory.max` /
+  `cpu.max` over the side's WHOLE descendant tree, race-free (the side
+  moves itself into its group in `pre_exec` before exec) — which is the
+  per-side, per-tree contract the setrlimit layer cannot give (`RLIMIT_NPROC`
+  is per real UID; `RLIMIT_AS`/`RLIMIT_CPU` are per process). A court
+  declares its profile in the manifest; everything the run executes runs
+  under it, and a declared profile is ENFORCED, never approximated: v2
+  without a writable cgroup v2 subtree (systemd `Delegate=`, a container
+  with a writable `/sys/fs/cgroup`) REFUSES the run. The profile + the exact
+  capture bounds that applied are
+  recorded at observation time (capture v10, OpenReceipt v16 — the v2
+  envelope under `cgroup_pids_max`/`cgroup_memory_max`/`cgroup_cpu_max`,
+  absent under v1) and copied into
   every receipt — a receipt never guesses what the harness enforced.
   The REFERENCE capture bounds are protocol constants
   (`host::reference_capture_bounds()`), never overridable: an `FRF_EXEC_*`

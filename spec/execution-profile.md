@@ -23,6 +23,7 @@ implements one profile today:
 | Profile            | Meaning                                                    |
 | ------------------ | ---------------------------------------------------------- |
 | `frf-exec-linux-v1`| Direct-exec Linux process capture (the reference profile)  |
+| `frf-exec-linux-v2`| The cgroup v2 per-side AGGREGATE envelope on top of v1     |
 
 A profile defines exactly what its engine records and enforces:
 argv, stdin policy, working directory, environment, locale, timezone,
@@ -30,6 +31,12 @@ umask, timeout semantics, stream capture semantics, resource limits,
 process topology, and termination policy. Profiles are protocol
 identifiers (`ObservableId` grammar); an engine that implements a different
 profile declares it, and exact replay across profiles is refused.
+
+A court DECLARES its profile in the manifest (`court.execution_profile`;
+absent = the reference profile). Everything the run executes — the sides
+AND every extension program (comparator, normalizer, capture adapter,
+minimizer, mutation provider) — runs under the declared profile, and the
+capture records it. A declared profile is ENFORCED, never approximated.
 
 ## `frf-exec-linux-v1` — the reference profile
 
@@ -75,6 +82,43 @@ Data files (fixtures) remain path-based: the recorded argv is part of the
 run identity, and the content-addressed object CAS plus `0444`/`0555`
 permissions plus re-hashing on every use are the data discipline. Sealing
 is for the executed **image**.
+
+## `frf-exec-linux-v2` — the cgroup v2 per-side aggregate envelope
+
+The setrlimit layer bounds ONE process each (`RLIMIT_AS`, `RLIMIT_CPU`) and
+`RLIMIT_NPROC` bounds the processes of the side's real USER ID — a hostile
+tree distributes memory or CPU over descendants, and the per-UID process
+cap is shared with every other process of the same user. The v2 profile
+bounds the side's WHOLE descendant tree in its own cgroup:
+
+```text
+pids.max    the per-side, per-tree process-count envelope
+memory.max  the per-side, per-tree memory envelope (aggregate)
+cpu.max     the per-side, per-tree CPU quota (aggregate)
+```
+
+- Each side (and each extension program) gets its own group under a
+  writable cgroup v2 root, created BEFORE the spawn.
+- The side moves ITSELF into its group in `pre_exec` (before `execve(2)`),
+  writing its own pid to the inherited `cgroup.procs` — race-free:
+  descendants inherit the cgroup at fork, so the envelope covers the whole
+  tree, not just the direct process. A failed move refuses the exec.
+- The setrlimit layer remains in force underneath the envelope (a second
+  layer, per the design).
+- The group is removed when the side is reaped; nothing lingers.
+- The capture records the envelope under `capture_bounds` (`cgroup_pids_max`
+  / `cgroup_memory_max` / `cgroup_cpu_max`, receipt schema v16), so exact
+  replay requires the same envelope and the receipt never guesses it.
+
+**Delegation is required.** cgroupfs is only writable where the manager
+delegated it: a systemd user session with `Delegate=`, a container with a
+writable `/sys/fs/cgroup`, or a delegated subtree. The harness locates a
+writable cgroup v2 root (`/sys/fs/cgroup` itself, or the deepest writable
+ancestor of the process's own cgroup path) and **REFUSES** the profile when
+none exists — a declared profile is enforced, never approximated, so a
+silent downgrade can never record a contract the harness did not enforce.
+The reference profile remains `frf-exec-linux-v1`; `high-assurance` claim
+admission requires it.
 
 ### Capture bounds (the parameters that actually applied)
 

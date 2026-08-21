@@ -2069,6 +2069,7 @@ impl Store {
                 cwd: std::path::Path::new("."),
                 raw: None,
                 compared: None,
+                profile: crate::host::ExecProfile::parse(&resolution.execution_profile)?,
             };
             let evaluation =
                 crate::comparators::evaluate(self, &plan, &reference, &candidate, &context)?;

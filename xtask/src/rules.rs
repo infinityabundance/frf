@@ -47,6 +47,10 @@ const CAPTURE_BOUNDS_KEYS: &[&str] = &[
     "rlimit_cpu_s",
     "rlimit_nofile",
     "rlimit_nproc",
+    // v16: the cgroup v2 aggregate envelope (frf-exec-linux-v2 only).
+    "cgroup_pids_max",
+    "cgroup_memory_max",
+    "cgroup_cpu_max",
 ];
 
 /// Unknown-key rejection per object kind — the structural mirror of the
@@ -76,9 +80,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v15" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v16" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v15",
+            "schema_version is {:?}, expected frf-receipt-v16",
             doc["schema_version"]
         ));
     }
@@ -436,9 +440,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v15" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v16" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v15",
+            "schema_version is {:?}, expected frf-receipt-v16",
             rec["schema_version"]
         ));
     }
@@ -844,15 +848,35 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         v.push("the environment digest does not rederive".to_string());
     }
 
-    // The execution profile is a valid protocol identifier, and the capture
-    // bounds are positive integers within the protocol's maxima.
-    if !is_valid_identifier(as_str(&rec["execution_profile"])) {
-        v.push(format!(
-            "invalid execution_profile identifier {:?}",
-            rec["execution_profile"]
-        ));
-    }
+    // The execution profile is a REGISTERED protocol profile (v1 reference or
+    // v2 cgroup envelope), and the capture bounds are positive integers
+    // within the protocol's maxima. The v2 profile REQUIRES its cgroup
+    // envelope fields; the v1 profile must not carry them (a declared
+    // profile's contract is exactly what it declares).
     let bounds = &rec["capture_bounds"];
+    match as_str(&rec["execution_profile"]) {
+        "frf-exec-linux-v1" => {
+            for what in ["cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"] {
+                if bounds.get(what).is_some() {
+                    v.push(format!(
+                        "execution profile frf-exec-linux-v1 must not carry the v2 cgroup bound {what}"
+                    ));
+                }
+            }
+        }
+        "frf-exec-linux-v2" => {
+            for what in ["cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"] {
+                if bounds.get(what).is_none() {
+                    v.push(format!(
+                        "execution profile frf-exec-linux-v2 requires the cgroup bound {what}"
+                    ));
+                }
+            }
+        }
+        other => {
+            v.push(format!("unregistered execution profile {other:?}"));
+        }
+    }
     for (what, max) in [
         ("timeout_ms", 3_600_000u64),
         ("max_stream_bytes", 1u64 << 30),
@@ -867,6 +891,39 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             _ => v.push(format!(
                 "capture bound {what} must be a positive integer within the protocol maximum {max}, got {v_str:?}"
             )),
+        }
+    }
+    // v16: the cgroup v2 aggregate envelope, when present, validates too.
+    for what in ["cgroup_pids_max", "cgroup_memory_max"] {
+        if let Some(v_str) = bounds.get(what).and_then(Value::as_str) {
+            let max = if what == "cgroup_pids_max" {
+                65_536u64
+            } else {
+                1u64 << 36
+            };
+            match v_str.parse::<u64>() {
+                Ok(n) if n > 0 && n <= max => {}
+                _ => v.push(format!(
+                    "capture bound {what} must be a positive integer within the protocol maximum {max}, got {v_str:?}"
+                )),
+            }
+        }
+    }
+    if let Some(v_str) = bounds.get("cgroup_cpu_max").and_then(Value::as_str) {
+        let parts: Vec<&str> = v_str.split_whitespace().collect();
+        let ok = parts.len() == 2
+            && parts[0]
+                .parse::<u64>()
+                .map(|n| n > 0 && n <= 1_000_000)
+                .unwrap_or(false)
+            && parts[1]
+                .parse::<u64>()
+                .map(|n| n > 0 && n <= 1_000_000)
+                .unwrap_or(false);
+        if !ok {
+            v.push(format!(
+                "capture bound cgroup_cpu_max must be the kernel's `quota period` pair within 1,000,000 us each, got {v_str:?}"
+            ));
         }
     }
 

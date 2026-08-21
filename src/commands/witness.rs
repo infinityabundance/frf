@@ -143,7 +143,15 @@ pub fn attest(
     };
     let request_bytes = crate::canon::canonical(&request)?.into_bytes();
     let request_cid = crate::ext::request_cid(&request_bytes);
-    let response_bytes = crate::ext::run_program(&snapshot.image, &request_bytes, Path::new("."))?;
+    // The witness PROGRAM runs under the reference profile (a standalone
+    // attestation records no profile of its own; the reference contract is
+    // the declared default).
+    let response_bytes = crate::ext::run_program(
+        &snapshot.image,
+        &request_bytes,
+        Path::new("."),
+        crate::host::ExecProfile::LinuxV1,
+    )?;
     let response_cid = host::sha256_bytes(&response_bytes);
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.
