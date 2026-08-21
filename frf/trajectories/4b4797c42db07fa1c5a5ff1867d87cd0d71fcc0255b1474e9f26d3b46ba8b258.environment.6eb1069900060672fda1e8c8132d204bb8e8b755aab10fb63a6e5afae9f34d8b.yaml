@@ -1,0 +1,17 @@
+schema_version: frf-trajectory-v2
+subject: 4b4797c42db07fa1c5a5ff1867d87cd0d71fcc0255b1474e9f26d3b46ba8b258
+axis: exit
+coordinate_system: environment
+series: 6eb1069900060672fda1e8c8132d204bb8e8b755aab10fb63a6e5afae9f34d8b
+observations:
+- point_index: 1
+  coordinate: golden-machine
+  run: run-cli-malformed-input-112d148d22d2dc17730ef63937876af0e974d922621d9c5a13a0b8be8a99bc03
+  observed: true
+  residual: cli-exit-0001
+  fingerprint: 898b85d1bc91e49aaf33cd1f65337b84f4259c5eda5076dff79a8dec57e7acae
+derivation:
+  drift: persistent
+  slew: stable
+  localization: none
+  bands: 1

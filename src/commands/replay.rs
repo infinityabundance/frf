@@ -33,7 +33,7 @@ use crate::host;
 use crate::model::*;
 use crate::store::Store;
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The reproduction policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,11 +306,45 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     // -- execute the exact captured argv ------------------------------------
     // The sides run from `side_cwd`: bundle replay reconstructs the
     // invocation root there, so the recorded root-relative argv paths
-    // resolve to the bundle's own verified objects.
+    // resolve to the bundle's own verified objects. With a produce clause
+    // the sides re-write their output trees to the declared (transient)
+    // path; the harness re-captures them exactly as the court did.
+    let staging = crate::produced::ProducedStaging::new("replay")?;
+    let clear_produce = |path: &Path| -> Result<()> {
+        if path.exists() {
+            if path.is_dir() {
+                std::fs::remove_dir_all(path)
+                    .map_err(|e| FrfError::new(format!("cannot clear {}: {e}", path.display())))?;
+            } else {
+                std::fs::remove_file(path)
+                    .map_err(|e| FrfError::new(format!("cannot clear {}: {e}", path.display())))?;
+            }
+        }
+        Ok(())
+    };
+    // The produce path is relative to the sides' working directory.
+    let produce_path: Option<PathBuf> = capture
+        .court_spec
+        .produce
+        .as_ref()
+        .map(|p| side_cwd.join(&p.path));
+    if let Some(prod) = &produce_path {
+        clear_produce(prod)?;
+    }
     let reference_out = host::run_process_in(&authority_snapshot, &capture.arguments, side_cwd)?;
+    let mut reference = SideCapture::from_outcome(&reference_out);
+    if let Some(prod) = &produce_path {
+        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
+        reference.produced = Some(crate::produced::produced_side(files)?);
+        clear_produce(prod)?;
+    }
     let candidate_out = host::run_process_in(&candidate_snapshot, &capture.arguments, side_cwd)?;
-    let reference = SideCapture::from_outcome(&reference_out);
-    let candidate = SideCapture::from_outcome(&candidate_out);
+    let mut candidate = SideCapture::from_outcome(&candidate_out);
+    if let Some(prod) = &produce_path {
+        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
+        candidate.produced = Some(crate::produced::produced_side(files)?);
+        clear_produce(prod)?;
+    }
 
     // -- the observation must reproduce byte-for-byte ------------------------
     if reference != capture.reference || candidate != capture.candidate {
@@ -363,15 +397,11 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                         ))
                     },
                 )?;
-                let (surface, raw_ref, raw_cand) = builtin.compare(&reference, &candidate);
-                if raw_ref == raw_cand {
+                let divergences = builtin.compare(&reference, &candidate);
+                if divergences.is_empty() {
                     crate::comparators::ComparatorOutcome::Equivalent
                 } else {
-                    crate::comparators::ComparatorOutcome::Divergent(vec![(
-                        surface.map(str::to_string),
-                        raw_ref,
-                        raw_cand,
-                    )])
+                    crate::comparators::ComparatorOutcome::Divergent(divergences)
                 }
             }
             Some(artifact) => {
@@ -386,6 +416,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     &capture.fixture_sha256,
                     &capture.arguments,
                     &capture.environment.digest,
+                    reference.produced.as_ref().zip(candidate.produced.as_ref()),
                 );
                 let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
                 let evidence = store.load_comparator_evidence(&run, axis.as_str())?;

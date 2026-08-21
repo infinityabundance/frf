@@ -140,6 +140,15 @@ fn side(doc: &Value) -> Value {
         "stderr_sha256": s(&doc["stderr_sha256"]),
         "stdout_first_line": s(&doc["stdout_first_line"]),
         "stderr_first_line": s(&doc["stderr_first_line"]),
+        "produced": doc.get("produced").map(|p| json!({
+            "schema_version": s(&p["schema_version"]),
+            "manifest_sha256": s(&p["manifest_sha256"]),
+            "files": p["files"].as_array().map(|fs| fs.iter().map(|f| json!({
+                "path": s(&f["path"]),
+                "sha256": s(&f["sha256"]),
+                "executable": f["executable"].as_bool().unwrap_or(false),
+            })).collect::<Vec<_>>()).unwrap_or_default(),
+        })),
     })
 }
 

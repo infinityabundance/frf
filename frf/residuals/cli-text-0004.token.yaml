@@ -1,0 +1,12 @@
+schema_version: frf-token-v1
+residual_id: cli-text-0004
+token: text/filesystem.tree-divergence/observed/open
+kind: text
+surface: filesystem.tree-divergence
+authority: treegen-ref-1.0
+magnitude: observed
+scope: tree-build
+disposition: open
+next_court: none
+blocks_claims:
+- tree-build filesystem.tree parity

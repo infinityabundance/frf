@@ -313,6 +313,63 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             );
         }
 
+        // The PRODUCED ARTIFACT trees (the filesystem-tree surface): every
+        // file a side built is copied under the run; the closure carries them
+        // so verification rehashes the trees without executing anything.
+        let produced_root = dir.join("produced");
+        if produced_root.is_dir() {
+            for side in ["reference", "candidate"] {
+                let side_root = produced_root.join(side);
+                if !side_root.is_dir() {
+                    continue;
+                }
+                let mut pending: Vec<std::path::PathBuf> = vec![side_root.clone()];
+                while let Some(d) = pending.pop() {
+                    for entry in std::fs::read_dir(&d).map_err(|e| {
+                        FrfError::new(format!("cannot read produced tree {}: {e}", d.display()))
+                    })? {
+                        let entry = entry.map_err(|e| {
+                            FrfError::new(format!("cannot read produced tree {}: {e}", d.display()))
+                        })?;
+                        let path = entry.path();
+                        if entry
+                            .file_type()
+                            .map_err(|e| {
+                                FrfError::new(format!(
+                                    "cannot inspect produced artifact {}: {e}",
+                                    path.display()
+                                ))
+                            })?
+                            .is_dir()
+                        {
+                            pending.push(path);
+                            continue;
+                        }
+                        let rel = format!(
+                            "captures/{run}/{}",
+                            path.strip_prefix(&dir)
+                                .map_err(|_| {
+                                    FrfError::new(format!(
+                                        "produced artifact {} escapes the run dir",
+                                        path.display()
+                                    ))
+                                })?
+                                .to_string_lossy()
+                        );
+                        let bytes = read(&path, "produced artifact")?;
+                        entries.insert(
+                            rel.clone(),
+                            ClosureEntry {
+                                rel,
+                                sha256: host::sha256_bytes(&bytes),
+                                kind: "produced",
+                            },
+                        );
+                    }
+                }
+            }
+        }
+
         // The admitted authority record: the receipt cites the authority by
         // id, so the admission evidence is part of the closure (authorities
         // are never rewritten; the bundle carries the exact admission).

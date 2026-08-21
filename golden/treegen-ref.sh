@@ -1,0 +1,24 @@
+#!/bin/sh
+# treegen-ref 1.0 — the reference tree generator for the fs-tree-build court.
+# Reads a spec (one "path<TAB>content" line per file) and builds the tree
+# under the --out directory. The court observes the PRODUCED TREE, not
+# stdout: this tool writes files, and its stdout/stderr are empty.
+set -u
+spec=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --spec) spec="$2"; shift 2 ;;
+    --out) out="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$spec" ] && [ -n "$out" ] || exit 2
+rm -rf "$out"
+while IFS=$'\t' read -r path content || [ -n "$path" ]; do
+  [ -z "$path" ] && continue
+  case "$path" in \#*) continue ;; esac
+  mkdir -p "$out/$(dirname "$path")"
+  printf '%s\n' "$content" > "$out/$path"
+done < "$spec"
+exit 0
