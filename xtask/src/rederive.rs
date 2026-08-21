@@ -22,6 +22,37 @@ fn s(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
+/// The protocol identifier grammar: lowercase letter first, then lowercase
+/// letters, digits, `.`, `_`, `-`; 1..=64 characters. Mirrors the reference
+/// engine's ObservableId/ResidualKind validation.
+pub fn is_valid_identifier(s: &str) -> bool {
+    if s.is_empty() || s.len() > 64 {
+        return false;
+    }
+    let mut chars = s.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+}
+
+/// FRF/COMPARATOR-SPEC/v1 over the specification document
+/// (id + relation + extractor + residual_classifier) — the comparator's
+/// semantic identity, rederivable from a recorded ComparatorSemantic's own
+/// fields.
+pub fn comparator_spec_hash(id: &str, relation: &str, extractor: &str, classifier: &str) -> String {
+    preimage(
+        "FRF/COMPARATOR-SPEC/v1",
+        &json!({
+            "id": id,
+            "relation": relation,
+            "extractor": extractor,
+            "residual_classifier": classifier,
+        }),
+    )
+}
+
 /// Environment digest: sha256("os={os}\narch={arch}\nkernel={kernel}").
 pub fn env_digest(os: &str, arch: &str, kernel: &str) -> String {
     sha256_bytes(format!("os={os}\narch={arch}\nkernel={kernel}").as_bytes())
@@ -153,20 +184,29 @@ pub fn disposition_event_identity(event: &Value) -> String {
     preimage("FRF/DISPOSITION-EVENT/v1", &doc)
 }
 
-/// The κ routing table (Section 12): axis → (surface, magnitude, next_court).
-pub fn kappa_next(residual: &Value) -> &'static str {
+/// The κ routing table (Section 12): axis → next_court. Built-in rows as in
+/// the reference engine; any other axis has no routed minimizer (`none`).
+pub fn kappa_next(residual: &Value) -> String {
     match s(&residual["axis"]) {
-        "exit" => "cli-exit-minimize",
-        "stderr" => "cli-diagnostic-minimize",
-        _ => "cli-stdout-minimize",
+        "exit" => "cli-exit-minimize".to_string(),
+        "stderr" => "cli-diagnostic-minimize".to_string(),
+        "stdout" => "cli-stdout-minimize".to_string(),
+        _ => "none".to_string(),
     }
 }
 
 pub fn expected_token(residual: &Value) -> String {
     let (surface, magnitude) = match s(&residual["axis"]) {
-        "exit" => ("exit-class", "class-change"),
-        "stderr" => ("diagnostic-routing", "first-line-token-change"),
-        _ => ("stdout-routing", "first-line-token-change"),
+        "exit" => ("exit-class".to_string(), "class-change".to_string()),
+        "stderr" => (
+            "diagnostic-routing".to_string(),
+            "first-line-token-change".to_string(),
+        ),
+        "stdout" => (
+            "stdout-routing".to_string(),
+            "first-line-token-change".to_string(),
+        ),
+        other => (format!("{other}-divergence"), "observed".to_string()),
     };
     format!(
         "{}/{surface}/{magnitude}/{}",
@@ -179,7 +219,8 @@ pub fn expected_blocks(residual: &Value, family: &str) -> String {
     match s(&residual["axis"]) {
         "exit" => format!("{family} exit parity"),
         "stderr" => "byte-identical diagnostics".to_string(),
-        _ => "byte-identical stdout".to_string(),
+        "stdout" => "byte-identical stdout".to_string(),
+        other => format!("{family} {other} parity"),
     }
 }
 

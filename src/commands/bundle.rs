@@ -5,13 +5,18 @@
 //!
 //! ```text
 //! bundle.frf/
-//!   manifest.json        frf-bundle-v1: schema_version, receipt_id, run,
+//!   manifest.json        frf-bundle-v2: schema_version, receipt_id, run,
 //!                        created_by, and the content-addressed inventory
 //!   receipts/<id>.json   the OpenReceipt (canonical JSON)
 //!   captures/<run>/      capture.yaml + raw side files of every run in the
 //!                        closure (the receipt's run and every resolution run
-//!                        its disposition events reference, transitively)
-//!   objects/sha256/<H>   the content-addressed execution snapshots
+//!                        its disposition events reference, transitively),
+//!                        plus comparator/<axis>/{request,response,invocation,
+//!                        result}.json for every externally served axis
+//!   objects/sha256/<H>   the content-addressed execution snapshots — the
+//!                        executed artifacts AND the comparator
+//!                        instrumentation, walked via the capture's typed
+//!                        evidence references
 //!   residuals/           residual records + <id>.events/ hash-chained
 //!                        disposition events
 //!   claims/<id>.yaml     the compiled claim, when present
@@ -141,14 +146,28 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             },
         );
 
-        // Content-addressed execution snapshots.
-        for h in [
-            &cap.authority_artifact.sha256,
-            &cap.candidate_artifact.sha256,
-            &cap.fixture_sha256,
-        ] {
+        // Content-addressed execution snapshots + instrumentation: walk the
+        // capture's typed EVIDENCE REFERENCES (the generic graph traversal),
+        // so adding a comparator implementation — or later a witness,
+        // normalizer, or minimization run — needs no closure-walker edit. A
+        // capture from an earlier version may carry no refs; fall back to the
+        // recorded artifact hashes so old evidence still exports.
+        let refs: Vec<String> = if cap.evidence_refs.is_empty() {
+            vec![
+                cap.authority_artifact.sha256.clone(),
+                cap.candidate_artifact.sha256.clone(),
+                cap.fixture_sha256.clone(),
+            ]
+        } else {
+            cap.evidence_refs
+                .iter()
+                .filter(|r| r.object_kind == "object")
+                .map(|r| r.cid.clone())
+                .collect()
+        };
+        for h in refs {
             // verified_object_bytes refuses a missing or corrupt snapshot.
-            store.verified_object_bytes(h)?;
+            store.verified_object_bytes(&h)?;
             let rel = format!("objects/sha256/{h}");
             entries.insert(
                 rel.clone(),
@@ -158,6 +177,53 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     kind: "object",
                 },
             );
+        }
+
+        // Comparator invocation evidence (externally served axes): the
+        // canonical request + response documents and the content-addressed
+        // invocation + result records — part of the instrumentation that
+        // produced the observation.
+        let comparator_dir = dir.join("comparator");
+        if comparator_dir.is_dir() {
+            let mut axes: Vec<String> = std::fs::read_dir(&comparator_dir)
+                .map_err(|e| {
+                    FrfError::new(format!(
+                        "cannot read comparator evidence directory {}: {e}",
+                        comparator_dir.display()
+                    ))
+                })?
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            axes.sort();
+            for axis in axes {
+                for f in [
+                    "request.json",
+                    "response.json",
+                    "invocation.json",
+                    "result.json",
+                ] {
+                    let path = comparator_dir.join(&axis).join(f);
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let bytes = read(&path, "comparator evidence")?;
+                    let rel = format!("captures/{run}/comparator/{axis}/{f}");
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: match f {
+                                "request.json" => "comparator-request",
+                                "response.json" => "comparator-response",
+                                "invocation.json" => "comparator-invocation",
+                                _ => "comparator-result",
+                            },
+                        },
+                    );
+                }
+            }
         }
 
         // Residual records + disposition-event chains; a `fixed` event adds

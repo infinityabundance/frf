@@ -182,11 +182,12 @@ fn court_rejects_bad_declarations() {
     work.copy_canonical_tree();
     admit_reference(&work);
 
-    // Unsupported observable axis (v0.1.6: exit, stderr, stdout only).
+    // An observable axis that is a valid protocol identifier but served by
+    // no comparator (not a built-in, no external declaration).
     let m = manifest_variant(&work, "observables: [exit, stderr]", "observables: [wire]");
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("unsupported observable axis 'wire'"));
+    assert!(stderr(&out).contains("no comparator serves observable axis 'wire'"));
 
     // Unknown authority id.
     let m = manifest_variant(&work, "authority: ref-cli-1.8.2", "authority: nope-1.0");

@@ -30,8 +30,12 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// Capture schema. v6 removes the repetition context from the run entirely:
 /// a run knows nothing about which experiment later references it (v5's
 /// `repeat_index`/`repeat_count` moved to the ExecutionSeries protocol
-/// object). A run's identity is the observation, nothing else.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v6";
+/// object). A run's identity is the observation, nothing else. v7 declares
+/// the run's outgoing EVIDENCE REFERENCES ([`EvidenceRef`]) — the typed
+/// edges the bundle closure walks (authority/candidate/fixture objects and
+/// every external comparator implementation), so the closure traversal is
+/// generic instead of special-casing a fixed artifact list.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v7";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -45,10 +49,16 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// event in the hash-chained history, it does not merely copy state. v9
 /// pins each residual's sign to the exact ExecutionSeries snapshot it was
 /// derived from (`sign.series`), so later experiments that reference the
-/// same content-addressed run can never change what a receipt means. The
-/// body is serialized as canonical JSON (RFC 8785) and its identity is the
-/// full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v9";
+/// same content-addressed run can never change what a receipt means. v10
+/// makes the comparator layer OBSERVABLE-PLUGGABLE: observable ids and
+/// residual kinds become open protocol identifiers (no closed enum), each
+/// comparator semantic carries its extractor and residual classifier (its
+/// specification hash REDERIVES from its own fields), external
+/// implementations record their artifact identity, and an externally served
+/// observable binds the exact comparator request/result records that
+/// produced its verdict. The body is serialized as canonical JSON (RFC
+/// 8785) and its identity is the full SHA-256 of those bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v10";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -87,87 +97,197 @@ pub const SCHEMA_SERIES: &str = "frf-series-v1";
 
 /// The comparator extension protocol (spec/comparator.md): a canonical
 /// JSON request a court writes to an external comparator program's stdin,
-/// and the canonical JSON response it must produce on stdout.
-pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v1";
-pub const SCHEMA_COMPARATOR_RESPONSE: &str = "frf-comparator-response-v1";
+/// and the canonical JSON response it must produce on stdout. v2 adds
+/// `request_id` to the RESPONSE: the SHA-256 of the exact canonical request
+/// bytes the comparator received, so a response cryptographically names the
+/// request it answers (the court refuses a response that does not).
+pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v2";
+pub const SCHEMA_COMPARATOR_RESPONSE: &str = "frf-comparator-response-v2";
+
+/// The comparator INVOCATION evidence record: what was invoked, against
+/// which request, by which implementation, under which runner — written at
+/// court time under `captures/<run>/comparator/<axis>/invocation.json` and
+/// verified on every read. Content-addressed (`FRF/COMPARATOR-INVOCATION/v1`).
+pub const SCHEMA_COMPARATOR_INVOCATION: &str = "frf-comparator-invocation-v1";
+
+/// The comparator RESULT evidence record: which request the response
+/// answered, the response document's content address, the interpreted
+/// outcome, and the residual observations the invocation produced — written
+/// at court time under `captures/<run>/comparator/<axis>/result.json`.
+/// Content-addressed (`FRF/COMPARATOR-RESULT/v1`).
+pub const SCHEMA_COMPARATOR_RESULT: &str = "frf-comparator-result-v1";
 
 // ---------------------------------------------------------------------------
-// Observable axes
+// Observable axes + residual kinds (protocol identifiers)
 // ---------------------------------------------------------------------------
 
-/// Observable axis. Adding an axis means writing a new comparator in the
-/// court command, not restructuring the core. v0.1.6: `exit`, `stderr`, and
-/// `stdout` (stdout compared on its first line only — see README).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Axis {
-    Exit,
-    Stderr,
-    Stdout,
-}
-
-impl Axis {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Axis::Exit => "exit",
-            Axis::Stderr => "stderr",
-            Axis::Stdout => "stdout",
+/// The protocol identifier grammar shared by observable ids and residual
+/// kinds: lowercase ASCII letter first, then lowercase letters, digits, `.`,
+/// `_`, `-`; 1..=64 characters. This is the *only* vocabulary the protocol
+/// admits, because these values become claim scopes, token strings, and
+/// directory names (comparator evidence lives under `captures/<run>/
+/// comparator/<axis>/`).
+pub(crate) fn validate_identifier(what: &str, s: &str) -> std::result::Result<(), String> {
+    if s.is_empty() {
+        return Err(format!("{what} must not be empty"));
+    }
+    if s.len() > 64 {
+        return Err(format!("{what} '{s}' is too long: at most 64 characters"));
+    }
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => {
+            return Err(format!(
+                "invalid {what} '{s}': must start with a lowercase letter"
+            ))
         }
     }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(format!(
+            "invalid {what} '{s}': letters, digits, '.', '_', '-' only (lowercase)"
+        ));
+    }
+    Ok(())
+}
 
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "exit" => Ok(Axis::Exit),
-            "stderr" => Ok(Axis::Stderr),
-            "stdout" => Ok(Axis::Stdout),
-            other => Err(format!(
-                "unsupported observable axis '{other}': v0.1.6 supports 'exit', 'stderr', and 'stdout' only"
-            )),
-        }
+/// An observable axis id — an opaque, validated protocol identifier, NOT a
+/// closed Rust enum. The reference engine ships three in-binary comparators
+/// (`exit`, `stderr`, `stdout` — see [`crate::comparators`]), but any valid
+/// id (`dns.wire`, `filesystem.tree`, `tzif.bytes`, …) can be declared and
+/// served by an external comparator through the extension protocol: the
+/// evidence core runs observables without knowing what stdout, packets, or
+/// filesystem trees are.
+///
+/// Built-ins keep strongly typed helpers ([`ObservableId::exit`] etc.); the
+/// comparison itself lives in the comparator registry, keyed on the id.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ObservableId(String);
+
+impl ObservableId {
+    /// The built-in `exit` observable.
+    pub fn exit() -> Self {
+        ObservableId("exit".to_string())
     }
 
-    /// The declared comparison relation for this axis (Section 10, Δ_a). The
-    /// comparator identity is recorded in every receipt's observable block,
-    /// so the evidence says exactly which relation was applied.
-    pub fn comparator(self) -> &'static str {
-        match self {
-            Axis::Exit => "eq(exit-code)",
-            Axis::Stderr => "eq(stderr-first-line)",
-            Axis::Stdout => "eq(stdout-first-line)",
-        }
+    /// The built-in `stderr` observable.
+    pub fn stderr() -> Self {
+        ObservableId("stderr".to_string())
+    }
+
+    /// The built-in `stdout` observable.
+    pub fn stdout() -> Self {
+        ObservableId("stdout".to_string())
+    }
+
+    /// Validate + construct an observable id. Refuses ids outside the
+    /// protocol grammar (see [`validate_identifier`]).
+    pub fn parse(s: &str) -> crate::error::Result<Self> {
+        validate_identifier("observable id", s).map_err(crate::error::FrfError::new)?;
+        Ok(ObservableId(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Is this one of the three in-binary built-ins?
+    pub fn is_builtin(&self) -> bool {
+        matches!(self.0.as_str(), "exit" | "stderr" | "stdout")
     }
 }
 
-/// Residual kind. v0.1.6 court comparators produce exactly these two kinds
-/// (Section 12: `exit` and `text`; `stdout` residuals are text-family, with
-/// the axis recorded separately); the enum has no catch-all so an
-/// unclassifiable residual is unrepresentable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResidualKind {
-    Exit,
-    Text,
+impl fmt::Display for ObservableId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
+
+impl Serialize for ObservableId {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ObservableId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        validate_identifier("observable id", &s).map_err(serde::de::Error::custom)?;
+        Ok(ObservableId(s))
+    }
+}
+
+/// A residual kind — an extensible semantic identifier, not a closed enum.
+/// The built-in classifiers are `exit` (the exit axis) and `text` (the
+/// stderr/stdout axes); an external comparator's declaration names its own
+/// classifier, and every residual on that axis carries the classifier's
+/// kind. The kind is part of the residual fingerprint, the lineage, and the
+/// residual id (`cli-{kind}-{seq}`), so a new kind is a new residual class,
+/// never a silent reinterpretation of an old one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ResidualKind(String);
 
 impl ResidualKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ResidualKind::Exit => "exit",
-            ResidualKind::Text => "text",
-        }
+    /// The `exit` residual kind (the exit axis's classifier).
+    pub fn exit() -> Self {
+        ResidualKind("exit".to_string())
     }
 
-    pub fn from_axis(axis: Axis) -> Self {
-        match axis {
-            Axis::Exit => ResidualKind::Exit,
-            Axis::Stderr | Axis::Stdout => ResidualKind::Text,
-        }
+    /// The `text` residual kind (the stderr/stdout axes' classifier).
+    pub fn text() -> Self {
+        ResidualKind("text".to_string())
+    }
+
+    /// Validate + construct a residual kind from a comparator's declared
+    /// residual classifier.
+    pub fn parse(s: &str) -> crate::error::Result<Self> {
+        validate_identifier("residual kind", s).map_err(crate::error::FrfError::new)?;
+        Ok(ResidualKind(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 
     /// Residual ids are `{domain}-{kind}-{seq}`; v0 courts are CLI courts, so
     /// the domain prefix is `cli` (matching Section 12's `cli-exit-*`).
-    pub fn domain_prefix(self) -> &'static str {
+    pub fn domain_prefix(&self) -> &'static str {
         "cli"
+    }
+}
+
+impl fmt::Display for ResidualKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Serialize for ResidualKind {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ResidualKind {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        validate_identifier("residual kind", &s).map_err(serde::de::Error::custom)?;
+        Ok(ResidualKind(s))
     }
 }
 
@@ -487,6 +607,11 @@ pub struct ComparatorDeclaration {
     /// identity. A compliant implementation MUST honor it: the residual raw
     /// values (and therefore the fingerprints) follow the extractor.
     pub extractor: String,
+    /// The residual kind every divergence on this axis is classified as —
+    /// part of the semantic identity (the classifier is in the specification
+    /// document). `exit` for the exit axis, `text` for stderr/stdout; an
+    /// axis-specific kind (`wire`, `tree`, …) for a domain comparator.
+    pub residual_classifier: String,
     pub relation_version: String,
     /// Working-directory-relative path to the comparator program. The court
     /// hashes its bytes BEFORE executing (snapshotted, sealed, re-hashed on
@@ -541,6 +666,25 @@ pub struct AdmissibilityEnvelope {
 // Raw capture
 // ---------------------------------------------------------------------------
 
+/// A typed outgoing reference from one evidence object to another — the edge
+/// of the evidence graph. Every content-addressed object a run's evidence
+/// depends on is declared here at capture time, and the bundle closure walks
+/// these refs instead of special-casing a fixed artifact list: adding a
+/// comparator implementation, a witness, a normalizer, or a minimization run
+/// no longer requires editing the closure walker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvidenceRef {
+    /// Why the reference exists (e.g. `authority-artifact`,
+    /// `candidate-artifact`, `fixture-object`, `comparator-implementation`).
+    pub role: String,
+    /// What kind of object is referenced (`object` = a content-addressed
+    /// executable/data snapshot under `objects/sha256/`).
+    pub object_kind: String,
+    /// The content address: the SHA-256 the object is named by.
+    pub cid: String,
+}
+
 /// Self-contained record of one court run: the raw bytes of both sides plus
 /// the snapshot of the court declaration, so a receipt can be re-derived
 /// without the original manifest file.
@@ -581,6 +725,13 @@ pub struct CaptureManifest {
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
+    /// The run's outgoing evidence references: the authority, candidate, and
+    /// fixture objects plus every external comparator implementation object.
+    /// The bundle closure walks these (the generic graph traversal); a
+    /// capture from an earlier version with no refs remains loadable (the
+    /// closure walker falls back to the recorded artifact hashes).
+    #[serde(default)]
+    pub evidence_refs: Vec<EvidenceRef>,
 }
 
 /// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
@@ -598,37 +749,71 @@ pub struct RunnerIdentity {
 /// Version of the comparator RELATIONS in this executable. Bump this
 /// whenever a comparator's semantics change (never reuse a name with new
 /// meaning under the old version). Implementation changes alone do NOT bump
-/// it: the runner executable hash catches those.
-pub const COMPARATOR_VERSION: &str = "v1";
+/// it: the runner executable hash catches those. v2 adds the residual
+/// classifier to the specification document (a semantic change: the
+/// specification hash covers it).
+pub const COMPARATOR_VERSION: &str = "v2";
 
 /// The semantic identity of a comparator relation: WHAT the relation is, not
 /// which implementation ran it. Two independent implementations with the
 /// same `specification_hash` ask the same question; their different
 /// executable bytes do not change the question.
+///
+/// The record carries the FULL specification (id, relation, extractor,
+/// residual classifier) next to its hash, so the specification hash
+/// REDERIVES from the record's own fields — a receipt cannot claim a
+/// specification its own comparator semantics do not hash to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparatorSemantic {
-    /// The observable axis id this comparator serves (exit/stderr/stdout).
+    /// The observable axis id this comparator serves (exit/stderr/stdout,
+    /// or any valid protocol identifier for an external comparator).
     pub id: String,
     /// The relation family (Section 10, Δ_a): `eq`.
     pub relation_id: String,
+    /// What the comparator extracts and compares (part of the specification
+    /// document, hence of the specification hash).
+    pub extractor: String,
+    /// The residual kind this comparator classifies divergences as (part of
+    /// the specification document, hence of the specification hash).
+    pub residual_classifier: String,
     /// Bumped whenever the RELATION's semantics change (never reuse a name
     /// with new meaning under the old version).
     pub relation_version: String,
     /// SHA-256 of the comparator's canonical specification document
-    /// (id + relation + extractor), see [`crate::comparators`].
+    /// (id + relation + extractor + residual_classifier), see
+    /// [`crate::comparators`].
     pub specification_hash: String,
+}
+
+impl ComparatorSemantic {
+    /// The human-readable comparison relation label recorded in an
+    /// observable block: `eq(stderr-first-line)`.
+    pub fn relation_label(&self) -> String {
+        format!("{}({})", self.relation_id, self.extractor)
+    }
 }
 
 /// Which implementation of a comparator observed the run. For in-binary
 /// comparators both hashes are the runner executable hash; an external
-/// comparator plugin would carry its own implementation hash.
+/// comparator plugin carries its own implementation hash.
+///
+/// v0.1.23: an external comparator also records its ARTIFACT identity (the
+/// exact snapshotted bytes + interpreter it ran under), so replay can
+/// re-invoke the exact instrument and the bundle closure can carry it — the
+/// same `ArtifactIdentity` discipline used for candidates and authorities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparatorImplementation {
     pub id: String,
     pub implementation_hash: String,
     pub runner_hash: String,
+    /// Present iff the axis was served by an EXTERNAL comparator program:
+    /// the content-addressed snapshot it executed under (root-relative path,
+    /// sha256, interpreter chain). Absent for in-binary comparators, which
+    /// are implemented by the frf executable itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIdentity>,
 }
 
 /// Observation provenance: the runner and the comparator implementations
@@ -750,7 +935,7 @@ pub struct ResidualRecord {
     pub court: String,
     /// Run id this residual was observed in.
     pub run: String,
-    pub axis: Axis,
+    pub axis: ObservableId,
     pub kind: ResidualKind,
     /// Present for text residuals (Section 12: `surface: first-diagnostic-line`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1334,10 +1519,17 @@ pub struct ComparatorContext<'a> {
 /// exclusive, `indeterminate` and `failure` refuse the court, and a
 /// `divergent` response must name its residuals (see
 /// [`crate::comparators::interpret`]).
+///
+/// v2: `request_id` MUST be the SHA-256 of the exact canonical request bytes
+/// the comparator received — a response cryptographically names the request
+/// it answers, and the court refuses a response that does not.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparatorResponse {
     pub schema_version: String,
+    /// The SHA-256 of the exact canonical request bytes this response
+    /// answers (echoed from the comparator's stdin).
+    pub request_id: String,
     /// The axes' projections agree.
     pub equivalent: bool,
     /// The divergences, as raw projections the court preserves verbatim.
@@ -1353,8 +1545,9 @@ pub struct ComparatorResponse {
 }
 
 /// One divergence a comparator reports. `kind` is derived by the court from
-/// the axis (exit ↔ exit, stderr/stdout ↔ text); the SURFACE and the raw
-/// values follow the declared extractor.
+/// the axis's residual classifier (exit ↔ `exit`, stderr/stdout ↔ `text`, an
+/// external axis ↔ its declared classifier); the SURFACE and the raw values
+/// follow the declared extractor.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparatorResidual {
@@ -1362,6 +1555,78 @@ pub struct ComparatorResidual {
     pub surface: Option<String>,
     pub raw_reference: String,
     pub raw_candidate: String,
+}
+
+// ---------------------------------------------------------------------------
+// Comparator invocation evidence (the exact instrument that observed)
+// ---------------------------------------------------------------------------
+
+/// The INVOCATION evidence record: what was invoked, against which exact
+/// request, by which implementation, under which runner. Written at court
+/// time under `captures/<run>/comparator/<axis>/invocation.json` and verified
+/// on every read (the identity REDERIVES from the record's own fields — a
+/// name is a claim until recomputed).
+///
+/// The `request_cid` is the SHA-256 of the exact canonical request bytes the
+/// comparator received (the document's own byte hash — the schema_version
+/// field inside names the domain); the comparator echoes it as the
+/// response's `request_id`, so the whole chain is cryptographically bound:
+/// invocation → request bytes → response → interpreted result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorInvocation {
+    pub schema_version: String,
+    /// Content address: `FRF/COMPARATOR-INVOCATION/v1` over the record's own
+    /// fields. Filled by the court; a record whose id does not rederive is
+    /// refused on read.
+    pub invocation_id: String,
+    pub axis: ObservableId,
+    /// SHA-256 of the exact canonical request bytes the comparator received.
+    pub request_cid: String,
+    /// The comparator's SEMANTIC identity (its specification hash) — the
+    /// question the program was asked.
+    pub comparator_semantic_cid: String,
+    /// The exact implementation artifact that ran (snapshot path, sha256,
+    /// interpreter chain).
+    pub comparator_implementation_artifact: ArtifactIdentity,
+    /// Who orchestrated the invocation (the runner).
+    pub execution_provenance: RunnerIdentity,
+}
+
+/// The RESULT evidence record: which request the response answered, the
+/// response document's content address, the interpreted outcome, and the
+/// residual observations the invocation produced. Written at court time under
+/// `captures/<run>/comparator/<axis>/result.json`; the identity REDERIVES
+/// from the record's own fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparatorResult {
+    pub schema_version: String,
+    /// Content address: `FRF/COMPARATOR-RESULT/v1` over the record's own
+    /// fields.
+    pub result_id: String,
+    /// The request this result answers (must equal the invocation's
+    /// `request_cid`).
+    pub request_cid: String,
+    /// SHA-256 of the exact canonical response bytes (the document's own byte
+    /// hash).
+    pub response_cid: String,
+    /// The interpreted outcome: `equivalent` or `divergent` (a refused
+    /// comparator produces no result — the run never happened).
+    pub outcome: String,
+    /// The residual observation records this invocation produced (the
+    /// immutable observation records; their fingerprints are their semantic
+    /// identity and rederive from the residual records themselves).
+    pub residual_observation_ids: Vec<String>,
+}
+
+/// The complete verified evidence of one externally served axis: the
+/// invocation and the result it produced (cross-verified by
+/// [`crate::store::Store::load_comparator_evidence`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComparatorEvidence {
+    pub invocation: ComparatorInvocation,
+    pub result: ComparatorResult,
 }
 
 // ---------------------------------------------------------------------------
@@ -1515,6 +1780,16 @@ pub struct ReceiptObservable {
     pub comparator: String,
     pub normalization_rules: Vec<String>,
     pub verdict: ObservableVerdict,
+    /// For an externally served axis: the content address of the exact
+    /// comparator request (and the result record that answered it) this
+    /// verdict was produced from. The raw hashes above are the SHA-256s of
+    /// the canonical `reference`/`candidate` subtrees of that request. Absent
+    /// for in-binary comparators, whose raw hashes rederive from the
+    /// captured projections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparator_request: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparator_result: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1869,8 +2144,8 @@ mod tests {
             id: "cli-exit-0001".into(),
             court: "cli-malformed-input".into(),
             run: "run-x".into(),
-            axis: Axis::Exit,
-            kind: ResidualKind::Exit,
+            axis: ObservableId::exit(),
+            kind: ResidualKind::exit(),
             surface: None,
             authority: "ref-cli-1.8.2".into(),
             scope: "malformed-input".into(),

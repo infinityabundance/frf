@@ -102,6 +102,168 @@ impl Store {
         Ok(self.root.join("captures").join(run))
     }
 
+    /// `captures/<run>/comparator/<axis>/` — the invocation evidence
+    /// directory for one externally served axis (request.json, response.json,
+    /// invocation.json, result.json). The axis is validated again for
+    /// defense in depth: it becomes a path component.
+    pub fn comparator_dir(&self, run: &str, axis: &str) -> Result<PathBuf> {
+        crate::model::ObservableId::parse(axis)?;
+        Ok(self.run_dir(run)?.join("comparator").join(axis))
+    }
+
+    /// Load + verify a comparator INVOCATION record: its identity rederives
+    /// from its own fields, and the preserved request document hashes to the
+    /// recorded `request_cid`. A hand-edited or corrupt record is refused,
+    /// never silently consumed.
+    pub fn load_comparator_invocation(
+        &self,
+        run: &str,
+        axis: &str,
+    ) -> Result<crate::model::ComparatorInvocation> {
+        let dir = self.comparator_dir(run, axis)?;
+        let path = dir.join("invocation.json");
+        if !path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: no comparator invocation evidence for axis {axis} (missing {})",
+                path.display()
+            )));
+        }
+        let inv: crate::model::ComparatorInvocation = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let rederived = crate::semantics::comparator_invocation_identity(
+            &crate::semantics::ComparatorInvocationContent {
+                axis: &inv.axis,
+                request_cid: &inv.request_cid,
+                comparator_semantic_cid: &inv.comparator_semantic_cid,
+                comparator_implementation_artifact: &inv.comparator_implementation_artifact,
+                execution_provenance: &inv.execution_provenance,
+            },
+        )?;
+        if rederived != inv.invocation_id {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator invocation for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+                &rederived[..16]
+            )));
+        }
+        let request_path = dir.join("request.json");
+        if !request_path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator request for axis {axis} is missing ({})",
+                request_path.display()
+            )));
+        }
+        let request_bytes = fs::read(&request_path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", request_path.display())))?;
+        if crate::host::sha256_bytes(&request_bytes) != inv.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: the preserved request for axis {axis} does not hash to its recorded request_cid"
+            )));
+        }
+        Ok(inv)
+    }
+
+    /// Load + verify a comparator RESULT record: its identity rederives from
+    /// its own fields, and the preserved response document hashes to the
+    /// recorded `response_cid`.
+    pub fn load_comparator_result(
+        &self,
+        run: &str,
+        axis: &str,
+    ) -> Result<crate::model::ComparatorResult> {
+        let dir = self.comparator_dir(run, axis)?;
+        let path = dir.join("result.json");
+        if !path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: no comparator result evidence for axis {axis} (missing {})",
+                path.display()
+            )));
+        }
+        let res: crate::model::ComparatorResult = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let rederived = crate::semantics::comparator_result_identity(
+            &crate::semantics::ComparatorResultContent {
+                request_cid: &res.request_cid,
+                response_cid: &res.response_cid,
+                outcome: &res.outcome,
+                residual_observation_ids: &res.residual_observation_ids,
+            },
+        )?;
+        if rederived != res.result_id {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator result for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+                &rederived[..16]
+            )));
+        }
+        let response_path = dir.join("response.json");
+        if !response_path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator response for axis {axis} is missing ({})",
+                response_path.display()
+            )));
+        }
+        let response_bytes = fs::read(&response_path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", response_path.display())))?;
+        if crate::host::sha256_bytes(&response_bytes) != res.response_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: the preserved response for axis {axis} does not hash to its recorded response_cid"
+            )));
+        }
+        Ok(res)
+    }
+
+    /// Load + cross-verify a comparator's invocation AND result evidence, and
+    /// the response's binding to its request: the result must answer the
+    /// invocation's exact request (same `request_cid`), and the response must
+    /// cryptographically name that request (`request_id`).
+    pub fn load_comparator_evidence(
+        &self,
+        run: &str,
+        axis: &str,
+    ) -> Result<crate::model::ComparatorEvidence> {
+        let invocation = self.load_comparator_invocation(run, axis)?;
+        let result = self.load_comparator_result(run, axis)?;
+        if result.request_cid != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator result for axis {axis} answers a different request than its invocation"
+            )));
+        }
+        let dir = self.comparator_dir(run, axis)?;
+        let response: crate::model::ComparatorResponse =
+            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "cannot parse {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?;
+        if response.request_id != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: comparator response for axis {axis} does not name the request it answers"
+            )));
+        }
+        for rid in &result.residual_observation_ids {
+            let record = self.load_residual(rid)?;
+            if record.run != run {
+                return Err(FrfError::new(format!(
+                    "run {run}: comparator result for axis {axis} references residual {rid} which belongs to run {}",
+                    record.run
+                )));
+            }
+        }
+        Ok(crate::model::ComparatorEvidence { invocation, result })
+    }
+
     pub fn residual_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
         Ok(self.root.join("residuals").join(format!("{id}.yaml")))
@@ -149,7 +311,7 @@ impl Store {
         let expected = crate::semantics::reduction_identity(
             &record.residual_id,
             &record.axis,
-            record.kind,
+            record.kind.clone(),
             &record.authority,
             &record.candidate_sha256,
             &record.original_fixture_sha256,
@@ -170,7 +332,7 @@ impl Store {
         let id = crate::semantics::reduction_identity(
             &record.residual_id,
             &record.axis,
-            record.kind,
+            record.kind.clone(),
             &record.authority,
             &record.candidate_sha256,
             &record.original_fixture_sha256,
@@ -678,13 +840,20 @@ impl Store {
     /// comparable. A stricter reproducibility policy may additionally
     /// require equal provenance; the captures already record it.
     ///
+    /// The axis closure is verified per comparator: a BUILT-IN axis rederives
+    /// the projection equality from the resolution run's captures; an
+    /// EXTERNAL axis requires the resolution run's own recorded comparator
+    /// RESULT for that axis to be `equivalent` (verification must not
+    /// require execution — the resolution court already executed the
+    /// comparator and recorded the evidence).
+    ///
     /// Every failure names the specific dimension that drifted (via
     /// [`crate::semantics::semantic_diff`]) so the refusal is actionable.
     pub fn resolution_compatibility(
         &self,
         original_run: &str,
         resolution_run: &str,
-        axis: Axis,
+        axis: &ObservableId,
     ) -> Result<()> {
         if resolution_run == original_run {
             return Err(FrfError::new(format!(
@@ -714,8 +883,7 @@ impl Store {
             )));
         }
 
-        // The axis being resolved must be declared by the resolution run, and
-        // must now agree.
+        // The axis being resolved must be declared by the resolution run.
         let declared = resolution
             .court_spec
             .admissibility_envelope
@@ -728,14 +896,37 @@ impl Store {
                 axis.as_str()
             )));
         }
-        let closes = match axis {
-            Axis::Exit => resolution.reference.exit == resolution.candidate.exit,
-            Axis::Stderr => {
-                resolution.reference.stderr_first_line == resolution.candidate.stderr_first_line
+
+        // Was the axis served by an external comparator? Its recorded result
+        // must say `equivalent` (the exact instrument that observed the
+        // resolution run is part of that run's verified evidence).
+        let external = resolution
+            .provenance
+            .comparator_implementations
+            .iter()
+            .find(|i| i.id == axis.as_str())
+            .and_then(|i| i.artifact.as_ref());
+        let closes = if let Some(_artifact) = external {
+            let result = self.load_comparator_result(resolution_run, axis.as_str())?;
+            if result.outcome != "equivalent" {
+                return Err(FrfError::new(format!(
+                    "resolution run '{resolution_run}' does not close the residual: its comparator for the {} axis recorded outcome {:?}, not equivalent",
+                    axis.as_str(),
+                    result.outcome
+                )));
             }
-            Axis::Stdout => {
-                resolution.reference.stdout_first_line == resolution.candidate.stdout_first_line
-            }
+            true
+        } else {
+            let builtin =
+                crate::comparators::BuiltinKind::from_id(axis.as_str()).ok_or_else(|| {
+                    FrfError::new(format!(
+                        "the {} axis was served by no known comparator in the resolution run",
+                        axis.as_str()
+                    ))
+                })?;
+            let (_, raw_ref, raw_cand) =
+                builtin.compare(&resolution.reference, &resolution.candidate);
+            raw_ref == raw_cand
         };
         if !closes {
             return Err(FrfError::new(format!(
@@ -829,14 +1020,14 @@ mod tests {
     fn residual_sequence_counts_by_kind() {
         let store = temp_store();
         store.ensure_tree().unwrap();
-        assert_eq!(store.next_residual_seq(ResidualKind::Exit).unwrap(), 1);
+        assert_eq!(store.next_residual_seq(ResidualKind::exit()).unwrap(), 1);
         let rec = ResidualRecord {
             schema_version: SCHEMA_RESIDUAL.into(),
             id: "cli-exit-0001".into(),
             court: "c".into(),
             run: "r".into(),
-            axis: Axis::Exit,
-            kind: ResidualKind::Exit,
+            axis: ObservableId::exit(),
+            kind: ResidualKind::exit(),
             surface: None,
             authority: "a".into(),
             scope: "s".into(),
@@ -850,8 +1041,8 @@ mod tests {
         store
             .write_once(&store.residual_path("cli-exit-0001").unwrap(), &yaml)
             .unwrap();
-        assert_eq!(store.next_residual_seq(ResidualKind::Exit).unwrap(), 2);
-        assert_eq!(store.next_residual_seq(ResidualKind::Text).unwrap(), 1);
+        assert_eq!(store.next_residual_seq(ResidualKind::exit()).unwrap(), 2);
+        assert_eq!(store.next_residual_seq(ResidualKind::text()).unwrap(), 1);
     }
 
     #[test]

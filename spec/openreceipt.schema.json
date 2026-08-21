@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
   "title": "OpenReceipt",
-  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v9). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition.",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v10). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict.",
   "type": "object",
   "required": [
     "schema_version",
@@ -23,7 +23,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v9"
+      "const": "frf-receipt-v10"
     },
     "run": {
       "type": "string"
@@ -82,11 +82,7 @@
             "observables": {
               "type": "array",
               "items": {
-                "enum": [
-                  "exit",
-                  "stderr",
-                  "stdout"
-                ]
+                "type": "string"
               }
             },
             "normalizers": {
@@ -156,6 +152,26 @@
               "runner_hash": {
                 "type": "string",
                 "pattern": "^[0-9a-f]{64}$"
+              },
+              "artifact": {
+                "type": "object",
+                "required": [
+                  "path",
+                  "sha256"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "interpreter": {
+                    "$ref": "#/definitions/interpreter"
+                  }
+                }
               }
             }
           }
@@ -169,6 +185,8 @@
         "required": [
           "id",
           "relation_id",
+          "extractor",
+          "residual_classifier",
           "relation_version",
           "specification_hash"
         ],
@@ -178,6 +196,12 @@
             "type": "string"
           },
           "relation_id": {
+            "type": "string"
+          },
+          "extractor": {
+            "type": "string"
+          },
+          "residual_classifier": {
             "type": "string"
           },
           "relation_version": {
@@ -274,11 +298,7 @@
         "additionalProperties": false,
         "properties": {
           "axis": {
-            "enum": [
-              "exit",
-              "stderr",
-              "stdout"
-            ]
+            "type": "string"
           },
           "raw_reference_hash": {
             "type": "string",
@@ -302,6 +322,14 @@
               "pass",
               "residual"
             ]
+          },
+          "comparator_request": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "comparator_result": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
           }
         }
       }
@@ -498,17 +526,11 @@
           "type": "string"
         },
         "axis": {
-          "enum": [
-            "exit",
-            "stderr",
-            "stdout"
-          ]
+          "type": "string"
         },
         "kind": {
-          "enum": [
-            "exit",
-            "text"
-          ]
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]*$"
         },
         "sign": {
           "type": "object",

@@ -227,6 +227,8 @@ mod tests {
                     comparator: "eq(exit-code)".into(),
                     normalization_rules: vec![],
                     verdict: ObservableVerdict::Residual,
+                    comparator_request: None,
+                    comparator_result: None,
                 },
                 ReceiptObservable {
                     axis: "stderr".into(),
@@ -235,6 +237,8 @@ mod tests {
                     comparator: "eq(stderr-first-line)".into(),
                     normalization_rules: vec![],
                     verdict: ObservableVerdict::Residual,
+                    comparator_request: None,
+                    comparator_result: None,
                 },
             ],
             residuals: vec![],
@@ -261,9 +265,9 @@ mod tests {
             id: id.into(),
             axis: axis.into(),
             kind: if axis == "exit" {
-                ResidualKind::Exit
+                ResidualKind::exit()
             } else {
-                ResidualKind::Text
+                ResidualKind::text()
             },
             sign: ResidualSign {
                 norm: "single-run".into(),

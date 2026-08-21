@@ -402,27 +402,28 @@ fn residuals_and_tokens_are_self_consistent() {
             "id shape for {}",
             r.id
         );
-        match r.kind {
-            ResidualKind::Exit => {
-                assert_eq!(r.axis, Axis::Exit);
+        match r.kind.as_str() {
+            "exit" => {
+                assert_eq!(r.axis, ObservableId::exit());
                 assert_eq!(r.surface, None, "exit residual must not carry a surface");
             }
-            ResidualKind::Text => {
+            "text" => {
                 assert!(
-                    matches!(r.axis, Axis::Stderr | Axis::Stdout),
+                    matches!(r.axis.as_str(), "stderr" | "stdout"),
                     "text residual on unexpected axis {:?}",
-                    r.axis
+                    r.axis.as_str()
                 );
                 assert_eq!(
                     r.surface.as_deref(),
-                    match r.axis {
-                        Axis::Stderr => Some("first-diagnostic-line"),
-                        Axis::Stdout => Some("first-stdout-line"),
-                        Axis::Exit => unreachable!(),
+                    match r.axis.as_str() {
+                        "stderr" => Some("first-diagnostic-line"),
+                        "stdout" => Some("first-stdout-line"),
+                        _ => unreachable!(),
                     },
                     "surface must match the axis"
                 );
             }
+            other => panic!("unexpected residual kind {other:?}"),
         }
         assert_eq!(
             hash_str(&r.raw_reference),
@@ -498,7 +499,7 @@ fn residuals_and_tokens_are_self_consistent() {
                 // The resolution run must rerun the same question under a
                 // compatible envelope and actually close the residual.
                 store
-                    .resolution_compatibility(&r.run, resolution_run_id, r.axis)
+                    .resolution_compatibility(&r.run, resolution_run_id, &r.axis)
                     .expect("resolution run must satisfy the comparability predicate");
             }
         }
@@ -680,20 +681,76 @@ fn receipts_are_self_consistent() {
                 ),
             }
             assert!(rec.residuals.iter().all(|r| r.axis != obs.axis || {
-                let record = store.load_residual(&r.id).unwrap();
-                let (ref_h, cand_h) = match record.axis {
-                    Axis::Exit => (&cap.reference.exit_sha256, &cap.candidate.exit_sha256),
-                    Axis::Stderr => (
-                        &cap.reference.stderr_first_line_sha256,
-                        &cap.candidate.stderr_first_line_sha256,
-                    ),
-                    Axis::Stdout => (
-                        &cap.reference.stdout_first_line_sha256,
-                        &cap.candidate.stdout_first_line_sha256,
-                    ),
+                let implementation = cap
+                    .provenance
+                    .comparator_implementations
+                    .iter()
+                    .find(|i| i.id == obs.axis)
+                    .unwrap();
+                let (ref_h, cand_h, req, res_) = match &implementation.artifact {
+                    None => {
+                        let builtin = frf::comparators::BuiltinKind::from_id(&obs.axis).unwrap();
+                        let (ref_h, cand_h) = match builtin {
+                            frf::comparators::BuiltinKind::Exit => (
+                                cap.reference.exit_sha256.clone(),
+                                cap.candidate.exit_sha256.clone(),
+                            ),
+                            frf::comparators::BuiltinKind::Stderr => (
+                                cap.reference.stderr_first_line_sha256.clone(),
+                                cap.candidate.stderr_first_line_sha256.clone(),
+                            ),
+                            frf::comparators::BuiltinKind::Stdout => (
+                                cap.reference.stdout_first_line_sha256.clone(),
+                                cap.candidate.stdout_first_line_sha256.clone(),
+                            ),
+                        };
+                        (ref_h, cand_h, None, None)
+                    }
+                    Some(_) => {
+                        let evidence = store.load_comparator_evidence(run, &obs.axis).unwrap();
+                        let dir = store.comparator_dir(run, &obs.axis).unwrap();
+                        let request_value = frf::canon::parse_strict(
+                            &std::fs::read(dir.join("request.json")).unwrap(),
+                        )
+                        .unwrap();
+                        let ref_h = frf::host::sha256_bytes(
+                            frf::canon::encode(&request_value["reference"])
+                                .unwrap()
+                                .as_bytes(),
+                        );
+                        let cand_h = frf::host::sha256_bytes(
+                            frf::canon::encode(&request_value["candidate"])
+                                .unwrap()
+                                .as_bytes(),
+                        );
+                        (
+                            ref_h,
+                            cand_h,
+                            Some(evidence.invocation.request_cid.clone()),
+                            Some(evidence.result.result_id.clone()),
+                        )
+                    }
                 };
-                obs.raw_reference_hash == *ref_h && obs.raw_candidate_hash == *cand_h
+                obs.raw_reference_hash == ref_h
+                    && obs.raw_candidate_hash == cand_h
+                    && obs.comparator_request == req
+                    && obs.comparator_result == res_
             }));
+            // The residual's kind must be its comparator's classifier.
+            for r in rec.residuals.iter().filter(|r| r.axis == obs.axis) {
+                let classifier = rec
+                    .comparator_semantics
+                    .iter()
+                    .find(|s| s.id == obs.axis)
+                    .unwrap()
+                    .residual_classifier
+                    .clone();
+                assert_eq!(
+                    r.kind.as_str(),
+                    classifier,
+                    "residual kind must be the axis's residual classifier"
+                );
+            }
         }
 
         // Every residual entry re-derives from its file.
@@ -999,7 +1056,7 @@ fn reductions_are_self_consistent() {
             frf::semantics::reduction_identity(
                 &r.residual_id,
                 &r.axis,
-                r.kind,
+                r.kind.clone(),
                 &r.authority,
                 &r.candidate_sha256,
                 &r.original_fixture_sha256,
