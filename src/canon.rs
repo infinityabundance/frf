@@ -31,9 +31,11 @@
 //! implementation.
 
 use crate::error::{FrfError, Result};
+use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::Serialize;
 use serde_json::Value;
 use std::cmp::Ordering;
+use std::fmt;
 
 /// Serialize `value` to canonical JSON (RFC 8785).
 pub fn canonical<T: Serialize>(value: &T) -> Result<String> {
@@ -42,7 +44,7 @@ pub fn canonical<T: Serialize>(value: &T) -> Result<String> {
     encode(&value)
 }
 
-fn encode(value: &Value) -> Result<String> {
+pub fn encode(value: &Value) -> Result<String> {
     match value {
         Value::Null => Ok("null".to_string()),
         Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
@@ -78,6 +80,126 @@ fn utf16_cmp(a: &str, b: &str) -> Ordering {
     let av: Vec<u16> = a.encode_utf16().collect();
     let bv: Vec<u16> = b.encode_utf16().collect();
     av.cmp(&bv)
+}
+
+// ---------------------------------------------------------------------------
+// Strict JSON parsing (RFC 8785 §2 — I-JSON)
+// ---------------------------------------------------------------------------
+
+/// A JSON document whose object property names are UNIQUE. RFC 8785
+/// constrains JCS input to I-JSON and says explicitly that JSON objects MUST
+/// NOT contain duplicate property names. `serde_json::Value` silently keeps
+/// the last duplicate, which would let an unknown duplicate property vanish
+/// before a content address is recomputed; this type refuses instead.
+/// Property order is preserved (the raw document's order — JCS reorders).
+#[derive(Debug, Clone, PartialEq)]
+enum StrictJson {
+    Null,
+    Bool(bool),
+    Number(serde_json::Number),
+    String(String),
+    Array(Vec<StrictJson>),
+    Object(Vec<(String, StrictJson)>),
+}
+
+impl<'de> serde::Deserialize<'de> for StrictJson {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StrictVisitor;
+
+        impl<'de> Visitor<'de> for StrictVisitor {
+            type Value = StrictJson;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a JSON value with no duplicate object property names")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::Null)
+            }
+            fn visit_bool<E>(self, v: bool) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::Bool(v))
+            }
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::Number(v.into()))
+            }
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::Number(v.into()))
+            }
+            fn visit_f64<E>(self, v: f64) -> std::result::Result<StrictJson, E>
+            where
+                E: de::Error,
+            {
+                Ok(StrictJson::Number(
+                    serde_json::Number::from_f64(v)
+                        .ok_or_else(|| de::Error::custom("non-finite number"))?,
+                ))
+            }
+            fn visit_str<E>(self, v: &str) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::String(v.to_string()))
+            }
+            fn visit_string<E>(self, v: String) -> std::result::Result<StrictJson, E> {
+                Ok(StrictJson::String(v))
+            }
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<StrictJson, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut out = Vec::new();
+                while let Some(v) = seq.next_element::<StrictJson>()? {
+                    out.push(v);
+                }
+                Ok(StrictJson::Array(out))
+            }
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<StrictJson, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut out: Vec<(String, StrictJson)> = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if out.iter().any(|(k, _)| k == &key) {
+                        return Err(de::Error::custom(format!(
+                            "duplicate object property name {key:?} — RFC 8785 requires I-JSON (no duplicate names)"
+                        )));
+                    }
+                    let value = map.next_value::<StrictJson>()?;
+                    out.push((key, value));
+                }
+                Ok(StrictJson::Object(out))
+            }
+        }
+
+        deserializer.deserialize_any(StrictVisitor)
+    }
+}
+
+impl From<StrictJson> for Value {
+    fn from(v: StrictJson) -> Value {
+        match v {
+            StrictJson::Null => Value::Null,
+            StrictJson::Bool(b) => Value::Bool(b),
+            StrictJson::Number(n) => Value::Number(n),
+            StrictJson::String(s) => Value::String(s),
+            StrictJson::Array(items) => Value::Array(items.into_iter().map(Value::from).collect()),
+            StrictJson::Object(pairs) => {
+                Value::Object(pairs.into_iter().map(|(k, v)| (k, v.into())).collect())
+            }
+        }
+    }
+}
+
+/// Parse `bytes` as strict JSON (RFC 8785 §2 I-JSON). The parse REFUSES
+/// duplicate object property names, which `serde_json::Value` would silently
+/// collapse. Evidence identities MUST hash the document, never a projection:
+/// an unknown property has to survive into the canonical bytes or the
+/// receipt is refused — it can never be discarded before the digest is
+/// recomputed.
+pub fn parse_strict(bytes: &[u8]) -> Result<Value> {
+    let doc: StrictJson = serde_json::from_slice(bytes)
+        .map_err(|e| FrfError::new(format!("not strict JSON: {e}")))?;
+    Ok(doc.into())
 }
 
 /// RFC 8785 §3.2.2.2 string escaping. Predefined escapes for U+0008/0009/
@@ -255,5 +377,35 @@ mod tests {
             crate::host::sha256_bytes(expected.as_bytes()),
             "41c6ee64e779f9d7e80d511ae33a0c2763f497ccf32063e9cce359576e68b65d"
         );
+    }
+
+    /// RFC 8785 §2: JCS input is I-JSON — duplicate object property names
+    /// are refused, never silently collapsed (serde_json::Value would keep
+    /// the last one).
+    #[test]
+    fn duplicate_property_names_are_refused() {
+        let doc = b"{\"a\":1,\"a\":2}";
+        let err = parse_strict(doc).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate object property name"),
+            "error: {err}"
+        );
+        // Nested duplicates are caught too.
+        let doc = b"{\"outer\":{\"b\":true,\"b\":false}}";
+        assert!(parse_strict(doc).is_err());
+        // In ARRAYS duplicate-named objects are two distinct objects — fine.
+        let doc = b"[{\"k\":1},{\"k\":2}]";
+        assert!(parse_strict(doc).is_ok());
+    }
+
+    /// Strict parse preserves the full document: an unknown property
+    /// survives into the canonical bytes (it must — the content address
+    /// covers the DOCUMENT, not a typed projection).
+    #[test]
+    fn strict_parse_keeps_unknown_properties_in_the_document() {
+        let doc = b"{\"a\":\"x\",\"unrecognized\":\"tampered\"}";
+        let value = parse_strict(doc).unwrap();
+        let canonical = encode(&value).unwrap();
+        assert_eq!(canonical, "{\"a\":\"x\",\"unrecognized\":\"tampered\"}");
     }
 }

@@ -47,7 +47,11 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// body is serialized as canonical JSON (RFC 8785) and its identity is the
 /// full SHA-256 of those bytes.
 pub const SCHEMA_RECEIPT: &str = "frf-receipt-v8";
-pub const SCHEMA_CLAIM: &str = "frf-claim-v1";
+/// Claim schema. v2 carries the full Claim IR: the structured scope K, the
+/// blocking residuals, the premise receipts (`requires`), the comparison
+/// relation, and the machine proposition — admission is the paper's rule
+/// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`, implemented literally.
+pub const SCHEMA_CLAIM: &str = "frf-claim-v2";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 /// Environment identity block recorded in every capture at court time.
@@ -59,8 +63,10 @@ pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v1";
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 
 /// Bundle manifest schema (OpenReceipt bundle: the receipt + its portable
-/// object closure — see `spec/openreceipt.md`).
-pub const SCHEMA_BUNDLE: &str = "frf-bundle-v1";
+/// object closure — see `spec/openreceipt.md`). v2 closure: the admitted
+/// authority record is part of the evidence graph the receipt cites, so it
+/// travels with the bundle.
+pub const SCHEMA_BUNDLE: &str = "frf-bundle-v2";
 
 /// Residual trajectory schema: an ordered series of observations of one
 /// residual FINGERPRINT over a declared coordinate system (v0.1.17:
@@ -421,6 +427,7 @@ impl<'de> Deserialize<'de> for Disposition {
 /// Authority admission record (Section 12 shape, plus `name` and `path`
 /// required by the build brief). Written once by `frf authority admit`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AuthorityRecord {
     pub schema_version: String,
     /// `{name}-{version}` — the id cited by courts and receipts.
@@ -442,6 +449,7 @@ pub struct AuthorityRecord {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CourtManifest {
     pub court: CourtSpec,
     /// Optional comparator declarations (the extension protocol): an
@@ -475,6 +483,7 @@ pub struct ComparatorDeclaration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CourtSpec {
     pub id: String,
     pub question: String,
@@ -487,6 +496,7 @@ pub struct CourtSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CandidateSpec {
     pub name: String,
     pub version_or_commit: String,
@@ -496,6 +506,7 @@ pub struct CandidateSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FixtureSpec {
     pub id: String,
     /// Working-directory-relative path to the fixture file.
@@ -505,6 +516,7 @@ pub struct FixtureSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdmissibilityEnvelope {
     pub fixture_family: String,
     pub platforms: Vec<String>,
@@ -529,6 +541,7 @@ pub struct AdmissibilityEnvelope {
 /// emitted later copies it, never reconstructs it from whatever binary or
 /// host happens to be present.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureManifest {
     pub schema_version: String,
     pub run: String,
@@ -698,6 +711,7 @@ pub struct ArtifactIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SideCapture {
     /// Exit code as a string, or `signal(<n>)` if terminated by a signal.
     pub exit: String,
@@ -763,7 +777,7 @@ pub struct ResidualRecord {
 /// (residual + parent + disposition + evidence refs) — so an event's
 /// identity binds its history, and the graph cannot be rewritten without
 /// breaking every subsequent link.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DispositionEvent {
     pub schema_version: String,
     /// Content address: SHA-256 of `FRF/DISPOSITION-EVENT/v1` over the
@@ -782,6 +796,124 @@ pub struct DispositionEvent {
     /// evidence graph's explicit edges (later: receipts, artifacts, witness
     /// statements).
     pub evidence_refs: Vec<String>,
+}
+
+/// Strict evidence deserialization for [`DispositionEvent`]: the event is
+/// content-addressed (its `event_id` binds its fields), so an unknown
+/// property must be refused, never silently dropped before the identity is
+/// recomputed. `serde(flatten)` is incompatible with `deny_unknown_fields`,
+/// so the reader is hand-written: every key is checked, duplicates are
+/// refused, the disposition's cross-field rules are enforced literally
+/// (`fixed` requires reason + resolution_run_id + closure_predicate; a
+/// non-fixed closure carries reason only; `open` is unrepresentable), and
+/// anything else is an error.
+impl<'de> Deserialize<'de> for DispositionEvent {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        struct EventVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EventVisitor {
+            type Value = DispositionEvent;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a disposition event")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> std::result::Result<DispositionEvent, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut schema_version: Option<String> = None;
+                let mut event_id: Option<String> = None;
+                let mut residual_id: Option<String> = None;
+                let mut parent_event_id: Option<String> = None;
+                let mut evidence_refs: Option<Vec<String>> = None;
+                let mut disposition: Option<String> = None;
+                let mut reason: Option<String> = None;
+                let mut resolution_run_id: Option<String> = None;
+                let mut closure_predicate: Option<String> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "schema_version" => schema_version = Some(map.next_value()?),
+                        "event_id" => event_id = Some(map.next_value()?),
+                        "residual_id" => residual_id = Some(map.next_value()?),
+                        "parent_event_id" => parent_event_id = map.next_value()?,
+                        "evidence_refs" => evidence_refs = Some(map.next_value()?),
+                        "disposition" => disposition = Some(map.next_value()?),
+                        "reason" => reason = Some(map.next_value()?),
+                        "resolution_run_id" => resolution_run_id = Some(map.next_value()?),
+                        "closure_predicate" => closure_predicate = Some(map.next_value()?),
+                        other => {
+                            return Err(A::Error::custom(format!(
+                                "unknown field `{other}` on DispositionEvent — the event is content-addressed; unknown properties are refused, never dropped"
+                            )));
+                        }
+                    }
+                }
+
+                let disposition = match disposition.as_deref() {
+                    Some("fixed") => Disposition::Fixed {
+                        reason: reason
+                            .ok_or_else(|| A::Error::custom("fixed event without a reason"))?,
+                        resolution_run_id: resolution_run_id.ok_or_else(|| {
+                            A::Error::custom("fixed event without a resolution_run_id")
+                        })?,
+                        closure_predicate: closure_predicate.ok_or_else(|| {
+                            A::Error::custom("fixed event without a closure_predicate")
+                        })?,
+                    },
+                    Some(kind) => {
+                        if resolution_run_id.is_some() || closure_predicate.is_some() {
+                            return Err(A::Error::custom(format!(
+                                "{kind} event carries resolution_run_id/closure_predicate — only fixed may"
+                            )));
+                        }
+                        let kind = match kind {
+                            "intentional" => ClosureKind::Intentional,
+                            "environmental" => ClosureKind::Environmental,
+                            "oracle_version" => ClosureKind::OracleVersion,
+                            "harness" => ClosureKind::Harness,
+                            "unknown" => ClosureKind::Unknown,
+                            other => {
+                                return Err(A::Error::custom(format!(
+                                    "unknown disposition kind {other:?} (open is not settable)"
+                                )));
+                            }
+                        };
+                        Disposition::Closed {
+                            kind,
+                            reason: reason.ok_or_else(|| {
+                                A::Error::custom(format!("{kind:?} event without a reason"))
+                            })?,
+                        }
+                    }
+                    None => {
+                        return Err(A::Error::custom("disposition event without a disposition"));
+                    }
+                };
+
+                Ok(DispositionEvent {
+                    schema_version: schema_version.ok_or_else(|| {
+                        A::Error::custom("disposition event without schema_version")
+                    })?,
+                    event_id: event_id
+                        .ok_or_else(|| A::Error::custom("disposition event without event_id"))?,
+                    residual_id: residual_id
+                        .ok_or_else(|| A::Error::custom("disposition event without residual_id"))?,
+                    parent_event_id,
+                    disposition,
+                    evidence_refs: evidence_refs.unwrap_or_default(),
+                })
+            }
+        }
+
+        deserializer.deserialize_map(EventVisitor)
+    }
 }
 
 impl DispositionEvent {
@@ -860,6 +992,7 @@ pub(crate) fn validate_reason(reason: &str) -> crate::error::Result<()> {
 /// The κ(r_raw) = (kind, surface, authority, magnitude, scope, disposition,
 /// next_court) output (Section 6). Derived, never hand-authored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenRecord {
     pub schema_version: String,
     pub residual_id: String,
@@ -959,6 +1092,7 @@ impl TrajectorySlew {
 
 /// The derived classification of one trajectory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrajectoryDerivation {
     pub drift: TrajectoryDrift,
     pub slew: TrajectorySlew,
@@ -969,6 +1103,7 @@ pub struct TrajectoryDerivation {
 /// the subject was observed in it, and the residual record that observed it
 /// (when observed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrajectoryObservation {
     pub repetition: u32,
     pub run: String,
@@ -1007,6 +1142,7 @@ pub struct TrajectoryRecord {
 /// (serialized as canonical JSON). The comparator receives the raw side
 /// observations (base64) plus the context it needs to interpret them.
 #[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ComparatorRequest<'a> {
     pub schema_version: &'a str,
     /// The SEMANTIC identity of the comparator being invoked — what the
@@ -1020,6 +1156,7 @@ pub struct ComparatorRequest<'a> {
 
 /// One side's raw observation, as delivered to a comparator.
 #[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ComparatorObservation<'a> {
     pub exit: &'a str,
     pub stdout_base64: String,
@@ -1028,6 +1165,7 @@ pub struct ComparatorObservation<'a> {
 
 /// The execution context a comparator may need (the question's inputs).
 #[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ComparatorContext<'a> {
     pub fixture_sha256: &'a str,
     pub arguments: &'a [String],
@@ -1075,6 +1213,7 @@ pub struct ComparatorResidual {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Receipt {
     /// The protocol version, enforced at deserialization: a receipt with any
     /// other schema is refused, not silently interpreted.
@@ -1146,6 +1285,7 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptCourt {
     pub id: String,
     pub question: String,
@@ -1157,6 +1297,7 @@ pub struct ReceiptCourt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptEnvelope {
     pub authority_versions: Vec<String>,
     pub fixture_family: String,
@@ -1167,6 +1308,7 @@ pub struct ReceiptEnvelope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptAuthority {
     pub name: String,
     pub kind: String,
@@ -1180,6 +1322,7 @@ pub struct ReceiptAuthority {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptCandidate {
     pub name: String,
     pub version_or_commit: String,
@@ -1193,6 +1336,7 @@ pub struct ReceiptCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptFixture {
     pub id: String,
     pub hash: String,
@@ -1206,6 +1350,7 @@ pub struct ReceiptFixture {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptObservable {
     pub axis: String,
     pub raw_reference_hash: String,
@@ -1227,6 +1372,7 @@ pub enum ObservableVerdict {
 /// repeated-run court (`--repeat N`) derives them from the residual's
 /// trajectory instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResidualSign {
     pub norm: String,
     pub drift: String,
@@ -1234,6 +1380,7 @@ pub struct ResidualSign {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptResidual {
     pub id: String,
     /// v0 addition: the axis the residual was observed on (needed to scope
@@ -1268,12 +1415,14 @@ pub struct ReceiptResidual {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptEndoduction {
     pub schema_version: String,
     pub tokens: Vec<ReceiptToken>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptToken {
     pub residual_id: String,
     pub token: String,
@@ -1285,6 +1434,7 @@ pub struct ReceiptToken {
 /// are immutable, and the positive sentence is compiled into `claims/` by
 /// `frf claim compile` (see README Known Limitations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptClaims {
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
@@ -1308,38 +1458,169 @@ pub struct ReceiptReplay {
 }
 
 // ---------------------------------------------------------------------------
-/// A compiled claim (`claims/` — written only by `frf claim compile`).
+/// The scope of a claim (or of a residual's surface) — the region of the
+/// evidence space a proposition is asserted about.
 ///
-/// The claim carries its IR: the observable scope it covers and the
-/// residuals it explicitly excludes. A residual blocks ONLY claims whose
-/// observable scope intersects it — an open stdout residual never blocks a
-/// claim about exit parity. Prose is one renderer of this structure.
+/// The admission rule (Section 10 of the paper) is set containment:
+/// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — a claim may not assert parity over any
+/// dimension the premises did not actually observe. And a blocking residual
+/// blocks exactly the claims whose scope intersects its surface: an open
+/// residual observed on the same candidate, axis, fixture, environment, and
+/// authority as a claim blocks it, whatever run happened to record it;
+/// a residual on a different candidate, axis, fixture, or environment does
+/// not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimScope {
+    /// Admitted authority ids the claim is scoped to (`ref-cli-1.8.2`).
+    pub authority: Vec<String>,
+    /// The EXACT candidate artifact hashes the claim is about (labels are
+    /// distrustful; the admitted bytes are not).
+    pub candidate: Vec<String>,
+    /// Fixture ids actually executed — the claim never covers a fixture that
+    /// did not run.
+    pub fixtures: Vec<String>,
+    /// The fixture family (Section 12: `malformed-input`).
+    pub fixture_family: String,
+    /// The observable axes the claim covers (parity is per-axis).
+    pub observables: Vec<String>,
+    /// Environment digests the observation happened under.
+    pub environments: Vec<String>,
+    /// The authority versions the court was admitted against (the envelope's
+    /// `authority_versions`).
+    pub versions: Vec<String>,
+    /// The observation moments: run ids. Evidence about the same surface from
+    /// a DIFFERENT run still blocks (temporal is not part of the blocking
+    /// intersection); this dimension records WHERE the evidence lives.
+    pub temporal: Vec<String>,
+}
+
+impl ClaimScope {
+    /// One dimension's set overlap.
+    fn overlaps(a: &[String], b: &[String]) -> bool {
+        a.iter().any(|x| b.iter().any(|y| x == y))
+    }
+
+    /// Product intersection: two scopes overlap iff they share a point in
+    /// EVERY dimension that defines the evidence space. `temporal` is
+    /// deliberately excluded — an open divergence recorded by an earlier run
+    /// about the same surface is still an unexplained divergence about that
+    /// surface, and must still block. (A different run about a different
+    /// surface — different candidate, axis, fixture, environment, or
+    /// authority — does not: that is the paper's rule that a disposition or
+    /// a later observation never rewrites an older one, generalized to
+    /// scopes.)
+    pub fn intersects(&self, other: &ClaimScope) -> bool {
+        Self::overlaps(&self.authority, &other.authority)
+            && Self::overlaps(&self.candidate, &other.candidate)
+            && Self::overlaps(&self.fixtures, &other.fixtures)
+            && Self::overlaps(&self.observables, &other.observables)
+            && Self::overlaps(&self.environments, &other.environments)
+            && Self::overlaps(&self.versions, &other.versions)
+            && self.fixture_family == other.fixture_family
+    }
+
+    /// Dimension-wise containment: `self ⊇ other` — every point of `other`
+    /// is a point of `self`. The admission rule `Scope(K) ⊆ Scope(P₁ ∪ … ∪
+    /// Pₙ)` is `premises.contains(&k)` (with the premise union formed by
+    /// merging sets dimension-wise).
+    pub fn contains(&self, other: &ClaimScope) -> bool {
+        let superset = |big: &[String], small: &[String]| small.iter().all(|s| big.contains(s));
+        superset(&self.authority, &other.authority)
+            && superset(&self.candidate, &other.candidate)
+            && superset(&self.fixtures, &other.fixtures)
+            && superset(&self.observables, &other.observables)
+            && superset(&self.environments, &other.environments)
+            && superset(&self.versions, &other.versions)
+            && (other.fixture_family.is_empty() || self.fixture_family == other.fixture_family)
+    }
+
+    /// Union of two premise scopes (the P₁ ∪ … ∪ Pₙ of the admission rule),
+    /// merged set-wise per dimension.
+    pub fn union(&self, other: &ClaimScope) -> ClaimScope {
+        let merge = |a: &[String], b: &[String]| {
+            let mut v = a.to_vec();
+            for x in b {
+                if !v.contains(x) {
+                    v.push(x.clone());
+                }
+            }
+            v
+        };
+        ClaimScope {
+            authority: merge(&self.authority, &other.authority),
+            candidate: merge(&self.candidate, &other.candidate),
+            fixtures: merge(&self.fixtures, &other.fixtures),
+            fixture_family: if self.fixture_family.is_empty() {
+                other.fixture_family.clone()
+            } else {
+                self.fixture_family.clone()
+            },
+            observables: merge(&self.observables, &other.observables),
+            environments: merge(&self.environments, &other.environments),
+            versions: merge(&self.versions, &other.versions),
+            temporal: merge(&self.temporal, &other.temporal),
+        }
+    }
+}
+
+/// The exact candidate artifact a compiled claim is attributed to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimCandidate {
+    pub name: String,
+    pub version_or_commit: String,
+    pub identity_hash: String,
+}
+
+/// A compiled claim (written ONLY by `frf claim compile`, from a verified
+/// receipt). The IR is the full scope algebra:
+///
+/// - `scope` is K — the region of the evidence space the claim asserts
+///   parity over (never beyond the premises' surface, checked literally);
+/// - `blockers` are the residuals that REFUSE the claim: `open`/`unknown`
+///   residuals whose surface intersects K (a human or LLM cannot promote
+///   evidence by relabeling it — an unexplained divergence on the claimed
+///   surface blocks, wherever it was recorded), and `harness` residuals on a
+///   premise run (run-level invalidation);
+/// - `excluded_evidence` are the observed divergences this claim does NOT
+///   cover (residuals outside K's surface);
+/// - `requires` are the premise receipts, and admission is
+///   `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`;
+/// - prose (`positive`) is ONE renderer of the IR; `--json` emits the same
+///   IR canonically.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimRecord {
     pub schema_version: String,
     pub receipt: String,
+    /// Prose id of the admitted reference (`ref-cli-1.8.2`).
     pub authority: String,
     pub candidate: ClaimCandidate,
     pub court: String,
     pub fixture_family: String,
+    /// Prose environment label (arch-os + digest prefix).
     pub environment: String,
-    /// Claim IR — the axes this claim covers (never beyond the receipt's
-    /// declared observables, and never an axis this run observed diverging).
+    /// The comparison relation(s) the claim asserts (the clean axes'
+    /// comparators, e.g. `eq(exit-code)`).
+    pub relation: String,
+    /// The machine-readable proposition: what parity is asserted, of whom,
+    /// over which surface, on whose evidence.
+    pub proposition: String,
+    /// Claim IR — the structured scope K.
+    pub scope: ClaimScope,
+    /// Claim IR — the axes covered (projection of `scope.observables`).
     pub observable_scope: Vec<String>,
-    /// Claim IR — residuals excluded from this claim's scope (observed
-    /// divergences on other axes, whatever their disposition).
-    pub excluded_residuals: Vec<String>,
+    /// Claim IR — the residuals that block this claim (see the doc header).
+    pub blockers: Vec<String>,
+    /// Claim IR — observed divergences outside K's surface (this receipt's
+    /// residuals on axes the claim does not cover).
+    pub excluded_evidence: Vec<String>,
+    /// Claim IR — the premise receipts: admission is
+    /// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` over these.
+    pub requires: Vec<String>,
     pub positive: Vec<String>,
     pub non_claims: Vec<String>,
-}
-
-/// The exact candidate artifact a compiled claim is attributed to.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClaimCandidate {
-    pub name: String,
-    pub version_or_commit: String,
-    pub identity_hash: String,
 }
 
 #[cfg(test)]
@@ -1469,5 +1750,25 @@ mod tests {
         // Events can never be `open`.
         assert!(DispositionEvent::closed("r", ClosureKind::Intentional, "   ".into()).is_err());
         assert!(DispositionEvent::fixed("r", "x".into(), "   ".into(), "p".into()).is_err());
+    }
+
+    #[test]
+    fn disposition_event_reader_is_strict() {
+        let good = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: clearer wording\nevidence_refs: []\n";
+        let parsed: DispositionEvent = serde_yaml::from_str(good).unwrap();
+        assert_eq!(parsed.disposition.as_str(), "intentional");
+
+        // An unknown property is refused, never dropped before the event
+        // identity is recomputed (the event is content-addressed).
+        let bad = format!("{good}unrecognized: tampered\n");
+        let err = serde_yaml::from_str::<DispositionEvent>(&bad).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "error: {err}");
+
+        // Cross-field rules are enforced literally: a fixed event without a
+        // resolution run is refused; an intentional event carrying one is.
+        let bad = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: fixed\nreason: patched\nevidence_refs: []\n";
+        assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
+        let bad = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: x\nresolution_run_id: run-y\nevidence_refs: []\n";
+        assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
     }
 }

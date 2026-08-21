@@ -5,15 +5,15 @@ coordinate_system: repeat_index
 repeat_count: 3
 observations:
 - repetition: 1
-  run: run-cli-malformed-input-e72c5dafc21027665c8450ba1a9df310e7d484cfeea9052bbc73048b393e5994
+  run: run-cli-malformed-input-1088a6a0ac56a5da4be9f0a4b4c1d7323f7561578eee1f23c4b36ba9487f6d9f
   observed: true
   residual: cli-exit-0001
 - repetition: 2
-  run: run-cli-malformed-input-e72c5dafc21027665c8450ba1a9df310e7d484cfeea9052bbc73048b393e5994
+  run: run-cli-malformed-input-1088a6a0ac56a5da4be9f0a4b4c1d7323f7561578eee1f23c4b36ba9487f6d9f
   observed: true
   residual: cli-exit-0001
 - repetition: 3
-  run: run-cli-malformed-input-e72c5dafc21027665c8450ba1a9df310e7d484cfeea9052bbc73048b393e5994
+  run: run-cli-malformed-input-1088a6a0ac56a5da4be9f0a4b4c1d7323f7561578eee1f23c4b36ba9487f6d9f
   observed: true
   residual: cli-exit-0001
 derivation:

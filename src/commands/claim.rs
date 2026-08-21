@@ -2,33 +2,92 @@
 //!
 //! This is the ONLY code path that can produce a positive claim sentence.
 //! There is no flag, no verb, no file a human can author that emits claim
-//! prose: `claims/` is written solely here, from receipt fields alone.
+//! prose: `claims/` is written solely here, from verified evidence.
 //!
-//! Claim dependency algebra (the paper's rule, implemented): a residual
-//! blocks ONLY the claims whose observable scope intersects it.
+//! Claim dependency algebra (Section 10 of the paper, implemented): admission
+//! is set containment — `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — and a blocking
+//! residual blocks EXACTLY the claims whose scope intersects its surface.
 //!
-//! - `harness` invalidates the evidence of the run: every claim from the
-//!   receipt is refused, whatever the axes. The refusal names the harness
-//!   residuals and exits non-zero.
-//! - `open` / `unknown` block claims on their axis only. A receipt with a
-//!   clean axis still compiles its scoped claim; the refusal lines for the
-//!   blocked axes are printed next to it as explicit non-claim boundaries.
+//! - `harness` invalidates the evidence of a premise run: no claim whose
+//!   `requires` includes a harness run, whatever the axes.
+//! - `open` / `unknown` residuals block claims whose scope intersects their
+//!   surface (same authority, same candidate artifact, same fixture, same
+//!   family, same environment, same version, same axis) — WHEREVER the
+//!   divergence was recorded, not merely in this receipt: the compiler scans
+//!   the whole store, so an unexplained divergence about the claimed surface
+//!   blocks the claim even when a later run passed. A residual about a
+//!   different candidate, axis, fixture, or environment does not block (a
+//!   disposition, or a later run, never rewrites an older observation).
 //! - an axis this receipt's run observed diverging is never parity from this
-//!   receipt, whatever its disposition — a disposition links history, it
-//!   never rewrites an observation. If every declared axis has a residual,
-//!   no positive claim is licensed; the refusal names the resolution run to
-//!   compile from instead.
+//!   receipt, whatever its disposition. If every declared axis has a
+//!   residual, no positive claim is licensed; the refusal names the
+//!   resolution run to compile from instead.
 //! - Otherwise the compiler emits exactly one conservative sentence, scoped
 //!   to the receipt's authority, fixture family, environment, executed
 //!   court, and exact candidate artifact — never more — and states the
-//!   non-claim next to it.
+//!   non-claim next to it. The claim file carries the full Claim IR; prose
+//!   is one renderer (`--json` emits the same IR canonically).
 
 use crate::error::{FrfError, Result};
 use crate::model::*;
+use crate::scope;
 use crate::sentences;
 use crate::store::Store;
 
-pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
+/// Blocking residuals: `open`/`unknown` (unexplained divergences). `harness`
+/// is run-level and handled separately.
+fn is_scope_blocking(disposition: &str) -> bool {
+    matches!(disposition, "open" | "unknown")
+}
+
+/// Scan the store for residuals whose surface intersects the claim's scope K
+/// and whose current disposition is blocking. Returns the residual ids.
+///
+/// This is the cross-run part of the algebra: a claim compiled from receipt
+/// R is blocked by an open divergence recorded by ANY run about the same
+/// surface (same authority, candidate artifact, fixture, family, environment,
+/// version, and axis). A divergence about a different surface — most
+/// importantly, a different candidate artifact — never blocks: that is the
+/// paper's rule that no observation may be rewritten, generalized to scopes.
+///
+/// Shared with `verify_tree` so a compiled claim and its re-derivation run
+/// the SAME scan (one source of truth).
+pub fn store_blockers(
+    store: &Store,
+    k: &ClaimScope,
+) -> Result<Vec<(String, ResidualKind, String)>> {
+    let mut blockers = Vec::new();
+    let dir = store.root.join("residuals");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(blockers),
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".yaml") || name.ends_with(".token.yaml") {
+            continue;
+        }
+        let record = store.load_residual(&name[..name.len() - 5])?;
+        let disposition = store.current_disposition(&record.id)?;
+        if !is_scope_blocking(disposition.as_str()) {
+            continue;
+        }
+        let capture = store.load_capture(&record.run)?;
+        let authority = store.load_authority(&record.authority)?;
+        let surface = scope::residual_scope(&record, &capture, &authority.version);
+        if surface.intersects(k) {
+            blockers.push((
+                record.id.clone(),
+                record.kind,
+                disposition.as_str().to_string(),
+            ));
+        }
+    }
+    blockers.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(blockers)
+}
+
+pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
     // The semantic non-bypass rule, enforced structurally: claim compilation
     // accepts ONLY a ReceiptVerified — a receipt whose identity AND derivation
     // have been verified (content-addressed, semantically conformant, derived
@@ -47,7 +106,8 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
     let receipt = verified.body();
     let family = receipt.court.admissibility_envelope.fixture_family.clone();
 
-    // 1. Run-level invalidation: harness blocks every claim from this run.
+    // 1. Run-level invalidation: harness on a premise blocks every claim from
+    //    that run.
     let harness_lines = sentences::harness_refusal_lines(&receipt.residuals, &family);
     if !harness_lines.is_empty() {
         for line in &harness_lines {
@@ -92,7 +152,39 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         )));
     };
 
-    // 3. A claim IS licensed (scoped to the clean axes). Print the axis
+    // 3. The claim IR. Scope K is the executed surface restricted to the
+    //    clean axes; admission is the containment rule
+    //    Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ) — checked literally against the
+    //    premise surface (it holds by construction for a single receipt; the
+    //    check is the guard that keeps it true when premises grow).
+    let k_scope = scope::claim_scope(receipt);
+    let premise = scope::premise_scope(receipt);
+    if !premise.contains(&k_scope) {
+        return Err(FrfError::new(
+            "claim refused: Scope(K) ⊄ Scope(P) — the claim's scope exceeds the receipt's executed surface".to_string(),
+        ));
+    }
+
+    // 4. Store-wide blocking: any open/unknown residual about the claimed
+    //    surface blocks, wherever it was recorded.
+    let blockers = store_blockers(store, &k_scope)?;
+    if !blockers.is_empty() {
+        for (id, kind, disposition) in &blockers {
+            eprintln!(
+                "cannot claim compatibility for fixture family {family} because residual {id} ({}) is {disposition} — it was observed on the claimed surface and remains unexplained",
+                kind.as_str()
+            );
+        }
+        for nc in sentences::non_claims(&family) {
+            eprintln!("{nc}");
+        }
+        return Err(FrfError::new(format!(
+            "claim refused: {} blocking residual(s) intersect this claim's scope — no positive claim emitted while an unexplained divergence on the claimed surface exists",
+            blockers.len()
+        )));
+    }
+
+    // 5. A claim IS licensed (scoped to the clean axes). Print the axis
     //    blockers as explicit non-claim boundaries, then the claim.
     for line in sentences::open_refusal_lines(&receipt.residuals, &family) {
         eprintln!("{line}");
@@ -103,6 +195,23 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         receipt.environment.architecture,
         receipt.environment.os,
         &receipt.environment.digest[..8]
+    );
+    let relation = receipt
+        .observables
+        .iter()
+        .filter(|obs| !receipt.residuals.iter().any(|r| r.axis == obs.axis))
+        .map(|obs| obs.comparator.clone())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let proposition = format!(
+        "parity(observables=[{}]; fixtures=[{}]; family={}; authority=[{}]; candidate=[{}]; environments=[{}]; versions=[{}])",
+        k_scope.observables.join(", "),
+        k_scope.fixtures.join(", "),
+        k_scope.fixture_family,
+        k_scope.authority.join(", "),
+        k_scope.candidate.join(", "),
+        k_scope.environments.join(", "),
+        k_scope.versions.join(", "),
     );
     let claim = ClaimRecord {
         schema_version: SCHEMA_CLAIM.to_string(),
@@ -116,18 +225,22 @@ pub fn run(store: &Store, receipt_id: &str) -> Result<()> {
         court: receipt.court.id.clone(),
         fixture_family: family.clone(),
         environment,
-        // Claim IR: the observable scope this claim covers, and the
-        // residuals excluded from it (observed divergences on other axes).
-        observable_scope: receipt
-            .observables
-            .iter()
-            .filter(|obs| !receipt.residuals.iter().any(|r| r.axis == obs.axis))
-            .map(|obs| obs.axis.clone())
-            .collect(),
-        excluded_residuals: receipt.residuals.iter().map(|r| r.id.clone()).collect(),
+        relation,
+        proposition,
+        scope: k_scope.clone(),
+        observable_scope: k_scope.observables.clone(),
+        blockers: blockers.iter().map(|(id, _, _)| id.clone()).collect(),
+        excluded_evidence: receipt.residuals.iter().map(|r| r.id.clone()).collect(),
+        requires: vec![receipt_id.to_string()],
         positive: vec![sentence.clone()],
         non_claims: sentences::non_claims(&family),
     };
+
+    if json {
+        let canonical = crate::canon::canonical(&claim)?;
+        println!("{canonical}");
+        return Ok(());
+    }
 
     let yaml = store.to_yaml(&claim)?;
     let path = store.claim_path(receipt_id)?;

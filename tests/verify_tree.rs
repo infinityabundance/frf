@@ -950,22 +950,38 @@ fn claims_are_re_derivable_from_receipts() {
             vec![expected],
             "claim {receipt_id} drifted from its receipt"
         );
-        // Claim IR re-derives: the observable scope is the axes THIS run
-        // observed passing; the exclusions are the residuals on other axes.
-        let expected_scope: Vec<String> = rec
-            .observables
-            .iter()
-            .filter(|obs| !rec.residuals.iter().any(|r| r.axis == obs.axis))
-            .map(|obs| obs.axis.clone())
-            .collect();
-        assert_eq!(claim.observable_scope, expected_scope);
+        // The full Claim IR re-derives. Scope K is the executed surface
+        // restricted to the axes THIS run observed passing; the premise
+        // surface is the receipt's full executed surface; admission is the
+        // containment rule Scope(K) ⊆ Scope(P).
+        let k = frf::scope::claim_scope(rec);
+        let premise = frf::scope::premise_scope(rec);
+        assert!(premise.contains(&k), "Scope(K) ⊄ Scope(P) for {receipt_id}");
+        assert_eq!(claim.scope, k, "claim {receipt_id} scope drifted");
+        assert_eq!(claim.observable_scope, k.observables);
+        // A claim exists only when NO blocking residual (open/unknown)
+        // intersects K — the compiler refuses otherwise, so every compiled
+        // claim must re-derive an empty blocker set with the SAME scan.
+        let blockers = frf::commands::claim::store_blockers(&store, &k).unwrap();
+        assert!(
+            blockers.is_empty(),
+            "claim {receipt_id} exists while {} blocking residual(s) intersect its scope",
+            blockers.len()
+        );
+        assert_eq!(claim.blockers, Vec::<String>::new());
+        assert_eq!(claim.requires, vec![receipt_id.to_string()]);
         let expected_excluded: Vec<String> = rec.residuals.iter().map(|r| r.id.clone()).collect();
-        assert_eq!(claim.excluded_residuals, expected_excluded);
-        // A claim never covers an axis with a residual on it.
-        assert!(claim
-            .observable_scope
-            .iter()
-            .all(|axis| !rec.residuals.iter().any(|r| r.axis == *axis)));
+        assert_eq!(claim.excluded_evidence, expected_excluded);
+        assert_eq!(
+            claim.relation,
+            rec.observables
+                .iter()
+                .filter(|obs| !rec.residuals.iter().any(|r| r.axis == obs.axis))
+                .map(|obs| obs.comparator.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        assert!(!claim.proposition.is_empty(), "proposition must exist");
         assert_eq!(claim.non_claims, sentences::non_claims(family));
         assert_eq!(
             claim.authority,

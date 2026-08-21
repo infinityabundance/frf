@@ -295,24 +295,23 @@ fn disposition_of(res: &ReceiptResidual) -> Option<Disposition> {
 pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified> {
     let path = store.receipt_path(id)?;
     let text = read_bytes(&path, "receipt")?;
-    let body: Receipt = serde_json::from_slice(&text)
-        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
 
-    // 1. Content addressing: the id must BE the canonical body's hash.
+    // 1. Content addressing begins with the DOCUMENT, never the typed
+    //    projection. Strict parse refuses duplicate property names (RFC 8785
+    //    §2 I-JSON — serde_json::Value would silently collapse them), then
+    //    the canonical bytes are computed from the raw value, so an unknown
+    //    property either survives into the digest or the receipt is refused
+    //    — it can never be deserialized away before the identity is checked.
+    let value = crate::canon::parse_strict(&text)?;
+    let canonical = crate::canon::encode(&value)?;
+    let actual = host::sha256_bytes(canonical.as_bytes());
+
     let rest = id
         .strip_prefix("receipt-")
         .ok_or_else(|| FrfError::new(format!("{id} is not a receipt id")))?;
     let (run, digest) = rest
         .rsplit_once('-')
         .ok_or_else(|| FrfError::new(format!("receipt id {id} must end in the digest")))?;
-    if body.run != run {
-        return Err(FrfError::new(format!(
-            "receipt {id}: the run field inside the body is {body:?} — the name is a claim",
-            body = body.run
-        )));
-    }
-    let canonical = crate::canon::canonical(&body)?;
-    let actual = host::sha256_bytes(canonical.as_bytes());
     if actual != digest {
         return Err(FrfError::new(format!(
             "receipt {id} is not content-addressed: its canonical body hashes to {} but its id claims {digest}; refusing to consume hand-edited or forged evidence",
@@ -320,11 +319,24 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         )));
     }
 
-    // 2. Document-level semantic conformance.
+    // 2. Strict structural deserialization: every OpenReceipt type carries
+    //    deny_unknown_fields, so a document cannot shed bytes the content
+    //    address covered (an unknown property is refused, not dropped). The
+    //    schema version and the closed enums are enforced here too.
+    let body: Receipt = serde_json::from_value(value)
+        .map_err(|e| FrfError::new(format!("cannot deserialize {}: {e}", path.display())))?;
+    if body.run != run {
+        return Err(FrfError::new(format!(
+            "receipt {id}: the run field inside the body is {body:?} — the name is a claim",
+            body = body.run
+        )));
+    }
+
+    // 3. Document-level semantic conformance.
     body.validate_semantics()
         .map_err(|e| FrfError::new(format!("receipt {id}: {e}")))?;
 
-    // 3. The receipt derives from the verified capture of its own run.
+    // 4. The receipt derives from the verified capture of its own run.
     let cv = load_capture_verified(store, run)?;
     let cap = &cv.capture;
     if body.court.id != cap.court

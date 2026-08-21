@@ -50,7 +50,7 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             }
         },
         Command::Claim { sub } => match sub {
-            ClaimCmd::Compile { receipt } => claim::run(store, &receipt),
+            ClaimCmd::Compile { receipt, json } => claim::run(store, &receipt, json),
         },
         Command::Replay { id } => {
             replay::run(store, &id)?;

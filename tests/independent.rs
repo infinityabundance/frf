@@ -1,19 +1,16 @@
 //! Independent verifier tests: the protocol-separation milestone.
 //!
-//! `verifier/frf_verify.py` is a deliberately small SECOND implementation of
-//! the FRF protocol — Python, no execution. If the Rust reference engine and
-//! this verifier agree on the same bundle and the same conformance corpus,
-//! FRF is a protocol, not a Rust file format.
+//! `cargo xtask verify` (xtask/) is a deliberately small SECOND
+//! implementation of the FRF protocol — Rust, no execution, no dependency on
+//! the `frf` reference engine. If the Rust reference engine and this
+//! verifier agree on the same bundle and the same conformance corpus, FRF is
+//! a protocol, not a Rust file format.
 //!
 //! These tests assert that the verifier:
 //!   1. verifies a freshly exported golden bundle (exit 0, admissible IR);
 //!   2. passes the structural + semantic corpus that the Rust engine also
 //!      passes (same oracle, two implementations);
 //!   3. refuses a tampered bundle (nonzero exit, names the corruption).
-//!
-//! The verifier needs `python3` with PyYAML. CI installs PyYAML so these
-//! tests always run there; on a machine without either, they print a clear
-//! note and skip rather than fail a local `cargo test`.
 
 mod common;
 use common::*;
@@ -22,39 +19,17 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-const VERIFIER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/verifier/frf_verify.py");
+const XTASK_MANIFEST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/xtask/Cargo.toml");
 const CONFORMANCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/conformance");
 
-/// The interpreter that can run the verifier: `FRF_VERIFIER_PY` wins, then
-/// `python3`, then `python`. A lazy runtime probe, deliberately not a `cfg`.
-fn verifier_python() -> Option<String> {
-    if let Ok(py) = std::env::var("FRF_VERIFIER_PY") {
-        return Some(py);
-    }
-    for candidate in ["python3", "python"] {
-        let probe = Command::new(candidate).arg("--version").output();
-        if matches!(probe, Ok(o) if o.status.success()) {
-            return Some(candidate.to_string());
-        }
-    }
-    None
-}
-
-/// True when the verifier's single third-party dependency (PyYAML) imports.
-fn verifier_ready() -> bool {
-    match verifier_python() {
-        Some(py) => {
-            let probe = Command::new(&py).args(["-c", "import yaml"]).output();
-            matches!(probe, Ok(o) if o.status.success())
-        }
-        None => false,
-    }
-}
-
-fn run_verifier(cwd: &Path, args: &[&str]) -> Output {
-    let py = verifier_python().expect("verifier_python() was probed");
-    let mut cmd = Command::new(py);
-    cmd.arg(VERIFIER).args(args).current_dir(cwd);
+/// Run the xtask verifier. The xtask crate is independent of the frf
+/// library; `env!("CARGO")` is the cargo that built this test, and the
+/// manifest path pins the xtask crate.
+fn run_xtask(cwd: &Path, args: &[&str]) -> Output {
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args(["run", "--quiet", "--manifest-path", XTASK_MANIFEST, "--"])
+        .args(args)
+        .current_dir(cwd);
     cmd.output().unwrap()
 }
 
@@ -76,7 +51,7 @@ fn copy_dir(src: &Path, dst: &Path) {
 /// final receipt id). Mirrors tests/bundle.rs.
 fn golden_to_claim(work: &Workdir) -> (String, String) {
     admit_reference(work);
-    let run = run_court(work);
+    let _run = run_court(work);
     let resolution_run = run_resolution_court(work);
     let out = frf(
         work,
@@ -126,7 +101,6 @@ fn golden_to_claim(work: &Workdir) -> (String, String) {
     let receipt_final = stdout(&out);
     let out = frf(work, &["--root", ROOT, "claim", "compile", &receipt_final]);
     assert_success(&out, "claim compile");
-    let _ = run; // the original run stays a failure record; the bundle uses the resolution run
     (resolution_run, receipt_final)
 }
 
@@ -148,23 +122,18 @@ fn export_bundle(work: &Workdir, receipt_final: &str, name: &str) {
 
 #[test]
 fn verifier_verifies_the_golden_bundle_and_derives_the_same_claim_ir() {
-    if !verifier_ready() {
-        eprintln!(
-            "skipping: no python3 with PyYAML (install pyyaml to run the independent verifier)"
-        );
-        return;
-    }
     let work = Workdir::new("independent-bundle");
     work.copy_canonical_tree();
     let (resolution_run, receipt_final) = golden_to_claim(&work);
     export_bundle(&work, &receipt_final, "portable.frf");
 
-    // The verifier must accept the bundle — from its own directory, with the
-    // evidence tree present (the bundle is the artifact under test).
-    let out = run_verifier(&work.dir, &["bundle", "portable.frf"]);
+    // The independent verifier must accept the bundle and derive the SAME
+    // Claim IR as the Rust claim compiler: exit parity is admissible (the
+    // stderr intentional residual excludes only its axis), no blockers.
+    let out = run_xtask(&work.dir, &["verify", "bundle", "portable.frf"]);
     assert!(
         out.status.success(),
-        "verifier refused the golden bundle:\nstdout: {}\nstderr: {}",
+        "the independent verifier refused the golden bundle:\nstdout: {}\nstderr: {}",
         stdout(&out),
         stderr(&out)
     );
@@ -178,8 +147,6 @@ fn verifier_verifies_the_golden_bundle_and_derives_the_same_claim_ir() {
         out_text.contains(&resolution_run),
         "names the run: {out_text}"
     );
-    // The Claim IR must agree with the Rust claim compiler: exit parity is
-    // admissible (the stderr intentional residual excludes only its axis).
     assert!(
         out_text.contains("admissible=true"),
         "claim-ir must agree with the Rust compiler: {out_text}"
@@ -192,18 +159,13 @@ fn verifier_verifies_the_golden_bundle_and_derives_the_same_claim_ir() {
 
 #[test]
 fn verifier_passes_the_structural_and_semantic_corpus() {
-    if !verifier_ready() {
-        eprintln!(
-            "skipping: no python3 with PyYAML (install pyyaml to run the independent verifier)"
-        );
-        return;
-    }
     // The same corpus the Rust engine passes (`cargo test --test conformance`)
     // must pass an independent implementation byte-for-byte: canonical bytes,
-    // pinned hashes, structural refusals, semantic refusals.
-    let out = run_verifier(
+    // pinned hashes, structural refusals (including unknown properties and
+    // duplicate property names — RFC 8785 I-JSON), semantic refusals.
+    let out = run_xtask(
         Path::new(env!("CARGO_MANIFEST_DIR")),
-        &["corpus", CONFORMANCE],
+        &["verify", "corpus", CONFORMANCE],
     );
     assert!(
         out.status.success(),
@@ -220,12 +182,6 @@ fn verifier_passes_the_structural_and_semantic_corpus() {
 
 #[test]
 fn verifier_refuses_a_tampered_bundle() {
-    if !verifier_ready() {
-        eprintln!(
-            "skipping: no python3 with PyYAML (install pyyaml to run the independent verifier)"
-        );
-        return;
-    }
     let work = Workdir::new("independent-tamper");
     work.copy_canonical_tree();
     let (resolution_run, receipt_final) = golden_to_claim(&work);
@@ -246,7 +202,7 @@ fn verifier_refuses_a_tampered_bundle() {
     }
     fs::write(&side, b"tampered").unwrap();
 
-    let out = run_verifier(&foreign.dir, &["bundle", "portable.frf"]);
+    let out = run_xtask(&foreign.dir, &["verify", "bundle", "portable.frf"]);
     assert!(
         !out.status.success(),
         "the independent verifier accepted a tampered bundle"
@@ -258,18 +214,10 @@ fn verifier_refuses_a_tampered_bundle() {
     );
 }
 
-/// Sanity: the probes themselves resolve (guards every other test's skip).
+/// Sanity: the xtask builds and reports its usage (exit 2) with no mode.
 #[test]
-fn verifier_runner_is_discoverable() {
-    let Some(py) = verifier_python() else {
-        eprintln!(
-            "skipping: no python3 (install PyYAML + python3 to run the independent verifier)"
-        );
-        return;
-    };
-    let out = Command::new(py).args([VERIFIER]).output().unwrap();
-    // With no mode argument the verifier prints its usage to stderr and
-    // exits 2 — proving the script itself is importable/runnable.
+fn xtask_builds_and_reports_usage() {
+    let out = run_xtask(Path::new(env!("CARGO_MANIFEST_DIR")), &[]);
     assert_eq!(
         out.status.code(),
         Some(2),

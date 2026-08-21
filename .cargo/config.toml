@@ -1,0 +1,5 @@
+[alias]
+# The independent verifier + project automation, as a first-class command:
+#   cargo xtask verify bundle <bundle.frf/>
+#   cargo xtask verify corpus conformance/
+xtask = "run --quiet --manifest-path xtask/Cargo.toml --"

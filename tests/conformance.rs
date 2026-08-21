@@ -235,9 +235,12 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let source = fs::read_to_string(&path).unwrap();
 
-        // Must parse as JSON and deserialize into the schema.
-        let value: Value =
-            serde_json::from_str(&source).unwrap_or_else(|e| panic!("{name}: not valid JSON: {e}"));
+        // Must parse as STRICT JSON (RFC 8785 §2 I-JSON: duplicate property
+        // names refused — serde_json::Value would silently collapse them) and
+        // deserialize into the schema (unknown properties refused by
+        // deny_unknown_fields).
+        let value: Value = canon::parse_strict(source.as_bytes())
+            .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
         let _receipt: Receipt = serde_json::from_value(value.clone())
             .unwrap_or_else(|e| panic!("{name}: does not deserialize as an OpenReceipt: {e}"));
 
@@ -285,10 +288,11 @@ fn invalid_fixtures_must_be_refused() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let source = fs::read_to_string(&path).unwrap();
-        // Either the JSON is malformed, or it does not deserialize as an
-        // OpenReceipt (schema version enforced, fields required, enums
-        // closed). Both are refusals.
-        let refused = serde_json::from_str::<Value>(&source)
+        // Either the JSON is not strict (duplicate property names — RFC 8785
+        // §2 I-JSON), or it does not deserialize as an OpenReceipt (schema
+        // version enforced, fields required, enums closed, unknown properties
+        // refused). Both are refusals.
+        let refused = canon::parse_strict(source.as_bytes())
             .ok()
             .and_then(|v| serde_json::from_value::<Receipt>(v).ok())
             .is_none();
@@ -316,9 +320,10 @@ fn semantic_invalid_fixtures_must_be_refused() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let source = fs::read_to_string(&path).unwrap();
-        // Structurally valid: must parse and deserialize.
-        let value: Value =
-            serde_json::from_str(&source).unwrap_or_else(|e| panic!("{name}: not valid JSON: {e}"));
+        // Structurally valid: must parse as STRICT JSON (no duplicate
+        // property names) and deserialize.
+        let value: Value = canon::parse_strict(source.as_bytes())
+            .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
         let receipt: Receipt = serde_json::from_value(value).unwrap_or_else(|e| {
             panic!("{name}: must deserialize as an OpenReceipt (structural conformance): {e}")
         });
