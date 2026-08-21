@@ -265,9 +265,9 @@ pub fn run(store: &Store, receipt_id: &str, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let yaml = store.to_yaml(&claim)?;
+    let json = store.to_evidence(&claim)?;
     let path = store.claim_path(receipt_id)?;
-    store.write_derived(&path, &yaml)?;
+    store.write_derived(&path, &json)?;
 
     println!("{sentence}");
     for nc in &claim.non_claims {

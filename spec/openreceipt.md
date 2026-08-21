@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v12` (this document).*
+*Version: `frf-receipt-v14` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that
@@ -13,6 +13,20 @@ implementations in Rust, Go, Python, or an air-gapped appliance can be
 mutually verified. The reference implementation's receipts live in
 `receipts/`; the machine-readable definition and the conformance corpus
 live in `spec/` and `conformance/`.
+
+## 0. Storage convention — canonical JSON for all generated evidence
+
+v0.1.32 made the storage convention match the protocol: **every generated
+identity-bearing evidence object is canonical JSON (RFC 8785)** — captures,
+residuals, disposition events, series snapshots, trajectories, reduction
+records, court challenges, witness statements, knowledge snapshots, claim
+IRs, authorities, and receipts. YAML is reserved for HUMAN-AUTHORED input
+(court manifests, user configuration), which is source, not evidence. Every
+evidence loader parses strict I-JSON (duplicate property names refused) and
+REFUSES a document that is not its own canonical serialization — one
+semantic document has one byte sequence, so two implementations that agree
+on the bytes agree on the evidence without sharing a parser. The paths below
+are a reference-engine storage convention, not part of the protocol.
 
 ## 1. Serialization — canonical JSON (RFC 8785)
 
@@ -78,7 +92,7 @@ its semantic identity can be rederived from the document alone.
 A residual's disposition is never copied state: it is supplied by an
 immutable, content-addressed **disposition event**, and a receipt binds the
 exact event that supplied it (`residuals[].disposition_event_id`). Events
-live in the reference engine under `residuals/<id>.events/NNNN.yaml`
+live in the reference engine under `residuals/<id>.events/NNNN.json`
 (a storage convention; the protocol object is the event itself):
 
 ```
@@ -269,7 +283,7 @@ bundle.frf/
                        content-addressed inventory (path, sha256, kind
                        per file)
   receipts/<id>.json
-  captures/<run>/      capture.yaml + raw side files, for the receipt's run
+  captures/<run>/      capture.json + raw side files, for the receipt's run
                        and — transitively — every resolution run its
                        disposition events reference, plus
                        comparator/<axis>/{request,response,invocation,
@@ -278,7 +292,7 @@ bundle.frf/
                        artifacts AND the comparator instrumentation, walked
                        via the capture's typed evidence references
   residuals/           residual records + <id>.events/ event chains
-  claims/<id>.yaml     the compiled claim, when present
+  claims/<id>.json     the compiled claim, when present
 ```
 
 The bundle's defining property:
@@ -368,16 +382,16 @@ Five coordinate systems are executable:
   as more machines declare more coordinates;
 - `time` — `--time-point LABEL`: the same, over time.
 
-A series court writes an ExecutionSeries record (`series/<id>.yaml`,
-`frf-series-v2`), content-addressed over the experiment (experiment key,
+A series court writes an ExecutionSeries record (`series/<id>.json`,
+`frf-series-v3`), content-addressed over the experiment (experiment key,
 parent snapshot, court, coordinate system, ordered points) — every append is
 a NEW immutable, PARENT-LINKED snapshot, so the growth of a series is itself
 evidence, identical evidence shares the content-addressed run while every
 observation COORDINATE is still a point, and a branched experiment (two
 heads) refuses an implicit append (`--series-parent` chooses the branch). A
 run NEVER knows its experiments: the series references the runs.
-Trajectories (`frf-trajectory-v2`, under
-`trajectories/<lineage>.<coordinate-system>.<series>.yaml`) are DERIVED from
+Trajectories (`frf-trajectory-v3`, under
+`trajectories/<lineage>.<coordinate-system>.<series>.json`) are DERIVED from
 a series snapshot and reference it:
 
 ```text

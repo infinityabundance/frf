@@ -12,15 +12,15 @@ use common::*;
 use std::fs;
 
 /// The immutable observation record.
-fn raw_residual(work: &Workdir, id: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.yaml"))).unwrap(),
+fn raw_residual(work: &Workdir, id: &str) -> serde_json::Value {
+    serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.json"))).unwrap(),
     )
     .unwrap()
 }
 
 /// The last appended disposition event (the projection).
-fn last_event(work: &Workdir, id: &str) -> serde_yaml::Value {
+fn last_event(work: &Workdir, id: &str) -> serde_json::Value {
     let dir = work.path(&format!("frf/residuals/{id}.events"));
     let mut seqs: Vec<u32> = fs::read_dir(&dir)
         .unwrap()
@@ -34,8 +34,8 @@ fn last_event(work: &Workdir, id: &str) -> serde_yaml::Value {
         .collect();
     seqs.sort_unstable();
     let last = seqs.last().expect("at least one event");
-    serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.events/{last:04}.yaml")))
+    serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.events/{last:04}.json")))
             .unwrap(),
     )
     .unwrap()
@@ -290,9 +290,12 @@ fn envelope_declarations_are_fail_closed() {
 
     // An authority admitted for another platform is an out-of-envelope
     // oracle -> refused.
-    let authority_path = work.path("frf/authorities/ref-cli-1.8.2.yaml");
+    let authority_path = work.path("frf/authorities/ref-cli-1.8.2.json");
     let text = fs::read_to_string(&authority_path).unwrap();
-    let text = text.replace("platform: x86_64-linux", "platform: aarch64-darwin");
+    let text = text.replace(
+        "\"platform\":\"x86_64-linux\"",
+        "\"platform\":\"aarch64-darwin\"",
+    );
     fs::write(&authority_path, text).unwrap();
     let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
     assert!(!out.status.success());
@@ -344,8 +347,8 @@ fn fixture_not_referenced_warns_but_runs() {
     assert!(stderr(&out).contains("does not exercise it"));
     // Without a file argument both sides hit their no-input path: same exit
     // class (2), different wording → exactly one text residual.
-    assert!(work.path("frf/residuals/cli-text-0001.yaml").is_file());
-    assert!(!work.path("frf/residuals/cli-exit-0001.yaml").exists());
+    assert!(work.path("frf/residuals/cli-text-0001.json").is_file());
+    assert!(!work.path("frf/residuals/cli-exit-0001.json").exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -420,8 +423,8 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             "{kind} must not carry a resolution_run_id"
         );
         // The token follows the projection.
-        let tok: serde_yaml::Value = serde_yaml::from_str(
-            &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
+        let tok: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(tok["token"], format!("exit/exit-class/class-change/{kind}"));
@@ -785,7 +788,7 @@ fn dispositions_are_append_only_events() {
     run_court(&work);
 
     // The observation record is byte-identical before and after disposal.
-    let observation = work.path("frf/residuals/cli-text-0001.yaml");
+    let observation = work.path("frf/residuals/cli-text-0001.json");
     let before = fs::read(&observation).unwrap();
 
     let dispose = |kind: &str, reason: &str| {
@@ -823,20 +826,20 @@ fn dispositions_are_append_only_events() {
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".yaml"))
+        .filter(|n| n.ends_with(".json"))
         .collect::<Vec<_>>();
     let mut sorted = names.clone();
     sorted.sort();
-    assert_eq!(sorted, vec!["0001.yaml", "0002.yaml", "0003.yaml"]);
-    let e1: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(events_dir.join("0001.yaml")).unwrap()).unwrap();
+    assert_eq!(sorted, vec!["0001.json", "0002.json", "0003.json"]);
+    let e1: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(events_dir.join("0001.json")).unwrap()).unwrap();
     assert_eq!(e1["disposition"], "intentional");
     assert_eq!(e1["reason"], "clearer wording");
     assert_eq!(projected_disposition(&work, "cli-text-0001"), "unknown");
 
     // The trajectory survives: every event is still there after the last.
-    let e2: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(events_dir.join("0002.yaml")).unwrap()).unwrap();
+    let e2: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(events_dir.join("0002.json")).unwrap()).unwrap();
     assert_eq!(e2["disposition"], "harness");
 }
 
@@ -970,8 +973,8 @@ fn stdout_axis_is_a_declared_comparator() {
     assert_eq!(out_res["raw_candidate"].as_str().unwrap(), "cand banner");
 
     // The token routes to the stdout minimizer.
-    let tok: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0002.token.yaml")).unwrap(),
+    let tok: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-text-0002.token.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -1060,11 +1063,11 @@ fn open_residual_blocks_only_its_own_axis() {
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+        .filter(|n| n.ends_with(".json") && !n.ends_with(".token.json"))
         .collect();
     assert_eq!(
         residuals,
-        vec!["cli-text-0001.yaml"],
+        vec!["cli-text-0001.json"],
         "only the stderr axis diverges"
     );
 
@@ -1083,19 +1086,19 @@ fn open_residual_blocks_only_its_own_axis() {
     ));
 
     // The claim file carries the IR: scope = [exit], exclusions = [text].
-    let claim_yaml: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.yaml"))).unwrap(),
+    let claim_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(claim_yaml["observable_scope"][0], "exit");
-    assert_eq!(claim_yaml["excluded_evidence"][0], "cli-text-0001");
+    assert_eq!(claim_json["observable_scope"][0], "exit");
+    assert_eq!(claim_json["excluded_evidence"][0], "cli-text-0001");
     // The full scope algebra: the claim's scope carries the executed
     // surface, and the open text residual does NOT block it (different
     // axis — intersection is empty), while it IS recorded as evidence the
     // claim excludes.
-    assert_eq!(claim_yaml["scope"]["observables"][0], "exit");
-    assert_eq!(claim_yaml["requires"][0], receipt);
-    assert_eq!(claim_yaml["blockers"].as_sequence().unwrap().len(), 0);
+    assert_eq!(claim_json["scope"]["observables"][0], "exit");
+    assert_eq!(claim_json["requires"][0], receipt);
+    assert_eq!(claim_json["blockers"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -1125,12 +1128,12 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+        .filter(|n| n.ends_with(".json") && !n.ends_with(".token.json"))
         .collect();
     residuals.sort();
     assert_eq!(
         residuals,
-        vec!["cli-exit-0001.yaml", "cli-text-0001.yaml"],
+        vec!["cli-exit-0001.json", "cli-text-0001.json"],
         "run 1 diverges on exit AND stderr"
     );
 
@@ -1362,8 +1365,8 @@ fn replay_refuses_corrupt_objects_and_unknown_ids() {
 
     // Corrupt the candidate snapshot: replay must refuse, never execute the
     // tampered bytes.
-    let capture: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.yaml"))).unwrap(),
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
     )
     .unwrap();
     let cand_sha = capture["candidate_artifact"]["sha256"].as_str().unwrap();
@@ -1434,11 +1437,11 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
     let reduction_id = stdout(&out);
     assert_eq!(reduction_id.len(), 64, "content-addressed reduction id");
 
-    let rec: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v3");
+    assert_eq!(rec["schema_version"], "frf-reduction-v4");
     assert_eq!(rec["residual_id"], "cli-exit-0001");
     assert_eq!(rec["axis"], "exit");
     assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");
@@ -1446,12 +1449,20 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
     assert_eq!(rec["derivation"]["minimality"]["granularity"], "line");
     assert_eq!(rec["derivation"]["minimality"]["proven"], true);
     assert!(
-        rec["derivation"]["final_lines"].as_u64().unwrap()
-            < rec["derivation"]["original_lines"].as_u64().unwrap(),
+        rec["derivation"]["final_lines"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            < rec["derivation"]["original_lines"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
         "the reproducer must be strictly smaller"
     );
     // The content address rederives from the record's own fields.
-    let attempts = rec["attempts"].as_sequence().unwrap();
+    let attempts = rec["attempts"].as_array().unwrap();
     assert!(!attempts.is_empty(), "every attempt is recorded");
     // Attempts carry their role/outcome/acceptance: the FIRST is the
     // baseline (never accepted), the LAST is the final court verification.
@@ -1471,14 +1482,16 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
 
     // The record refuses tampering: a hand-edited field breaks the content
     // address (the store refuses on read).
-    let mut tampered: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    let mut tampered: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
-    tampered["axis"] = serde_yaml::Value::String("stdout".to_string());
+    tampered["axis"] = serde_json::Value::String("stdout".to_string());
+    // Write the tampered record as CANONICAL JSON: the canonical-bytes gate
+    // passes, and the content-address check must refuse the edited field.
     fs::write(
-        work.path(&format!("frf/reductions/{reduction_id}.yaml")),
-        serde_yaml::to_string(&tampered).unwrap(),
+        work.path(&format!("frf/reductions/{reduction_id}.json")),
+        frf::canon::canonical(&tampered).unwrap(),
     )
     .unwrap();
     let store = frf::store::Store::new(work.path(ROOT));
@@ -1572,22 +1585,22 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     let receipt = stdout(&out);
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_success(&out, "claim compile (universe U1)");
-    let claim1: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.yaml"))).unwrap(),
+    let claim1: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
     let snapshot1 = claim1["knowledge_snapshot"].clone();
     let cid1 = snapshot1["cid"].as_str().unwrap().to_string();
     // The snapshot's cid rederives from its own fields.
     let snapshot1_typed: frf::model::KnowledgeSnapshot =
-        serde_yaml::from_value(snapshot1.clone()).unwrap();
+        serde_json::from_value(snapshot1.clone()).unwrap();
     assert_eq!(
         frf::semantics::knowledge_snapshot_identity(&snapshot1_typed).unwrap(),
         cid1
     );
     // The universe records cli-text-0001 as INTENTIONAL at compile time.
     let head_1 = snapshot1["residual_heads"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|h| h["id"] == "cli-text-0001")
@@ -1613,8 +1626,8 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     assert_success(&out, "re-dispose cli-text-0001 (universe mutation)");
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_success(&out, "claim recompile (universe U2)");
-    let claim2: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.yaml"))).unwrap(),
+    let claim2: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
     let snapshot2 = claim2["knowledge_snapshot"].clone();
@@ -1624,7 +1637,7 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
         "a different knowledge universe is a different claim"
     );
     let head_1_new = snapshot2["residual_heads"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|h| h["id"] == "cli-text-0001")
@@ -1646,7 +1659,7 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
         blockers_old.is_empty(),
         "the claim's own universe carries no blocker for its scope"
     );
-    let snapshot2_typed: frf::model::KnowledgeSnapshot = serde_yaml::from_value(snapshot2).unwrap();
+    let snapshot2_typed: frf::model::KnowledgeSnapshot = serde_json::from_value(snapshot2).unwrap();
     assert_eq!(
         frf::semantics::knowledge_snapshot_identity(&snapshot2_typed).unwrap(),
         cid2

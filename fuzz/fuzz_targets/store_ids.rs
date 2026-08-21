@@ -16,7 +16,7 @@ fuzz_target!(|data: &[u8]| {
     let root = PathBuf::from("/frf-root");
     if is_valid_id(&id) {
         for dir in ["residuals", "receipts", "claims", "authorities"] {
-            let p = root.join(dir).join(format!("{id}.yaml"));
+            let p = root.join(dir).join(format!("{id}.json"));
             assert!(p.starts_with(&root), "id {id:?} escaped via {dir}");
             assert_eq!(p.parent().unwrap().file_name().unwrap(), dir);
         }

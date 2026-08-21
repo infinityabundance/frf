@@ -36,9 +36,10 @@ fn write_files(work: &Workdir, files: &[(&str, &str)]) {
     }
 }
 
-/// Read a YAML doc from the workdir.
-fn load_yaml(work: &Workdir, rel: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(&fs::read_to_string(work.path(rel)).unwrap()).unwrap()
+/// Read a JSON evidence document from the workdir (generated evidence is
+/// canonical JSON; court manifests stay YAML and are read directly).
+fn load_evidence(work: &Workdir, rel: &str) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(work.path(rel)).unwrap()).unwrap()
 }
 
 /// Admit an authority script and return its id.
@@ -169,7 +170,7 @@ fn filesystem_tree_court_observes_produced_artifacts() {
 
     // The capture records the produced observation per side, and the run
     // identity binds it (the run binds what the sides BUILT).
-    let capture = load_yaml(&work, &format!("frf/captures/{run}/capture.yaml"));
+    let capture = load_evidence(&work, &format!("frf/captures/{run}/capture.json"));
     let ref_prod = &capture["reference"]["produced"];
     let cand_prod = &capture["candidate"]["produced"];
     assert_eq!(ref_prod["schema_version"], "frf-produced-v1");
@@ -180,22 +181,22 @@ fn filesystem_tree_court_observes_produced_artifacts() {
     );
 
     // The residuals: one per differing file, surfaced by path.
-    let residuals: Vec<serde_yaml::Value> = fs::read_dir(work.path("frf/residuals"))
+    let residuals: Vec<serde_json::Value> = fs::read_dir(work.path("frf/residuals"))
         .unwrap()
         .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "yaml"))
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter(|e| {
             !e.file_name().to_string_lossy().contains(".token")
                 && !e.file_name().to_string_lossy().contains(".events")
         })
         .map(|e| {
-            load_yaml(
+            load_evidence(
                 &work,
                 &format!("frf/residuals/{}", e.file_name().to_string_lossy()),
             )
         })
         .collect();
-    let tree_residuals: Vec<&serde_yaml::Value> = residuals
+    let tree_residuals: Vec<&serde_json::Value> = residuals
         .iter()
         .filter(|r| r["axis"] == "filesystem.tree")
         .collect();
@@ -269,7 +270,7 @@ fn a_filesystem_tree_court_without_produce_is_refused() {
     // empty trees — refuse, never pretend.
     let manifest_path = work.path("frf/courts/fs-tree-build/manifest.yaml");
     let mut manifest: serde_yaml::Value =
-        load_yaml(&work, "frf/courts/fs-tree-build/manifest.yaml");
+        serde_yaml::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
     manifest["court"]
         .as_mapping_mut()
         .unwrap()
@@ -338,15 +339,15 @@ fn bytes_wire_court_compares_the_raw_stream_byte_exactly() {
 
     // The raw stdout files are captured; the single divergence is on the
     // bytes.wire axis (the streams differ in one byte).
-    let capture = load_yaml(&work, &format!("frf/captures/{run}/capture.yaml"));
+    let capture = load_evidence(&work, &format!("frf/captures/{run}/capture.json"));
     assert_ne!(
         capture["reference"]["stdout_sha256"], capture["candidate"]["stdout_sha256"],
         "one byte differs, so the stream hashes must differ"
     );
-    let residual: serde_yaml::Value = load_yaml(
+    let residual: serde_json::Value = load_evidence(
         &work,
         &format!(
-            "frf/residuals/{}.yaml",
+            "frf/residuals/{}.json",
             capture["residuals"][0].as_str().unwrap()
         ),
     );
@@ -404,11 +405,11 @@ fn structured_state_court_diffs_json_fields() {
     let run = stdout(&out);
 
     // One residual, surfaced by the exact JSON pointer of the differing field.
-    let capture = load_yaml(&work, &format!("frf/captures/{run}/capture.yaml"));
-    let residual: serde_yaml::Value = load_yaml(
+    let capture = load_evidence(&work, &format!("frf/captures/{run}/capture.json"));
+    let residual: serde_json::Value = load_evidence(
         &work,
         &format!(
-            "frf/residuals/{}.yaml",
+            "frf/residuals/{}.json",
             capture["residuals"][0].as_str().unwrap()
         ),
     );
@@ -490,12 +491,12 @@ fn timing_court_uses_an_external_envelope_comparator() {
 
     // The external comparator applied the envelope: 30 > 2*10 → divergent,
     // surfaced as the latency-ratio residual on the timing.latency axis.
-    let capture = load_yaml(&work, &format!("frf/captures/{run}/capture.yaml"));
-    assert_eq!(capture["residuals"].as_sequence().unwrap().len(), 1);
-    let residual: serde_yaml::Value = load_yaml(
+    let capture = load_evidence(&work, &format!("frf/captures/{run}/capture.json"));
+    assert_eq!(capture["residuals"].as_array().unwrap().len(), 1);
+    let residual: serde_json::Value = load_evidence(
         &work,
         &format!(
-            "frf/residuals/{}.yaml",
+            "frf/residuals/{}.json",
             capture["residuals"][0].as_str().unwrap()
         ),
     );
@@ -545,9 +546,9 @@ fn timing_court_uses_an_external_envelope_comparator() {
     );
     assert_success(&out, "within-envelope run");
     let run2 = stdout(&out);
-    let capture2 = load_yaml(&work, &format!("frf/captures/{run2}/capture.yaml"));
+    let capture2 = load_evidence(&work, &format!("frf/captures/{run2}/capture.json"));
     assert_eq!(
-        capture2["residuals"].as_sequence().unwrap().len(),
+        capture2["residuals"].as_array().unwrap().len(),
         0,
         "15 <= 2*10: within the envelope, no residual"
     );

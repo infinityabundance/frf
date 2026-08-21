@@ -96,16 +96,7 @@ pub fn request_cid(request_bytes: &[u8]) -> String {
 /// (two byte sequences for the same response would otherwise hash
 /// differently and preserve differently).
 pub fn require_canonical_response(response_bytes: &[u8], what: &str) -> Result<()> {
-    let parsed = crate::canon::parse_strict(response_bytes)
-        .map_err(|e| FrfError::new(format!("{what} is not strict JSON: {e}")))?;
-    let canonical = crate::canon::canonical(&parsed)
-        .map_err(|e| FrfError::new(format!("{what} cannot be canonicalized: {e}")))?;
-    if canonical.as_bytes() != response_bytes {
-        return Err(FrfError::new(format!(
-            "{what} is not its own canonical serialization (RFC 8785); the protocol says canonical JSON, and a non-canonical response would split one semantic response into many evidence identities"
-        )));
-    }
-    Ok(())
+    crate::canon::require_canonical_bytes(response_bytes, what)
 }
 
 /// Write the four invocation-evidence files under `dir` (created): the

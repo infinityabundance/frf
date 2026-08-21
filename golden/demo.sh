@@ -172,7 +172,7 @@ step "8. minimization — the routed reducer turns the failure into a reproducer
 MIN_ID=$("$FRF_BIN" --root "$ROOT" court minimize cli-exit-0001)
 echo "reduction: $MIN_ID"
 echo "-- the reproducer (1 line vs the original 3):"
-cat "$ROOT"/objects/sha256/$(grep final_fixture_sha256 "$ROOT"/reductions/$MIN_ID.yaml | awk '{print $2}')
+cat "$ROOT"/objects/sha256/$(grep -o '"final_fixture_sha256":"[0-9a-f]*"' "$ROOT"/reductions/$MIN_ID.json | head -1 | cut -d'"' -f4)
 
 step "8b. the external minimizer extension protocol — a declared reducer, court-verified"
 # The minimizer is a protocol participant: the court BINDS it at observation
@@ -185,12 +185,12 @@ step "8b. the external minimizer extension protocol — a declared reducer, cour
 # implementation identities and the content-addressed invocation evidence.
 echo "-- run the external-minimizer court (its fixture carries comments the reducer can drop)"
 MIN_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-external-minimizer/manifest.yaml)
-MIN_RESIDUAL=$(grep -A4 '^residuals:' "$ROOT"/captures/"$MIN_RUN"/capture.yaml | sed -n '2p' | sed 's/^[[:space:]]*-[[:space:]]*//')
+MIN_RESIDUAL=$(grep -o '"residuals":\["[^"]*"' "$ROOT"/captures/"$MIN_RUN"/capture.json | head -1 | sed 's/.*\["//; s/"$//')
 echo "external-minimizer run: $MIN_RUN (residual $MIN_RESIDUAL)"
 MIN_EXT_ID=$("$FRF_BIN" --root "$ROOT" court minimize "$MIN_RESIDUAL")
 echo "external reduction: $MIN_EXT_ID"
 echo "-- the reduction record binds the external minimizer (semantic + implementation):"
-grep -E 'minimizer_semantic_id|minimizer_implementation_hash' "$ROOT"/reductions/"$MIN_EXT_ID".yaml
+grep -E 'minimizer_semantic_id|minimizer_implementation_hash' "$ROOT"/reductions/"$MIN_EXT_ID".json
 echo "-- the minimizer's canonical request/response + invocation evidence:"
 ls "$ROOT"/reductions/"$MIN_EXT_ID"/minimizer/
 
@@ -231,4 +231,4 @@ find "$ROOT" -type f | sort
 
 echo
 printf 'Done. Receipt (canonical JSON): %s/receipts/%s.json\n' "$ROOT" "$RECEIPT_FINAL"
-echo "Claim:    $ROOT/claims/$RECEIPT_FINAL.yaml"
+echo "Claim:    $ROOT/claims/$RECEIPT_FINAL.json"

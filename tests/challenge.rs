@@ -33,9 +33,9 @@ fn challenge(work: &Workdir) -> Vec<String> {
     ids
 }
 
-fn challenge_record(work: &Workdir, id: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/challenges/{id}.yaml"))).unwrap(),
+fn challenge_record(work: &Workdir, id: &str) -> serde_json::Value {
+    serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/challenges/{id}.json"))).unwrap(),
     )
     .unwrap()
 }
@@ -63,7 +63,7 @@ fn the_golden_court_sees_its_declared_defects() {
         );
         let target = rec["target_axis"].as_str().unwrap();
         let unaffected: Vec<String> = rec["unaffected_axes"]
-            .as_sequence()
+            .as_array()
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
@@ -89,18 +89,18 @@ fn the_golden_court_sees_its_declared_defects() {
         );
         // The observed residual lives on the targeted axis — and only it.
         let run = rec["run"].as_str().unwrap();
-        let capture: serde_yaml::Value = serde_yaml::from_str(
-            &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.yaml"))).unwrap(),
+        let capture: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
         )
         .unwrap();
         assert_eq!(
-            capture["residuals"].as_sequence().unwrap().len(),
+            capture["residuals"].as_array().unwrap().len(),
             1,
             "{id}: the mutant must diverge on exactly one axis"
         );
         let residual_id = capture["residuals"][0].as_str().unwrap();
-        let residual: serde_yaml::Value = serde_yaml::from_str(
-            &fs::read_to_string(work.path(&format!("frf/residuals/{residual_id}.yaml"))).unwrap(),
+        let residual: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(work.path(&format!("frf/residuals/{residual_id}.json"))).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -148,16 +148,18 @@ fn challenge_records_are_content_addressed_and_refuse_tampering() {
     // (The derived verdicts — saw_defect, specificity_clean, the residual
     // list — are recomputed from the run by verification, so a tampered
     // verdict is caught there: tests/verify_tree.rs asserts exactly that.)
-    let path = work.path(&format!("frf/challenges/{id}.yaml"));
+    let path = work.path(&format!("frf/challenges/{id}.json"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     }
-    let mut rec: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    rec["target_axis"] = serde_yaml::Value::String("stderr".to_string());
-    fs::write(&path, serde_yaml::to_string(&rec).unwrap()).unwrap();
+    let mut rec: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    rec["target_axis"] = serde_json::Value::String("stderr".to_string());
+    // Write the tampered record as CANONICAL JSON: the canonical-bytes gate
+    // passes, and the content-address check must refuse the edited field.
+    fs::write(&path, frf::canon::canonical(&rec).unwrap()).unwrap();
 
     // The verified loader refuses the tampered record: the verdicts rederive
     // from the run's residuals, and the content address covers the declared

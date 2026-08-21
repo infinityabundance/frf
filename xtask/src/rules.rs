@@ -4,7 +4,7 @@
 //! alone.
 
 use crate::as_str;
-use crate::load_yaml;
+use crate::load_evidence;
 use crate::rederive::*;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -982,10 +982,13 @@ pub fn projected_disposition(bundle: &Path, rid: &str) -> String {
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.ends_with(".yaml"))
+            .filter(|n| n.ends_with(".json"))
             .collect();
         names.sort();
-        events = names.iter().map(|n| load_yaml(&ev_dir.join(n))).collect();
+        events = names
+            .iter()
+            .map(|n| load_evidence(&ev_dir.join(n)))
+            .collect();
     }
     events
         .last()
@@ -1099,9 +1102,9 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
         if res_dir.is_dir() {
             for entry in std::fs::read_dir(&res_dir).unwrap().flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".yaml") && !name.ends_with(".token.yaml") {
-                    let rid = name.trim_end_matches(".yaml").to_string();
-                    records.insert(rid.clone(), load_yaml(&res_dir.join(name)));
+                if name.ends_with(".json") && !name.ends_with(".token.json") {
+                    let rid = name.trim_end_matches(".json").to_string();
+                    records.insert(rid.clone(), load_evidence(&res_dir.join(name)));
                 }
             }
         }
@@ -1109,9 +1112,9 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
         if cap_dir.is_dir() {
             for entry in std::fs::read_dir(&cap_dir).unwrap().flatten() {
                 let run = entry.file_name().to_string_lossy().to_string();
-                let cap_path = cap_dir.join(&run).join("capture.yaml");
+                let cap_path = cap_dir.join(&run).join("capture.json");
                 if cap_path.is_file() {
-                    captures.insert(run, load_yaml(&cap_path));
+                    captures.insert(run, load_evidence(&cap_path));
                 }
             }
         }
@@ -1119,9 +1122,9 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
         if auth_dir.is_dir() {
             for entry in std::fs::read_dir(&auth_dir).unwrap().flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".yaml") {
-                    let id = name.trim_end_matches(".yaml").to_string();
-                    authorities.insert(id, load_yaml(&auth_dir.join(name)));
+                if name.ends_with(".json") {
+                    let id = name.trim_end_matches(".json").to_string();
+                    authorities.insert(id, load_evidence(&auth_dir.join(name)));
                 }
             }
         }

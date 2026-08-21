@@ -26,7 +26,7 @@ in the recorded argv.
 ## The record
 
 Every minimization is a content-addressed protocol object
-(`reductions/<id>.yaml`, `frf-reduction-v2`):
+(`reductions/<id>.json`, `frf-reduction-v4`):
 
 ```text
 ReductionRecord {

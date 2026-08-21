@@ -239,27 +239,27 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
 
     // Two divergence lineages (exit + stderr), both persistent/stable.
-    let mut trajectories: Vec<serde_yaml::Value> = fs::read_dir(work.path("frf/trajectories"))
+    let mut trajectories: Vec<serde_json::Value> = fs::read_dir(work.path("frf/trajectories"))
         .unwrap()
         .map(|e| {
             let path = e.unwrap().path();
-            serde_yaml::from_str::<serde_yaml::Value>(&fs::read_to_string(&path).unwrap()).unwrap()
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).unwrap()
         })
         .collect();
     assert_eq!(trajectories.len(), 2, "exit + stderr lineages");
     trajectories.sort_by_key(|t| t["subject"].as_str().unwrap().to_string());
     let mut series_id = String::new();
     for t in &trajectories {
-        assert_eq!(t["schema_version"], "frf-trajectory-v2");
+        assert_eq!(t["schema_version"], "frf-trajectory-v3");
         assert_eq!(t["coordinate_system"], "repeat_index");
         assert_eq!(t["derivation"]["drift"], "persistent");
         assert_eq!(t["derivation"]["slew"], "stable");
         assert_eq!(t["derivation"]["localization"], "none");
-        assert_eq!(t["derivation"]["bands"], 1);
-        let obs = t["observations"].as_sequence().unwrap();
+        assert_eq!(t["derivation"]["bands"], "1");
+        let obs = t["observations"].as_array().unwrap();
         assert_eq!(obs.len(), 3, "one observation per repetition");
         for (i, o) in obs.iter().enumerate() {
-            assert_eq!(o["point_index"], (i + 1) as u64);
+            assert_eq!(o["point_index"], (i + 1).to_string());
             assert_eq!(o["coordinate"], (i + 1).to_string());
             assert_eq!(o["run"], run, "identical evidence is the same run");
             assert_eq!(o["observed"], true);
@@ -278,11 +278,11 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     let series_dir = work.path("frf/series");
     let series_files: Vec<_> = fs::read_dir(&series_dir).unwrap().collect();
     assert_eq!(series_files.len(), 1, "one repeat_index series");
-    let series: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/series/{series_id}.yaml"))).unwrap(),
+    let series: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/series/{series_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(series["schema_version"], "frf-series-v2");
+    assert_eq!(series["schema_version"], "frf-series-v3");
     assert_eq!(series["id"], series_id);
     assert_eq!(series["coordinate_system"], "repeat_index");
     assert_eq!(series["experiment_id"], "cli-malformed-input-repeat_index");
@@ -290,10 +290,10 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
         series["parent_series_id"].is_null(),
         "first snapshot has no parent"
     );
-    let points = series["points"].as_sequence().unwrap();
+    let points = series["points"].as_array().unwrap();
     assert_eq!(points.len(), 3);
     for (i, p) in points.iter().enumerate() {
-        assert_eq!(p["point_index"], (i + 1) as u64);
+        assert_eq!(p["point_index"], (i + 1).to_string());
         assert_eq!(p["run"], run);
     }
 
@@ -387,11 +387,11 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
     }
     assert!(files.len() <= 2, "exit + stderr lineages at most");
     for path in &files {
-        let t: serde_yaml::Value =
-            serde_yaml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(t["schema_version"], "frf-trajectory-v2");
+        let t: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(t["schema_version"], "frf-trajectory-v3");
         assert_eq!(t["coordinate_system"], "repeat_index");
-        let obs = t["observations"].as_sequence().unwrap();
+        let obs = t["observations"].as_array().unwrap();
         assert_eq!(obs.len(), 5);
         // The derivation must be the deterministic classification of the
         // observed pattern.
@@ -442,15 +442,15 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
             let repetition_run = o["run"].as_str().unwrap().to_string();
             assert!(
                 fs::read_to_string(
-                    work.path(&format!("frf/captures/{repetition_run}/capture.yaml"))
+                    work.path(&format!("frf/captures/{repetition_run}/capture.json"))
                 )
                 .is_ok(),
                 "observation run must exist"
             );
             if o["observed"].as_bool().unwrap() {
                 let id = o["residual"].as_str().unwrap();
-                let record: serde_yaml::Value = serde_yaml::from_str(
-                    &fs::read_to_string(work.path(&format!("frf/residuals/{id}.yaml"))).unwrap(),
+                let record: serde_json::Value = serde_json::from_str(
+                    &fs::read_to_string(work.path(&format!("frf/residuals/{id}.json"))).unwrap(),
                 )
                 .unwrap();
                 assert_eq!(record["run"].as_str().unwrap(), repetition_run);
