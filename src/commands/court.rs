@@ -2400,18 +2400,18 @@ pub fn challenge(
         let wrapper = operator.wrapper(&reference_sha256);
         let mutant_sha256 = host::sha256_bytes(wrapper.as_bytes());
 
-        // Write the wrapper to a unique transient path, run the court with it
-        // as the candidate override, then remove it: the EVIDENCE is the
-        // content-addressed mutant object + the run, not the transient file.
+        // Write the wrapper to a deterministic transient path, run the court
+        // with it as the candidate override, then remove it: the EVIDENCE is
+        // the content-addressed mutant object + the run, not the transient
+        // file. The path is derived from the operator + reference hash (the
+        // wrapper is a pure function of those two — root-independent and
+        // rederivable), so the recorded candidate path is reproducible:
+        // regenerating the golden tree twice yields byte-identical captures.
         let wrapper_rel = format!(
-            "{}/challenges/.mutant-{}-{}-{}.sh",
+            "{}/challenges/.mutant-{}-{}.sh",
             store.root.display(),
             operator.as_str(),
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            &reference_sha256[..16]
         );
         let wrapper_path = Path::new(&wrapper_rel);
         fs::write(wrapper_path, wrapper.as_bytes())

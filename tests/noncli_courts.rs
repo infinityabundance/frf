@@ -77,7 +77,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$spec" ] && [ -n "$out" ] || exit 2
 rm -rf "$out"
-while IFS=$'\t' read -r path content || [ -n "$path" ]; do
+while IFS='	' read -r path content || [ -n "$path" ]; do
   [ -z "$path" ] && continue
   case "$path" in \#*) continue ;; esac
   mkdir -p "$out/$(dirname "$path")"
@@ -100,7 +100,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$spec" ] && [ -n "$out" ] || exit 2
 rm -rf "$out"
-while IFS=$'\t' read -r path content || [ -n "$path" ]; do
+while IFS='	' read -r path content || [ -n "$path" ]; do
   [ -z "$path" ] && continue
   case "$path" in \#*) continue ;; esac
   mkdir -p "$out/$(dirname "$path")"

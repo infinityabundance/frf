@@ -1,0 +1,154 @@
+schema_version: frf-capture-v11
+run: run-cli-normalized-0d042c85b3681b9a86c25b146d478a8ee993ff8e9b0ac26ca883942e3c47de2a
+court: cli-normalized
+authority: ref-ws-1.0
+manifest: frf/courts/cli-normalized/manifest.yaml
+fixture: malformed-path.conf
+fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+arguments:
+- --strict
+- frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+environment:
+  schema_version: frf-environment-v2
+  os: linux
+  architecture: x86_64
+  kernel_release: 7.1.8-1-cachyos
+  locale: en_GB.UTF-8
+  timezone: Europe/London
+  umask: '0022'
+  cwd: /run/media/one/1tb_kingston1/frf
+  digest: d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e
+court_spec:
+  id: cli-normalized
+  question: For malformed input in fixture family malformed-input, does the candidate preserve the admitted reference's first diagnostic line after the declared normalization?
+  falsifier: The candidate's normalized first diagnostic line diverges from the admitted reference's.
+  authority: ref-ws-1.0
+  candidate:
+    name: cand-ws
+    version_or_commit: 0.1.0
+    build_profile: debug
+    path: golden/cand-ws.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments:
+    - --strict
+    - '{fixture}'
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms:
+    - x86_64-linux
+    observables:
+    - stderr
+    normalizers:
+    - trim-trailing-ws
+    replay_scope: single-run
+comparator_semantics:
+- id: stderr
+  relation_id: eq
+  extractor: stderr-first-line
+  residual_classifier: text
+  relation_version: v2
+  specification_hash: 8365ca1c5ab53c8b7d94aa2063c0efc733021c3c9e3ee248b09649e78c151be1
+normalizer_semantics:
+- id: trim-trailing-ws
+  relation_id: trim-trailing-whitespace
+  applies_to: stderr
+  relation_version: v1
+  specification_hash: a4c99fb21e5d0b76ed6b900c9047ae3b8295a1d1fcb0ac2a22e07f3b2e782233
+adapter_semantics: []
+minimizer_semantics: []
+provenance:
+  schema_version: frf-provenance-v3
+  runner:
+    schema_version: frf-runner-v1
+    frf_version: 0.1.31
+    frf_executable_hash: b3ed10ab7128303afe44a2493195588706067d1a00a0a4f92ab6c6db0fc35fe3
+  comparator_implementations:
+  - id: stderr
+    implementation_hash: b3ed10ab7128303afe44a2493195588706067d1a00a0a4f92ab6c6db0fc35fe3
+    runner_hash: b3ed10ab7128303afe44a2493195588706067d1a00a0a4f92ab6c6db0fc35fe3
+  normalizer_implementations:
+  - id: trim-trailing-ws
+    implementation_hash: f85123593bf39bfce8e981276b4c2927528b15b940ea5f72251c2e2013c0ca75
+    runner_hash: b3ed10ab7128303afe44a2493195588706067d1a00a0a4f92ab6c6db0fc35fe3
+    artifact:
+      path: objects/sha256/f85123593bf39bfce8e981276b4c2927528b15b940ea5f72251c2e2013c0ca75
+      sha256: f85123593bf39bfce8e981276b4c2927528b15b940ea5f72251c2e2013c0ca75
+      interpreter:
+        kernel_interpreter:
+          path: /usr/bin/env
+          sha256: e949d77a3f3c9086e898318bcfbf256af598238f61c2d75a3e1dc74c84c4d986
+        shebang_argument_bytes: python3
+        resolver:
+          kind: env
+          path: /usr/bin/env
+          sha256: e949d77a3f3c9086e898318bcfbf256af598238f61c2d75a3e1dc74c84c4d986
+          path_digest: 10dcb4d6b506d2c0dc1aa4ade1920fc15489c99e2dba92319bfb0cf1ee345bcf
+        downstream_interpreter:
+          path: /usr/bin/python3.14
+          sha256: e9db67955243120e49352dc87977cdfb96a1dc130b58cfac7a0ab5f4f74731af
+  adapter_implementations: []
+  minimizer_implementations: []
+authority_artifact:
+  path: objects/sha256/ffce07d746e5adeb70e2105f1f8e86e39ddb3f6e1f1a883489eb55de558e1ce2
+  sha256: ffce07d746e5adeb70e2105f1f8e86e39ddb3f6e1f1a883489eb55de558e1ce2
+  interpreter:
+    kernel_interpreter:
+      path: /usr/bin/bash
+      sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+    shebang_argument_bytes: ''
+    downstream_interpreter:
+      path: /usr/bin/bash
+      sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+candidate_artifact:
+  path: objects/sha256/cc01266a64e183fae81a9c81736f0ce398a1333f03019f5de9a31f6791d3dea7
+  sha256: cc01266a64e183fae81a9c81736f0ce398a1333f03019f5de9a31f6791d3dea7
+  interpreter:
+    kernel_interpreter:
+      path: /usr/bin/bash
+      sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+    shebang_argument_bytes: ''
+    downstream_interpreter:
+      path: /usr/bin/bash
+      sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
+court_semantic_identity: 81723154b116b8959b460eeb47f12b6e323f0e9a65cf3eccceed70003dc58f35
+execution_profile: frf-exec-linux-v1
+capture_bounds:
+  timeout_ms: '60000'
+  max_stream_bytes: '16777216'
+  rlimit_as_mb: '2048'
+  rlimit_cpu_s: '30'
+  rlimit_nofile: '1024'
+reference:
+  exit: '2'
+  exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+  stderr_first_line: 'tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
+  stderr_first_line_sha256: 3427a3b361b3110471c09cfbbcad867ed1356fc11d74ee638b558b452fc9f1b0
+  stdout_first_line: 'ok: server 192.168.1.1'
+  stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
+  stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
+  stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
+candidate:
+  exit: '2'
+  exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
+  stderr_first_line: 'tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
+  stderr_first_line_sha256: 3427a3b361b3110471c09cfbbcad867ed1356fc11d74ee638b558b452fc9f1b0
+  stdout_first_line: 'ok: server 192.168.1.1'
+  stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
+  stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
+  stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
+residuals: []
+evidence_refs:
+- role: authority-artifact
+  object_kind: object
+  cid: ffce07d746e5adeb70e2105f1f8e86e39ddb3f6e1f1a883489eb55de558e1ce2
+- role: candidate-artifact
+  object_kind: object
+  cid: cc01266a64e183fae81a9c81736f0ce398a1333f03019f5de9a31f6791d3dea7
+- role: fixture-object
+  object_kind: object
+  cid: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+- role: normalizer-implementation
+  object_kind: object
+  cid: f85123593bf39bfce8e981276b4c2927528b15b940ea5f72251c2e2013c0ca75

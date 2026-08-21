@@ -3,6 +3,6 @@ id: treegen-ref-1.0
 name: treegen-ref
 kind: executable_reference
 version: '1.0'
-executable_sha256: f8482212c168049e9a025acc55236e98513dc19b497dc7a490e6f480faa920c7
+executable_sha256: c6b1ac1864a74e7a3c1d1bd1a4fa3a0d89a54eb3ca324fc4852730acf2c2e6b8
 path: golden/treegen-ref.sh
 platform: x86_64-linux

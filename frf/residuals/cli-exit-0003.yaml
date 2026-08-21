@@ -1,7 +1,7 @@
 schema_version: frf-residual-v1
 id: cli-exit-0003
 court: cli-external-minimizer
-run: run-cli-external-minimizer-437f4f63b8365a48016e1b6722af2c1ee9242f7311212425a5bc5330db02914e
+run: run-cli-external-minimizer-8bd64688e20b5376121c9674449080794500bd1957a09a13af0718884ed2fc7d
 axis: exit
 kind: exit
 authority: ref-cli-1.8.2

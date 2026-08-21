@@ -968,14 +968,22 @@ mod tests {
             &env.umask,
         );
         assert_eq!(env.digest, expected);
-        // A different locale moves the digest.
+        // A different locale moves the digest. The "other" locale is chosen
+        // to be guaranteed different from the effective one (CI runners set
+        // C.UTF-8): the point is that changing the locale changes the
+        // digest, not that any particular locale is "other".
+        let other = if env.locale == "C.UTF-8" {
+            "C"
+        } else {
+            "C.UTF-8"
+        };
         assert_ne!(
             expected,
             environment_digest(
                 &env.os,
                 &env.architecture,
                 &env.kernel_release,
-                "C.UTF-8",
+                other,
                 &env.timezone,
                 &env.umask
             )

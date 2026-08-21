@@ -147,7 +147,7 @@ fn corpus() -> Vec<Court> {
          done\n\
          [ -n \"$spec\" ] && [ -n \"$out\" ] || exit 2\n\
          rm -rf \"$out\"\n\
-         while IFS=$'\\t' read -r path content || [ -n \"$path\" ]; do\n\
+         while IFS='	' read -r path content || [ -n \"$path\" ]; do\n\
            [ -z \"$path\" ] && continue\n\
            case \"$path\" in \\#*) continue ;; esac\n\
            mkdir -p \"$out/$(dirname \"$path\")\"\n\
@@ -163,7 +163,7 @@ fn corpus() -> Vec<Court> {
          done\n\
          [ -n \"$spec\" ] && [ -n \"$out\" ] || exit 2\n\
          rm -rf \"$out\"\n\
-         while IFS=$'\\t' read -r path content || [ -n \"$path\" ]; do\n\
+         while IFS='	' read -r path content || [ -n \"$path\" ]; do\n\
            [ -z \"$path\" ] && continue\n\
            case \"$path\" in \\#*) continue ;; esac\n\
            mkdir -p \"$out/$(dirname \"$path\")\"\n\
@@ -182,7 +182,7 @@ fn corpus() -> Vec<Court> {
          done\n\
          [ -n \"$spec\" ] && [ -n \"$out\" ] || exit 2\n\
          rm -rf \"$out\"\n\
-         while IFS=$'\\t' read -r path content || [ -n \"$path\" ]; do\n\
+         while IFS='	' read -r path content || [ -n \"$path\" ]; do\n\
            [ -z \"$path\" ] && continue\n\
            case \"$path\" in \\#*) continue ;; esac\n\
            [ \"$path\" = \"build/config\" ] && continue\n\
