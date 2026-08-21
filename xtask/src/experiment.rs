@@ -314,10 +314,23 @@ fn run_frf(frf: &Path, corpus: &Path, args: &[&str]) -> (bool, String, String) {
     )
 }
 
-fn load_yaml(path: &Path) -> Value {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
+/// Load a generated EVIDENCE document from the experiment store: strict
+/// canonical JSON (the protocol representation). Court MANIFESTS stay YAML
+/// (human-authored); generated evidence is canonical JSON.
+fn load_evidence(path: &Path) -> Value {
+    let bytes =
+        std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let parsed = crate::parse_strict(&bytes)
+        .unwrap_or_else(|e| panic!("{}: not strict JSON: {e}", path.display()));
+    let canonical = crate::encode(&parsed)
+        .unwrap_or_else(|e| panic!("{}: cannot canonicalize: {e}", path.display()));
+    if canonical.as_bytes() != bytes {
+        panic!(
+            "{}: the document is not its own canonical serialization (RFC 8785)",
+            path.display()
+        );
+    }
+    parsed
 }
 
 fn as_str(v: &Value) -> &str {
@@ -403,12 +416,12 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             );
 
             // Parse the run: the capture's residual ids + axes/surfaces.
-            let capture = load_yaml(&ev.join("captures").join(&run).join("capture.yaml"));
+            let capture = load_evidence(&ev.join("captures").join(&run).join("capture.json"));
             let mut residual_axes = Vec::new();
             let mut residual_surfaces = Vec::new();
             for rid in capture["residuals"].as_array().cloned().unwrap_or_default() {
                 let rid = as_str(&rid).to_string();
-                let record = load_yaml(&ev.join("residuals").join(format!("{rid}.yaml")));
+                let record = load_evidence(&ev.join("residuals").join(format!("{rid}.json")));
                 residual_axes.push(as_str(&record["axis"]).to_string());
                 residual_surfaces.push((
                     as_str(&record["axis"]).to_string(),
@@ -431,7 +444,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             );
             let mut claim_scope = Vec::new();
             if claim_ok {
-                let claim = load_yaml(&ev.join("claims").join(format!("{receipt}.yaml")));
+                let claim = load_evidence(&ev.join("claims").join(format!("{receipt}.json")));
                 for o in claim["scope"]["observables"]
                     .as_array()
                     .cloned()
@@ -445,8 +458,8 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             let mut evidence_bytes = dir_size(&ev.join("captures").join(&run));
             for rid in capture["residuals"].as_array().cloned().unwrap_or_default() {
                 let rid = as_str(&rid).to_string();
-                evidence_bytes += dir_size(&ev.join("residuals").join(format!("{rid}.yaml")));
-                evidence_bytes += dir_size(&ev.join("residuals").join(format!("{rid}.token.yaml")));
+                evidence_bytes += dir_size(&ev.join("residuals").join(format!("{rid}.json")));
+                evidence_bytes += dir_size(&ev.join("residuals").join(format!("{rid}.token.json")));
             }
 
             // Replay stability: three exact replays.
@@ -546,12 +559,12 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             .find(|o| o.court == court.id && o.case == case.id)
             .unwrap();
         // The first seeded case's first residual on the target axis.
-        let capture = load_yaml(&ev.join("captures").join(&run.run).join("capture.yaml"));
+        let capture = load_evidence(&ev.join("captures").join(&run.run).join("capture.json"));
         let residual_id: Option<String> = {
             let mut on_axis: Vec<String> = Vec::new();
             for r in capture["residuals"].as_array().cloned().unwrap_or_default() {
                 let rid = as_str(&r).to_string();
-                let rec = load_yaml(&ev.join("residuals").join(format!("{rid}.yaml")));
+                let rec = load_evidence(&ev.join("residuals").join(format!("{rid}.json")));
                 if as_str(&rec["axis"]) == run.target_axis {
                     on_axis.push(rid);
                 }
@@ -576,7 +589,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             continue;
         }
         let reduction_id = out.lines().last().unwrap_or_default().to_string();
-        let record = load_yaml(&ev.join("reductions").join(format!("{reduction_id}.yaml")));
+        let record = load_evidence(&ev.join("reductions").join(format!("{reduction_id}.json")));
         minimization.push(json!({
             "court": court.id,
             "axis": run.target_axis,

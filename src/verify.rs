@@ -116,7 +116,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     let capture = store.load_capture(run)?;
     if capture.run != run {
         return Err(FrfError::new(format!(
-            "capture {run}: the run field inside capture.yaml is {capture:?} — the name is a claim; refusing to consume"
+            "capture {run}: the run field inside capture.json is {capture:?} — the name is a claim; refusing to consume"
         )));
     }
 

@@ -49,16 +49,16 @@ fn write_manifest(work: &Workdir, name: &str, comparators: &str) {
     .unwrap();
 }
 
-fn capture(work: &Workdir, run: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.yaml"))).unwrap(),
+fn capture(work: &Workdir, run: &str) -> serde_json::Value {
+    serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
     )
     .unwrap()
 }
 
 fn residual_fingerprint(work: &Workdir, id: &str) -> String {
-    let record: frf::model::ResidualRecord = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.yaml"))).unwrap(),
+    let record: frf::model::ResidualRecord = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{id}.json"))).unwrap(),
     )
     .unwrap();
     frf::semantics::residual_fingerprint(&record).unwrap()
@@ -109,7 +109,7 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     // question is the same.
     let cap = capture(&work_ext, &run_ext);
     let stderr_sem = cap["comparator_semantics"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|c| c["id"] == "stderr")
@@ -132,7 +132,7 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
         .unwrap()
         .to_string();
     let stderr_impl = cap["provenance"]["comparator_implementations"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|c| c["id"] == "stderr")
@@ -160,7 +160,7 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     );
     // The exit axis stayed in-binary.
     let exit_impl = cap["provenance"]["comparator_implementations"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|c| c["id"] == "exit")
@@ -264,15 +264,15 @@ fn a_new_axis_is_a_protocol_identifier() {
     // The residual: kind `wire`, id `cli-wire-0001`, surface from the
     // comparator's extractor, and the honest generic κ row (no fabricated
     // minimizer target).
-    let rec: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.yaml")).unwrap(),
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(rec["axis"], "wire");
     assert_eq!(rec["kind"], "wire");
     assert_eq!(rec["surface"], "stderr-bytes");
-    let token: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.token.yaml")).unwrap(),
+    let token: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.token.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(token["token"], "wire/wire-divergence/observed/open");
@@ -375,7 +375,7 @@ fn a_new_extractor_is_a_new_question() {
     // Different specification hash -> different question.
     let cap = capture(&work, &run);
     let stderr_sem = cap["comparator_semantics"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .find(|c| c["id"] == "stderr")
@@ -389,8 +389,8 @@ fn a_new_extractor_is_a_new_question() {
     );
     // The residual follows the comparator's extractor: the surface it
     // declared, and a fingerprint different from the first-line comparator's.
-    let rec: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.yaml")).unwrap(),
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(rec["surface"], "stderr-bytes");
@@ -622,15 +622,15 @@ fn one_comparator_governs_observation_replay_resolution_and_reduction() {
     // identical, full stderr differs — the declared comparator sees it.
     let cap = capture(&work, &run);
     let residual_ids: Vec<String> = cap["residuals"]
-        .as_sequence()
+        .as_array()
         .unwrap()
         .iter()
         .map(|r| r.as_str().unwrap().to_string())
         .collect();
     assert_eq!(residual_ids.len(), 1, "only the declared relation diverges");
     let rid = &residual_ids[0];
-    let record: frf::model::ResidualRecord = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/residuals/{rid}.yaml"))).unwrap(),
+    let record: frf::model::ResidualRecord = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/residuals/{rid}.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(record.axis.as_str(), "stderr");
@@ -657,8 +657,8 @@ fn one_comparator_governs_observation_replay_resolution_and_reduction() {
     let out = frf(&work, &["--root", ROOT, "court", "minimize", rid]);
     assert_success(&out, "court minimize (full-stderr comparator)");
     let reduction_id = stdout(&out);
-    let reduction: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    let reduction: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
     let semantic =

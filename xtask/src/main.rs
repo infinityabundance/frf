@@ -51,11 +51,25 @@ fn load_json(path: &Path) -> Value {
     parse_strict(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn load_yaml(path: &Path) -> Value {
-    let text =
-        String::from_utf8(read(path)).unwrap_or_else(|_| panic!("{}: not utf-8", path.display()));
-    serde_yaml::from_str(&text)
-        .unwrap_or_else(|e| panic!("{}: cannot parse YAML: {e}", path.display()))
+/// Load a generated EVIDENCE document: strict JSON (duplicate properties
+/// refused), and the bytes must BE the canonical serialization of the parsed
+/// document — the same canonical-JSON rule as the receipt. The independent
+/// verifier deliberately parses evidence with its own strict JSON reader, not
+/// a YAML parser: FRF's representations are canonical JSON, so a second
+/// implementation that parses the same bytes reaches the same verdict without
+/// sharing any parsing library with the reference engine.
+fn load_evidence(path: &Path) -> Value {
+    let bytes = read(path);
+    let parsed = parse_strict(&bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let canonical =
+        encode(&parsed).unwrap_or_else(|e| panic!("{}: cannot canonicalize: {e}", path.display()));
+    if canonical.as_bytes() != bytes {
+        panic!(
+            "{}: the document is not its own canonical serialization (RFC 8785); refusing to verify a non-canonical evidence document",
+            path.display()
+        );
+    }
+    parsed
 }
 
 fn safe_rel(bundle: &Path, rel: &str) -> std::path::PathBuf {
@@ -163,8 +177,8 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
         if !seen_runs.insert(run.clone()) {
             continue;
         }
-        let cap = load_yaml(&safe_rel(bundle, &format!("captures/{run}/capture.yaml")));
-        needed.insert(format!("captures/{run}/capture.yaml"));
+        let cap = load_evidence(&safe_rel(bundle, &format!("captures/{run}/capture.json")));
+        needed.insert(format!("captures/{run}/capture.json"));
         for side in ["reference", "candidate"] {
             for f in [
                 "stdout",
@@ -197,7 +211,7 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 }
             }
         }
-        needed.insert(format!("authorities/{}.yaml", as_str(&cap["authority"])));
+        needed.insert(format!("authorities/{}.json", as_str(&cap["authority"])));
         // Objects: walk the capture's typed evidence references (the generic
         // graph traversal — comparator implementations included); fall back to
         // the recorded artifact hashes for captures that carry no refs.
@@ -316,14 +330,14 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             if !seen_residuals.insert(id.clone()) {
                 continue;
             }
-            needed.insert(format!("residuals/{id}.yaml"));
+            needed.insert(format!("residuals/{id}.json"));
             let ev_dir = bundle.join(format!("residuals/{id}.events"));
             if ev_dir.is_dir() {
                 let mut names: Vec<String> = std::fs::read_dir(&ev_dir)
                     .unwrap()
                     .flatten()
                     .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|n| n.ends_with(".yaml"))
+                    .filter(|n| n.ends_with(".json"))
                     .collect();
                 names.sort();
                 for n in names {
@@ -334,7 +348,7 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             // trajectories for this residual's lineage (a run never knows its
             // experiments; the closure walks the series records that
             // reference it).
-            let record = load_yaml(&safe_rel(bundle, &format!("residuals/{id}.yaml")));
+            let record = load_evidence(&safe_rel(bundle, &format!("residuals/{id}.json")));
             let lineage = residual_lineage_of(bundle, &record, &cap);
             let series_dir = bundle.join("series");
             if series_dir.is_dir() {
@@ -342,12 +356,12 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                     .unwrap()
                     .flatten()
                     .map(|e| e.file_name().to_string_lossy().to_string())
-                    .filter(|n| n.ends_with(".yaml"))
+                    .filter(|n| n.ends_with(".json"))
                     .collect();
                 names.sort();
                 for n in names {
-                    let sid = n.trim_end_matches(".yaml").to_string();
-                    let s = load_yaml(&safe_rel(bundle, &format!("series/{sid}.yaml")));
+                    let sid = n.trim_end_matches(".json").to_string();
+                    let s = load_evidence(&safe_rel(bundle, &format!("series/{sid}.json")));
                     let contains = s["points"]
                         .as_array()
                         .map(|ps| ps.iter().any(|p| as_str(&p["run"]) == run.as_str()))
@@ -355,9 +369,9 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                     if !contains {
                         continue;
                     }
-                    needed.insert(format!("series/{sid}.yaml"));
+                    needed.insert(format!("series/{sid}.json"));
                     let coord = as_str(&s["coordinate_system"]);
-                    needed.insert(format!("trajectories/{lineage}.{coord}.{sid}.yaml"));
+                    needed.insert(format!("trajectories/{lineage}.{coord}.{sid}.json"));
                 }
             }
         }
@@ -366,21 +380,21 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
     // knowledge snapshot names: every residual head's record + events + run
     // (the negative search must be reproducible from the bundle), plus the
     // reduction records it references.
-    let claim_rel = format!("claims/{receipt_id}.yaml");
+    let claim_rel = format!("claims/{receipt_id}.json");
     if bundle.join(&claim_rel).is_file() {
         needed.insert(claim_rel.clone());
-        let claim = load_yaml(&safe_rel(bundle, &claim_rel));
+        let claim = load_evidence(&safe_rel(bundle, &claim_rel));
         if let Some(heads) = claim["knowledge_snapshot"]["residual_heads"].as_array() {
             for h in heads {
                 let hid = as_str(&h["id"]);
-                needed.insert(format!("residuals/{hid}.yaml"));
+                needed.insert(format!("residuals/{hid}.json"));
                 let ev_dir = bundle.join(format!("residuals/{hid}.events"));
                 if ev_dir.is_dir() {
                     let mut names: Vec<String> = std::fs::read_dir(&ev_dir)
                         .unwrap()
                         .flatten()
                         .map(|e| e.file_name().to_string_lossy().to_string())
-                        .filter(|n| n.ends_with(".yaml"))
+                        .filter(|n| n.ends_with(".json"))
                         .collect();
                     names.sort();
                     for n in names {
@@ -390,7 +404,7 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 // The head's run enters the traversal: its capture, sides,
                 // objects, authority, residuals, and series all become
                 // required closure.
-                let record = load_yaml(&safe_rel(bundle, &format!("residuals/{hid}.yaml")));
+                let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
                 let hrun = as_str(&record["run"]).to_string();
                 if !seen_runs.contains(&hrun) && !runs.contains(&hrun) {
                     runs.push(hrun);
@@ -405,10 +419,10 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                     continue;
                 }
                 let rid = as_str(&o["id"]);
-                needed.insert(format!("reductions/{rid}.yaml"));
+                needed.insert(format!("reductions/{rid}.json"));
                 // An external minimizer's invocation evidence lives under
                 // `reductions/<id>/minimizer/`; the record binds it.
-                let reduction = load_yaml(&safe_rel(bundle, &format!("reductions/{rid}.yaml")));
+                let reduction = load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
                 if reduction["minimizer_semantic_id"].is_string() {
                     for f in [
                         "request.json",
@@ -443,9 +457,9 @@ fn axis_agrees(reference: &Value, candidate: &Value, axis: &str) -> bool {
 /// admitted authority record (the lineage spans authority versions).
 fn residual_lineage_of(bundle: &Path, record: &Value, cap: &Value) -> String {
     let authority_id = as_str(&record["authority"]);
-    let authority = load_yaml(&safe_rel(
+    let authority = load_evidence(&safe_rel(
         bundle,
-        &format!("authorities/{authority_id}.yaml"),
+        &format!("authorities/{authority_id}.json"),
     ));
     let env = &cap["court_spec"]["admissibility_envelope"];
     let surface = record.get("surface").and_then(|s| s.as_str());
@@ -542,9 +556,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
 
     // 3. The capture: run identity rederives; raw side files rehash; objects
     //    are content-addressed.
-    let cap = load_yaml(&safe_rel(bundle, &format!("captures/{run}/capture.yaml")));
+    let cap = load_evidence(&safe_rel(bundle, &format!("captures/{run}/capture.json")));
     if as_str(&cap["run"]) != run {
-        panic!("capture {run}: the run field inside capture.yaml does not match");
+        panic!("capture {run}: the run field inside capture.json does not match");
     }
     let residuals: Vec<Value> = cap["residuals"]
         .as_array()
@@ -552,9 +566,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
         .unwrap_or_default()
         .into_iter()
         .map(|id| {
-            load_yaml(&safe_rel(
+            load_evidence(&safe_rel(
                 bundle,
-                &format!("residuals/{}.yaml", as_str(&id)),
+                &format!("residuals/{}.json", as_str(&id)),
             ))
         })
         .collect();
@@ -797,7 +811,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
         let rid = as_str(&rid).to_string();
         residual_records.insert(
             rid.clone(),
-            load_yaml(&safe_rel(bundle, &format!("residuals/{rid}.yaml"))),
+            load_evidence(&safe_rel(bundle, &format!("residuals/{rid}.json"))),
         );
     }
     for r in body["residuals"].as_array().cloned().unwrap_or_default() {
@@ -829,10 +843,13 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 .unwrap()
                 .flatten()
                 .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|n| n.ends_with(".yaml"))
+                .filter(|n| n.ends_with(".json"))
                 .collect();
             names.sort();
-            events = names.iter().map(|n| load_yaml(&ev_dir.join(n))).collect();
+            events = names
+                .iter()
+                .map(|n| load_evidence(&ev_dir.join(n)))
+                .collect();
         }
         let mut prev: Option<String> = None;
         for e in &events {
@@ -890,7 +907,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             if sid.is_empty() {
                 panic!("residual {rid} has trajectory evidence without a pinned series");
             }
-            let series = load_yaml(&safe_rel(bundle, &format!("series/{sid}.yaml")));
+            let series = load_evidence(&safe_rel(bundle, &format!("series/{sid}.json")));
             if as_str(&series["id"]) != sid {
                 panic!("series {sid} is not content-addressed");
             }
@@ -921,9 +938,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 panic!("residual {rid}: the pinned series {sid} does not contain its run");
             }
             let lineage = residual_lineage_of(bundle, record, &cap);
-            let t = load_yaml(&safe_rel(
+            let t = load_evidence(&safe_rel(
                 bundle,
-                &format!("trajectories/{lineage}.{coord}.{sid}.yaml"),
+                &format!("trajectories/{lineage}.{coord}.{sid}.json"),
             ));
             if as_str(&t["subject"]) != lineage {
                 panic!("trajectory of {rid} is not keyed by its lineage");
@@ -993,9 +1010,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 as_str(&r["id"])
             );
         }
-        let res_cap = load_yaml(&safe_rel(
+        let res_cap = load_evidence(&safe_rel(
             bundle,
-            &format!("captures/{resolution_run_id}/capture.yaml"),
+            &format!("captures/{resolution_run_id}/capture.json"),
         ));
         if as_str(&res_cap["court_semantic_identity"]) != as_str(&cap["court_semantic_identity"]) {
             panic!("resolution run {resolution_run_id} does not rerun the same question");
@@ -1028,9 +1045,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     //    fields, every residual head exists in the bundle with the recorded
     //    disposition, and every referenced reduction exists with a rederived
     //    identity. The negative search is as portable as the premises.
-    let claim_rel = format!("claims/{receipt_id}.yaml");
+    let claim_rel = format!("claims/{receipt_id}.json");
     if inventory.contains_key(&claim_rel) {
-        let claim = load_yaml(&safe_rel(bundle, &claim_rel));
+        let claim = load_evidence(&safe_rel(bundle, &claim_rel));
         let snapshot = &claim["knowledge_snapshot"];
         let expected_cid = rederive::knowledge_snapshot_identity(snapshot);
         if as_str(&snapshot["cid"]) != expected_cid {
@@ -1041,7 +1058,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             for h in heads {
                 let hid = as_str(&h["id"]).to_string();
                 head_ids.push(hid.clone());
-                let record = load_yaml(&safe_rel(bundle, &format!("residuals/{hid}.yaml")));
+                let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
                 if as_str(&record["id"]) != hid {
                     panic!("claim {receipt_id}: snapshot residual head {hid} is missing from the bundle");
                 }
@@ -1099,7 +1116,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     continue;
                 }
                 let rid = as_str(&o["id"]);
-                let reduction = load_yaml(&safe_rel(bundle, &format!("reductions/{rid}.yaml")));
+                let reduction = load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
                 if as_str(&reduction["id"]) != rid {
                     panic!(
                         "claim {receipt_id}: snapshot reduction {rid} is missing from the bundle"

@@ -239,7 +239,7 @@ pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 /// observation fingerprint; each observation records the exact fingerprint
 /// it saw. Trajectories are DERIVED from an [`ExecutionSeries`] — a run
 /// never knows which experiment references it.
-pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v2";
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v3";
 
 /// The ExecutionSeries protocol object: the experiment. One chain per
 /// (court, coordinate system); points are appended by series courts
@@ -252,7 +252,7 @@ pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v2";
 /// head refuses an implicit append). A run never carries series membership
 /// — the series references the runs, and multiple coordinates may reference
 /// the same content-addressed run.
-pub const SCHEMA_SERIES: &str = "frf-series-v2";
+pub const SCHEMA_SERIES: &str = "frf-series-v3";
 
 /// The comparator extension protocol (spec/comparator.md): a canonical
 /// JSON request a court writes to an external comparator program's stdin,
@@ -2204,7 +2204,7 @@ impl TrajectoryLocalization {
 /// make the paper's extended vocabulary executable: `abrupt` ↔ start/end
 /// (boundary-localized), `burst` ↔ interior, `recurrent` ↔ both with 2+
 /// bands (version-stratified along a version axis).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryDerivation {
     pub drift: TrajectoryDrift,
@@ -2212,8 +2212,10 @@ pub struct TrajectoryDerivation {
     /// Where the observed bands touch the axis bounds.
     pub localization: TrajectoryLocalization,
     /// The number of contiguous observed bands (1 for persistent/abrupt/
-    /// burst; 2+ for the recurrent/stratified patterns).
-    pub bands: u32,
+    /// burst; 2+ for the recurrent/stratified patterns), as a STRING: the
+    /// canonical JSON value domain is strings/arrays/booleans/null, so no
+    /// generated evidence document can carry a JSON number.
+    pub bands: String,
 }
 
 /// One point of a trajectory: the coordinate value, the run that point
@@ -2223,7 +2225,9 @@ pub struct TrajectoryDerivation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryObservation {
-    pub point_index: u32,
+    /// The point index, as a STRING (the canonical JSON value domain has no
+    /// numbers).
+    pub point_index: String,
     /// The coordinate value (repetition index, candidate artifact hash,
     /// authority version, environment label, time label).
     pub coordinate: String,
@@ -2267,7 +2271,7 @@ pub struct TrajectoryRecord {
 /// transform declaration: what the reduction permitted to move (the fixture)
 /// and what it required to stay (candidate, authority, comparator,
 /// environment — each bound by identity, not label).
-pub const SCHEMA_REDUCTION: &str = "frf-reduction-v3";
+pub const SCHEMA_REDUCTION: &str = "frf-reduction-v4";
 
 /// The general evidence-transform description — one frame for all six
 /// evidence operations (observation, resolution, replay, trajectory,
@@ -2389,7 +2393,9 @@ pub struct ExecutionSeries {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeriesPoint {
-    pub point_index: u32,
+    /// The point index, as a STRING (the canonical JSON value domain has no
+    /// numbers).
+    pub point_index: String,
     /// The coordinate value at this point.
     pub coordinate: String,
     /// The content-addressed run this point produced (identical evidence
@@ -2456,7 +2462,9 @@ impl ReductionAttemptOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionAttempt {
-    pub attempt: u32,
+    /// The attempt counter, as a STRING (the canonical JSON value domain has
+    /// no numbers; the ORDER is the array position).
+    pub attempt: String,
     pub role: ReductionAttemptRole,
     /// SHA-256 of the fixture tried (content-addressed under `objects/`).
     pub fixture_sha256: String,
@@ -2486,8 +2494,10 @@ pub struct ReductionMinimality {
 pub struct ReductionDerivation {
     /// The reduction strategy (`ddmin-lines` in this version).
     pub strategy: String,
-    pub original_lines: u32,
-    pub final_lines: u32,
+    /// Line counts as STRINGS (the canonical JSON value domain has no
+    /// numbers).
+    pub original_lines: String,
+    pub final_lines: String,
     pub minimality: ReductionMinimality,
 }
 

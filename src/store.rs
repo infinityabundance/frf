@@ -122,7 +122,7 @@ impl Store {
     /// silent escape from the root.
     pub fn authority_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("authority", id)?;
-        Ok(self.root.join("authorities").join(format!("{id}.yaml")))
+        Ok(self.root.join("authorities").join(format!("{id}.json")))
     }
 
     pub fn run_dir(&self, run: &str) -> Result<PathBuf> {
@@ -582,12 +582,12 @@ impl Store {
 
     pub fn residual_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
-        Ok(self.root.join("residuals").join(format!("{id}.yaml")))
+        Ok(self.root.join("residuals").join(format!("{id}.json")))
     }
 
     pub fn token_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
-        Ok(self.root.join("residuals").join(format!("{id}.token.yaml")))
+        Ok(self.root.join("residuals").join(format!("{id}.token.json")))
     }
 
     pub fn receipt_path(&self, id: &str) -> Result<PathBuf> {
@@ -599,7 +599,9 @@ impl Store {
 
     pub fn claim_path(&self, receipt_id: &str) -> Result<PathBuf> {
         validate_id("receipt", receipt_id)?;
-        Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
+        // Claims are canonical JSON (RFC 8785) — the Claim IR's protocol
+        // representation; prose is one renderer of the same document.
+        Ok(self.root.join("claims").join(format!("{receipt_id}.json")))
     }
 
     /// The EVIDENCE UNIVERSE of the store right now: every residual head
@@ -632,11 +634,11 @@ impl Store {
                 .map_err(|e| FrfError::new(format!("cannot read residuals directory: {e}")))?
                 .flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.ends_with(".yaml") && !n.ends_with(".token.yaml"))
+                .filter(|n| n.ends_with(".json") && !n.ends_with(".token.json"))
                 .collect();
             names.sort();
             for name in names {
-                let id = name.trim_end_matches(".yaml").to_string();
+                let id = name.trim_end_matches(".json").to_string();
                 let record = self.load_residual(&id)?;
                 let events = self.disposition_events(&id)?;
                 let disposition = events
@@ -672,12 +674,8 @@ impl Store {
                     let name = entry.file_name().to_string_lossy().into_owned();
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                         out.push(name);
-                    } else if name.ends_with(".json") || name.ends_with(".yaml") {
-                        out.push(
-                            name.trim_end_matches(".json")
-                                .trim_end_matches(".yaml")
-                                .to_string(),
-                        );
+                    } else if name.ends_with(".json") {
+                        out.push(name.trim_end_matches(".json").to_string());
                     }
                 }
             }
@@ -747,18 +745,18 @@ impl Store {
         Ok(snapshot)
     }
 
-    /// `reductions/<id>.yaml` — the content-addressed reduction record.
+    /// `reductions/<id>.json` — the content-addressed reduction record.
     pub fn reduction_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("reduction", id)?;
-        Ok(self.root.join("reductions").join(format!("{id}.yaml")))
+        Ok(self.root.join("reductions").join(format!("{id}.json")))
     }
 
-    /// `challenges/<id>.yaml` — the content-addressed court-challenge record
+    /// `challenges/<id>.json` — the content-addressed court-challenge record
     /// (the negative-control evidence: the court run against a mutant
     /// candidate).
     pub fn challenge_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("challenge", id)?;
-        Ok(self.root.join("challenges").join(format!("{id}.yaml")))
+        Ok(self.root.join("challenges").join(format!("{id}.json")))
     }
 
     /// `witnesses/<id>.json` — the content-addressed witness statement
@@ -902,7 +900,7 @@ impl Store {
                 path.display()
             )));
         }
-        let record: CourtChallenge = self.parse_yaml(&path)?;
+        let record: CourtChallenge = self.parse_evidence(&path)?;
         if record.id != id {
             return Err(FrfError::new(format!(
                 "challenge {id}: the id inside the record is {} — the name is a claim",
@@ -946,8 +944,8 @@ impl Store {
         if path.exists() {
             return Ok(());
         }
-        let yaml = self.to_yaml(record)?;
-        self.write_once(&path, &yaml)
+        let json = self.to_evidence(record)?;
+        self.write_once(&path, &json)
     }
 
     /// Load a reduction record by its content address.
@@ -959,7 +957,7 @@ impl Store {
                 path.display()
             )));
         }
-        let record: ReductionRecord = self.parse_yaml(&path)?;
+        let record: ReductionRecord = self.parse_evidence(&path)?;
         if record.id != id {
             return Err(FrfError::new(format!(
                 "reduction {id}: the id inside the record is {} — the name is a claim",
@@ -1044,11 +1042,11 @@ impl Store {
         if path.exists() {
             return Ok(());
         }
-        let yaml = self.to_yaml(record)?;
-        self.write_once(&path, &yaml)
+        let json = self.to_evidence(record)?;
+        self.write_once(&path, &json)
     }
 
-    /// `trajectories/<lineage>.<coordinate-system>.<series>.yaml` — the
+    /// `trajectories/<lineage>.<coordinate-system>.<series>.json` — the
     /// residual trajectory protocol object, keyed by the residual LINEAGE
     /// (stable across candidate revisions, authority versions, environments,
     /// time), the coordinate system it is ordered over, and the
@@ -1067,7 +1065,7 @@ impl Store {
         Ok(self
             .root
             .join("trajectories")
-            .join(format!("{lineage}.{coordinate_system}.{series}.yaml")))
+            .join(format!("{lineage}.{coordinate_system}.{series}.json")))
     }
 
     /// Load a residual trajectory by lineage + coordinate system + series.
@@ -1087,13 +1085,13 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_yaml(&path)
+        self.parse_evidence(&path)
     }
 
-    /// `series/<id>.yaml` — the content-addressed ExecutionSeries record.
+    /// `series/<id>.json` — the content-addressed ExecutionSeries record.
     pub fn series_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("series", id)?;
-        Ok(self.root.join("series").join(format!("{id}.yaml")))
+        Ok(self.root.join("series").join(format!("{id}.json")))
     }
 
     /// Load an ExecutionSeries by its content address.
@@ -1105,7 +1103,7 @@ impl Store {
                 path.display()
             )));
         }
-        let series: ExecutionSeries = self.parse_yaml(&path)?;
+        let series: ExecutionSeries = self.parse_evidence(&path)?;
         if series.id != id {
             return Err(FrfError::new(format!(
                 "series {id}: the id inside the record is {} — the name is a claim; refusing to consume",
@@ -1146,8 +1144,8 @@ impl Store {
         if path.exists() {
             return Ok(()); // identical series already recorded — no-op
         }
-        let yaml = self.to_yaml(series)?;
-        self.write_once(&path, &yaml)
+        let json = self.to_evidence(series)?;
+        self.write_once(&path, &json)
     }
 
     /// The experiments in the store: every distinct (court, coordinate
@@ -1163,10 +1161,10 @@ impl Store {
         {
             let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".yaml") {
+            if !name.ends_with(".json") {
                 continue;
             }
-            let id = name.trim_end_matches(".yaml").to_string();
+            let id = name.trim_end_matches(".json").to_string();
             let series = self.load_series(&id)?;
             if !out.contains(&series.experiment_id) {
                 out.push(series.experiment_id.clone());
@@ -1193,10 +1191,10 @@ impl Store {
         {
             let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".yaml") {
+            if !name.ends_with(".json") {
                 continue;
             }
-            let id = name.trim_end_matches(".yaml").to_string();
+            let id = name.trim_end_matches(".json").to_string();
             let series = self.load_series(&id)?;
             if series.experiment_id != experiment_id {
                 continue;
@@ -1265,10 +1263,10 @@ impl Store {
         {
             let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".yaml") {
+            if !name.ends_with(".json") {
                 continue;
             }
-            let id = name.trim_end_matches(".yaml").to_string();
+            let id = name.trim_end_matches(".json").to_string();
             let series = self.load_series(&id)?;
             if series.points.iter().any(|p| p.run == run) {
                 out.push(series);
@@ -1382,11 +1380,31 @@ impl Store {
 
     // -- serialization helpers ----------------------------------------------
 
-    pub fn to_yaml<T: serde::Serialize>(&self, value: &T) -> Result<String> {
-        serde_yaml::to_string(value)
-            .map_err(|e| FrfError::new(format!("cannot serialize record: {e}")))
+    /// Serialize a generated evidence record as canonical JSON (RFC 8785) —
+    /// the ONE protocol representation for every identity-bearing evidence
+    /// object. YAML remains only for HUMAN-AUTHORED court manifests and
+    /// configuration; generated evidence is canonical JSON so that any
+    /// implementation, in any language, parses the same bytes.
+    pub fn to_evidence<T: serde::Serialize>(&self, value: &T) -> Result<String> {
+        crate::canon::canonical(value)
     }
 
+    /// Parse a generated evidence document: strict JSON (duplicate property
+    /// names refused — RFC 8785 §2), the bytes must BE the canonical
+    /// serialization of the parsed document (one semantic document, one byte
+    /// sequence — the same rule as receipts and extension responses), and the
+    /// typed projection must deserialize from that canonical document.
+    pub fn parse_evidence<T: serde::de::DeserializeOwned>(&self, path: &Path) -> Result<T> {
+        let bytes = fs::read(path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        crate::canon::require_canonical_bytes(&bytes, &format!("{}", path.display()))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
+    }
+
+    /// Parse a HUMAN-AUTHORED YAML document (a court manifest or user
+    /// configuration). YAML is the source format for humans; it is never the
+    /// representation of generated evidence.
     pub fn parse_yaml<T: serde::de::DeserializeOwned>(&self, path: &Path) -> Result<T> {
         let text = fs::read_to_string(path)
             .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
@@ -1436,8 +1454,8 @@ impl Store {
     /// Write the derived κ token for a residual under its current disposition.
     pub fn write_token(&self, record: &ResidualRecord, disposition: &Disposition) -> Result<()> {
         let token = crate::kappa::kappa(record, disposition);
-        let yaml = self.to_yaml(&token)?;
-        self.write_derived(&self.token_path(&record.id)?, &yaml)
+        let json = self.to_evidence(&token)?;
+        self.write_derived(&self.token_path(&record.id)?, &json)
     }
 
     // -- disposition events (append-only) ------------------------------------
@@ -1463,7 +1481,7 @@ impl Store {
                 let Ok(seq) = name.parse::<u32>() else {
                     continue;
                 };
-                events.push((seq, self.parse_yaml(&path)?));
+                events.push((seq, self.parse_evidence(&path)?));
             }
         }
         events.sort_by_key(|(seq, _)| *seq);
@@ -1546,9 +1564,9 @@ impl Store {
         let dir = self.events_dir(&event.residual_id)?;
         fs::create_dir_all(&dir)
             .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
-        let path = dir.join(format!("{seq:04}.yaml"));
-        let yaml = self.to_yaml(&event)?;
-        self.write_once(&path, &yaml)?;
+        let path = dir.join(format!("{seq:04}.json"));
+        let json = self.to_evidence(&event)?;
+        self.write_once(&path, &json)?;
         Ok(event)
     }
 
@@ -1562,7 +1580,7 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_yaml(&path)
+        self.parse_evidence(&path)
     }
 
     pub fn load_residual(&self, id: &str) -> Result<ResidualRecord> {
@@ -1573,18 +1591,18 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_yaml(&path)
+        self.parse_evidence(&path)
     }
 
     pub fn load_capture(&self, run: &str) -> Result<CaptureManifest> {
-        let path = self.run_dir(run)?.join("capture.yaml");
+        let path = self.run_dir(run)?.join("capture.json");
         if !path.exists() {
             return Err(FrfError::new(format!(
                 "no such run '{run}' (missing {})",
                 path.display()
             )));
         }
-        self.parse_yaml(&path)
+        self.parse_evidence(&path)
     }
 
     pub fn load_receipt(&self, id: &str) -> Result<Receipt> {
@@ -1804,7 +1822,7 @@ mod tests {
     fn write_once_refuses_overwrite() {
         let store = temp_store();
         store.ensure_tree().unwrap();
-        let p = store.root.join("authorities").join("x.yaml");
+        let p = store.root.join("authorities").join("x.json");
         store.write_once(&p, "a").unwrap();
         let err = store.write_once(&p, "b").unwrap_err();
         assert!(err.0.contains("refusing to overwrite"));
@@ -1883,9 +1901,9 @@ mod tests {
             raw_reference_sha256: "0".repeat(64),
             raw_candidate_sha256: "1".repeat(64),
         };
-        let yaml = store.to_yaml(&rec).unwrap();
+        let json = store.to_evidence(&rec).unwrap();
         store
-            .write_once(&store.residual_path("cli-exit-0001").unwrap(), &yaml)
+            .write_once(&store.residual_path("cli-exit-0001").unwrap(), &json)
             .unwrap();
         assert_eq!(store.next_residual_seq(ResidualKind::exit()).unwrap(), 2);
         assert_eq!(store.next_residual_seq(ResidualKind::text()).unwrap(), 1);
@@ -1917,14 +1935,14 @@ mod tests {
         assert_eq!(events[1].disposition.as_str(), "harness");
         // Re-disposing appends; it never rewrites event 0001.
         let first =
-            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.yaml"))
+            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.json"))
                 .unwrap();
         let e3 =
             DispositionEvent::closed("cli-exit-0001", ClosureKind::Unknown, "reclassified".into())
                 .unwrap();
         store.append_disposition_event(&e3).unwrap();
         assert_eq!(
-            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.yaml"))
+            std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.json"))
                 .unwrap(),
             first
         );
@@ -1948,13 +1966,17 @@ mod tests {
                 );
             }
         }
-        // Tamper with the second event: the chain must refuse to load.
+        // Tamper with the second event: the chain must refuse to load. The
+        // tampered document is itself CANONICAL JSON (so the canonical-bytes
+        // gate passes) but its content differs — the content-address check
+        // must refuse it.
         let dir = store.events_dir("cli-exit-0001").unwrap();
-        let p2 = dir.join("0002.yaml");
-        let mut yaml: serde_yaml::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(&p2).unwrap()).unwrap();
-        yaml["reason"] = serde_yaml::Value::String("rewritten history".into());
-        std::fs::write(&p2, serde_yaml::to_string(&yaml).unwrap()).unwrap();
+        let p2 = dir.join("0002.json");
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p2).unwrap()).unwrap();
+        value["reason"] = serde_json::Value::String("rewritten history".into());
+        let canonical = crate::canon::canonical(&value).unwrap();
+        std::fs::write(&p2, canonical).unwrap();
         let err = store.disposition_events("cli-exit-0001").unwrap_err();
         assert!(
             err.0.contains("not content-addressed"),

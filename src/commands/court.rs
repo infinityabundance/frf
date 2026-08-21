@@ -126,7 +126,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 let run = run_once(store, manifest_path, None, None, true)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
-                    point_index: k,
+                    point_index: k.to_string(),
                     coordinate: k.to_string(),
                     run,
                 });
@@ -143,7 +143,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 let run = run_once(store, manifest_path, Some(path), None, true)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
-                    point_index: (i + 1) as u32,
+                    point_index: (i + 1).to_string(),
                     coordinate: path.clone(),
                     run,
                 });
@@ -167,7 +167,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 let run = run_once(store, manifest_path, None, Some(version), true)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
-                    point_index: (i + 1) as u32,
+                    point_index: (i + 1).to_string(),
                     coordinate: version.clone(),
                     run,
                 });
@@ -218,7 +218,13 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 Some(p) => store.load_series(p)?.points.clone(),
                 None => Vec::new(),
             };
-            let index = prior.iter().map(|p| p.point_index).max().unwrap_or(0) + 1;
+            let index = prior
+                .iter()
+                .filter_map(|p| p.point_index.parse::<u32>().ok())
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let index = index.to_string();
             // Every observation event is a point: multiple coordinates may
             // reference the SAME content-addressed run (identical evidence
             // shares the run, but each coordinate at which an observation
@@ -317,7 +323,7 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
                 .iter()
                 .enumerate()
                 .map(|(i, o)| TrajectoryObservation {
-                    point_index: series.points[i].point_index,
+                    point_index: series.points[i].point_index.clone(),
                     coordinate: series.points[i].coordinate.clone(),
                     run: series.points[i].run.clone(),
                     observed: o.is_some(),
@@ -328,7 +334,7 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
             derivation,
         };
         let path = store.trajectory_path(lineage, &series.coordinate_system, &series.id)?;
-        store.write_derived(&path, &store.to_yaml(&record)?)?;
+        store.write_derived(&path, &store.to_evidence(&record)?)?;
         written += 1;
         eprintln!(
             "trajectory {} (axis {}, {} x{}): drift={}, slew={}, localization={}, bands={}",
@@ -374,8 +380,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             "residual {residual_id}: the fixture is not UTF-8 text; this version's reducer is ddmin over text lines (binary reducers are future domain reducers)"
         ))
     })?;
-    let original_lines = fixture_text.lines().count() as u32;
-    if original_lines == 0 {
+    let original_lines = fixture_text.lines().count().to_string();
+    if original_lines == "0" {
         return Err(FrfError::new(format!(
             "residual {residual_id}: the fixture is empty; there is nothing to reduce"
         )));
@@ -510,7 +516,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
 
     let final_bytes: Vec<u8> = elements.concat();
     let final_sha = host::sha256_bytes(&final_bytes);
-    let final_lines = elements.len() as u32;
+    let final_lines = elements.len().to_string();
 
     // The final reproducer is court-verified (the last attempt that kept it
     // ran it); a final explicit confirmation keeps the record honest even
@@ -702,7 +708,7 @@ fn run_attempt(
         ),
         Err(e) => {
             attempts.push(ReductionAttempt {
-                attempt: attempts.len() as u32 + 1,
+                attempt: (attempts.len() + 1).to_string(),
                 role,
                 fixture_sha256: sha,
                 outcome: ReductionAttemptOutcome::HarnessFailure,
@@ -715,7 +721,7 @@ fn run_attempt(
     };
     if recordable {
         attempts.push(ReductionAttempt {
-            attempt: attempts.len() as u32 + 1,
+            attempt: (attempts.len() + 1).to_string(),
             role,
             fixture_sha256: sha,
             outcome,
@@ -741,7 +747,7 @@ fn minimize_external(
     record: &ResidualRecord,
     semantic: &MinimizerSemantic,
     fixture_bytes: &[u8],
-    original_lines: u32,
+    original_lines: String,
     plan: &crate::comparators::EvaluationPlan,
     authority_program: &Path,
     candidate_program: &Path,
@@ -979,7 +985,7 @@ fn minimize_external(
             semantic.id
         ))
     })?;
-    let final_lines = final_text.lines().count() as u32;
+    let final_lines = final_text.lines().count().to_string();
 
     let derivation = ReductionDerivation {
         strategy: format!("external:{}", semantic.relation_id),
@@ -2044,8 +2050,8 @@ pub fn run_once(
         r.run = run.clone();
         r.raw_reference_sha256 = host::sha256_bytes(r.raw_reference.as_bytes());
         r.raw_candidate_sha256 = host::sha256_bytes(r.raw_candidate.as_bytes());
-        let yaml = store.to_yaml(r)?;
-        store.write_once(&store.residual_path(&r.id)?, &yaml)?;
+        let json = store.to_evidence(r)?;
+        store.write_once(&store.residual_path(&r.id)?, &json)?;
         store.write_token(r, &Disposition::Open)?;
         let token = crate::kappa::kappa(r, &Disposition::Open);
         eprintln!(
@@ -2262,8 +2268,8 @@ pub fn run_once(
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
         evidence_refs,
     };
-    let yaml = store.to_yaml(&capture)?;
-    store.write_once(&run_dir.join("capture.yaml"), &yaml)?;
+    let json = store.to_evidence(&capture)?;
+    store.write_once(&run_dir.join("capture.json"), &json)?;
 
     eprintln!(
         "court {} run: captures, residuals, and tokens written under {}",

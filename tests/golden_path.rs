@@ -46,8 +46,8 @@ fn golden_path_end_to_end() {
     assert_success(&out, "authority admit");
     assert_eq!(stdout(&out), "ref-cli-1.8.2");
 
-    let authority: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/authorities/ref-cli-1.8.2.yaml")).unwrap(),
+    let authority: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/authorities/ref-cli-1.8.2.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(authority["kind"], "executable_reference");
@@ -89,8 +89,8 @@ fn golden_path_end_to_end() {
     );
 
     // The capture manifest binds the exact candidate artifact.
-    let capture: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{root}/captures/{run}/capture.yaml"))).unwrap(),
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{root}/captures/{run}/capture.json"))).unwrap(),
     )
     .unwrap();
     let candidate_hash = capture["candidate_artifact"]["sha256"]
@@ -101,8 +101,8 @@ fn golden_path_end_to_end() {
 
     // Two residuals, both open, with endoduction tokens; the observation
     // records carry NO disposition (dispositions are events).
-    let exit_residual: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.yaml")).unwrap(),
+    let exit_residual: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_residual["kind"], "exit");
@@ -117,8 +117,8 @@ fn golden_path_end_to_end() {
         candidate_hash
     );
 
-    let text_residual: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.yaml")).unwrap(),
+    let text_residual: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(text_residual["kind"], "text");
@@ -135,15 +135,15 @@ fn golden_path_end_to_end() {
     let cand_line = text_residual["raw_candidate"].as_str().unwrap();
     assert_eq!(cand_line, "error: unknown directive servre at line 4");
 
-    let exit_token: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
+    let exit_token: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_token["token"], "exit/exit-class/class-change/open");
     assert_eq!(exit_token["next_court"], "cli-exit-minimize");
 
-    let text_token: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.token.yaml")).unwrap(),
+    let text_token: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.token.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -346,16 +346,16 @@ fn golden_path_end_to_end() {
 
     // The observation record is untouched; the disposition is an appended
     // event carrying the resolution edge and the verified predicate.
-    let exit_residual: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.yaml")).unwrap(),
+    let exit_residual: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.json")).unwrap(),
     )
     .unwrap();
     assert!(
         exit_residual.get("disposition").is_none(),
         "observation must remain immutable"
     );
-    let event: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.events/0001.yaml")).unwrap(),
+    let event: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.events/0001.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(event["disposition"], "fixed");
@@ -366,8 +366,8 @@ fn golden_path_end_to_end() {
         .unwrap()
         .contains("fix-court"));
     // The token file follows the projected disposition.
-    let exit_token: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.yaml")).unwrap(),
+    let exit_token: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_token["token"], "exit/exit-class/class-change/fixed");
@@ -435,8 +435,8 @@ fn golden_path_end_to_end() {
     );
     // Attributed to the exact candidate artifact that actually passed — the
     // resolution run's candidate (H1), not the original failing one (H0).
-    let res_capture: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("{root}/captures/{resolution_run}/capture.yaml")))
+    let res_capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{root}/captures/{resolution_run}/capture.json")))
             .unwrap(),
     )
     .unwrap();
@@ -460,18 +460,18 @@ fn golden_path_end_to_end() {
         "non-claim scope: {out_text}"
     );
 
-    let claim_path = work.path(&format!("{root}/claims/{receipt_final}.yaml"));
-    let claim_yaml: serde_yaml::Value =
-        serde_yaml::from_str(&fs::read_to_string(&claim_path).unwrap()).unwrap();
-    assert_eq!(claim_yaml["receipt"], receipt_final);
-    assert_eq!(claim_yaml["candidate"]["name"], "cand-cli");
-    assert_eq!(claim_yaml["candidate"]["version_or_commit"], "0.1.0-fixed");
+    let claim_path = work.path(&format!("{root}/claims/{receipt_final}.json"));
+    let claim_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&claim_path).unwrap()).unwrap();
+    assert_eq!(claim_json["receipt"], receipt_final);
+    assert_eq!(claim_json["candidate"]["name"], "cand-cli");
+    assert_eq!(claim_json["candidate"]["version_or_commit"], "0.1.0-fixed");
     assert_eq!(
-        claim_yaml["candidate"]["identity_hash"].as_str().unwrap(),
+        claim_json["candidate"]["identity_hash"].as_str().unwrap(),
         h1_hash,
         "the claim names the candidate artifact that actually passed"
     );
-    let positive = claim_yaml["positive"].as_sequence().unwrap();
+    let positive = claim_json["positive"].as_array().unwrap();
     assert_eq!(positive.len(), 1, "exactly one conservative sentence");
 
     // -- 6. authority drift refuses to run -------------------------------------------

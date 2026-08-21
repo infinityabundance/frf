@@ -1,7 +1,0 @@
-schema_version: frf-disposition-v2
-event_id: c5903f4f6478d835d97f1b1d816727f38292b9d0203dbb90bf3513de1f3201d1
-residual_id: cli-text-0001
-parent_event_id: null
-disposition: intentional
-reason: clearer diagnostic wording; documented divergence
-evidence_refs: []

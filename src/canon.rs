@@ -202,6 +202,26 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value> {
     Ok(doc.into())
 }
 
+/// The canonical-bytes rule, shared by every canonical-JSON consumer: a
+/// document must BE its own canonical serialization — strict-JSON parse the
+/// bytes (duplicate properties refused), JCS-encode the parsed value, and
+/// refuse anything that is not byte-identical. One semantic document has one
+/// byte sequence, so two encodings cannot split one evidence identity. This
+/// is the rule behind receipts, extension responses, and (v0.1.32+) every
+/// generated evidence document.
+pub fn require_canonical_bytes(bytes: &[u8], what: &str) -> Result<()> {
+    let parsed = parse_strict(bytes)
+        .map_err(|e| FrfError::new(format!("{what} is not strict JSON: {e}")))?;
+    let canonical = encode(&parsed)
+        .map_err(|e| FrfError::new(format!("{what} cannot be canonicalized: {e}")))?;
+    if canonical.as_bytes() != bytes {
+        return Err(FrfError::new(format!(
+            "{what} is not its own canonical serialization (RFC 8785); the protocol says canonical JSON, and a non-canonical document would split one semantic document into many evidence identities"
+        )));
+    }
+    Ok(())
+}
+
 /// RFC 8785 §3.2.2.2 string escaping. Predefined escapes for U+0008/0009/
 /// 000A/000C/000D; `\u00xx` (lowercase) for the remaining U+0000–U+001F;
 /// `\"` and `\\`; every other code point raw — U+007F included.

@@ -70,8 +70,8 @@ pub fn run(store: &Store, path: &Path, name: &str, version: &str, kind: &str) ->
         platform: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
     };
 
-    let yaml = store.to_yaml(&record)?;
-    store.write_once(&target, &yaml)?;
+    let json = store.to_evidence(&record)?;
+    store.write_once(&target, &json)?;
     eprintln!(
         "admitted authority {id} (sha256 {} platform {})",
         &record.executable_sha256[..16],

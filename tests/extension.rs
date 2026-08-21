@@ -39,9 +39,9 @@ fn write_program(work: &Workdir, rel: &str, contents: &str) {
 }
 
 /// The capture YAML of a run, as a value.
-fn capture(work: &Workdir, run: &str) -> serde_yaml::Value {
-    serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.yaml"))).unwrap(),
+fn capture(work: &Workdir, run: &str) -> serde_json::Value {
+    serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
     )
     .unwrap()
 }
@@ -111,7 +111,7 @@ fn a_normalizer_builds_the_comparison_surface() {
         "the normalizer's program bytes are the implementation identity"
     );
     assert_eq!(
-        cap["residuals"].as_sequence().unwrap().len(),
+        cap["residuals"].as_array().unwrap().len(),
         0,
         "the normalized surface is equivalent: no residual"
     );
@@ -327,7 +327,7 @@ fn a_capture_adapter_serves_a_domain_axis() {
         cap["candidate"]["adapted"]["payload_base64"],
         frf::ext::b64(b"\x01\x02\x03\xff")
     );
-    assert_eq!(cap["residuals"].as_sequence().unwrap().len(), 1);
+    assert_eq!(cap["residuals"].as_array().unwrap().len(), 1);
     let rid = cap["residuals"][0].as_str().unwrap().to_string();
     assert!(rid.starts_with("cli-wire-"), "residual id: {rid}");
 
@@ -428,11 +428,11 @@ fn an_external_minimizer_is_court_verified() {
     let reduction_id = stdout(&out);
     assert_eq!(reduction_id.len(), 64, "content-addressed reduction id");
 
-    let rec: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
+    let rec: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v3");
+    assert_eq!(rec["schema_version"], "frf-reduction-v4");
     assert_eq!(rec["minimizer_semantic_id"], "cli-exit-minimize");
     assert!(rec["minimizer_semantic_hash"].as_str().unwrap().len() == 64);
     assert!(rec["minimizer_implementation_hash"].as_str().unwrap().len() == 64);
@@ -441,7 +441,7 @@ fn an_external_minimizer_is_court_verified() {
         "external:drop-comment-blank-lines"
     );
     // The core's executable attempts: baseline + the court-verified proposal.
-    let attempts = rec["attempts"].as_sequence().unwrap();
+    let attempts = rec["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0]["role"], "baseline");
     assert_eq!(attempts[0]["outcome"], "preserved");
@@ -452,8 +452,16 @@ fn an_external_minimizer_is_court_verified() {
     // is the proposal's.
     assert_eq!(rec["final_fixture_sha256"], attempts[1]["fixture_sha256"]);
     assert!(
-        rec["derivation"]["final_lines"].as_u64().unwrap()
-            < rec["derivation"]["original_lines"].as_u64().unwrap(),
+        rec["derivation"]["final_lines"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            < rec["derivation"]["original_lines"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap(),
         "the reproducer must be strictly smaller"
     );
 

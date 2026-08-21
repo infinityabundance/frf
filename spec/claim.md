@@ -3,7 +3,7 @@
 Claims are not produced by humans or by evidence producers. They are COMPILED
 by `frf claim compile` from a verified receipt (`ReceiptVerified`) — the only
 code path that can emit a positive claim sentence — and written to
-`claims/<receipt-id>.yaml` (or rendered canonically with `--json`).
+`claims/<receipt-id>.json` (or rendered canonically with `--json`).
 
 The claim schema is `frf-claim-v4`. The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of knowledge:

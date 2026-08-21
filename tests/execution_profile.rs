@@ -47,8 +47,8 @@ fn the_receipt_carries_the_profile_and_the_bounds_that_applied() {
     let run = run_court(&work);
 
     // The capture records the harness contract at observation time.
-    let capture: serde_yaml::Value = serde_yaml::from_str(
-        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.yaml"))).unwrap(),
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(capture["execution_profile"], "frf-exec-linux-v1");

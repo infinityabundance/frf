@@ -415,7 +415,7 @@ pub fn series_identity(
         "points": points
             .iter()
             .map(|p| json!({
-                "point_index": p.point_index.to_string(),
+                "point_index": p.point_index,
                 "coordinate": p.coordinate,
                 "run": p.run,
             }))
@@ -479,7 +479,7 @@ pub fn reduction_identity(
         "attempts": attempts
             .iter()
             .map(|a| json!({
-                "attempt": a.attempt.to_string(),
+                "attempt": a.attempt,
                 "role": a.role.as_str(),
                 "fixture_sha256": a.fixture_sha256,
                 "outcome": a.outcome.as_str(),
@@ -488,8 +488,8 @@ pub fn reduction_identity(
             .collect::<Vec<_>>(),
         "derivation": {
             "strategy": derivation.strategy,
-            "original_lines": derivation.original_lines.to_string(),
-            "final_lines": derivation.final_lines.to_string(),
+            "original_lines": derivation.original_lines,
+            "final_lines": derivation.final_lines,
             "minimality": {
                 "kind": derivation.minimality.kind,
                 "granularity": derivation.minimality.granularity,

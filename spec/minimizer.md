@@ -128,7 +128,7 @@ final proposal's survival is independently court-verified.
 
 A successful reduction preserves four files under
 `reductions/<id>/minimizer/` (request, response, content-addressed
-invocation + result) and the reduction record (`frf-reduction-v3`) binds the
+invocation + result) and the reduction record (`frf-reduction-v4`) binds the
 minimizer's semantic id, specification hash, implementation hash, exact
 artifact identity, and the invocation/result ids — the record proves WHO
 reduced, not merely that a reduction happened. A REFUSED proposal preserves

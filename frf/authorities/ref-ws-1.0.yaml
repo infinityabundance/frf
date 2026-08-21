@@ -1,8 +1,0 @@
-schema_version: frf-authority-v1
-id: ref-ws-1.0
-name: ref-ws
-kind: executable_reference
-version: '1.0'
-executable_sha256: ffce07d746e5adeb70e2105f1f8e86e39ddb3f6e1f1a883489eb55de558e1ce2
-path: golden/ref-ws.sh
-platform: x86_64-linux

@@ -69,7 +69,7 @@ store).
 
 ## The challenge record
 
-`challenges/<id>.yaml`, content-addressed (`FRF/CHALLENGE/v1`):
+`challenges/<id>.json`, content-addressed (`FRF/CHALLENGE/v1`):
 
 ```text
 CourtChallenge {

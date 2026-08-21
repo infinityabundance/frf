@@ -10,7 +10,6 @@ rust-version = "1.85"
 [dependencies]
 serde = "1"
 serde_json = "1"
-serde_yaml = "0.9"
 sha2 = "0.10"
 # Single-file bundles: the independent verifier opens the same sealed tar
 # container the reference engine ships.

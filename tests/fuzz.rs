@@ -116,49 +116,43 @@ fn assert_disposition_invariant(d: &Disposition, origin: &str) {
 }
 
 #[test]
-fn yaml_parsers_never_panic_and_preserve_invariants() {
+fn parsers_never_panic_and_preserve_invariants() {
     let mut rng = Rng::new(0xF00D_F00D);
     let n = iters();
     for i in 0..n {
         // Raw random bytes (possibly invalid UTF-8; deserializers must cope).
         let s = String::from_utf8_lossy(&random_bytes(&mut rng, 512)).into_owned();
+        // Court manifests are HUMAN-AUTHORED YAML — the only YAML left.
         let _ = serde_yaml::from_str::<CourtManifest>(&s);
-        let _ = serde_yaml::from_str::<AuthorityRecord>(&s);
-        let _ = serde_yaml::from_str::<CaptureManifest>(&s);
-        let _ = serde_yaml::from_str::<TokenRecord>(&s);
-        let _ = serde_yaml::from_str::<Receipt>(&s);
-        let _ = serde_yaml::from_str::<ClaimRecord>(&s);
-        // Receipts are canonical JSON on disk (RFC 8785): the JSON
-        // deserializer is the OpenReceipt protocol surface.
+        // Generated evidence is canonical JSON (RFC 8785): the strict JSON
+        // deserializers are the protocol surface.
+        let _ = serde_json::from_str::<AuthorityRecord>(&s);
+        let _ = serde_json::from_str::<CaptureManifest>(&s);
+        let _ = serde_json::from_str::<ResidualRecord>(&s);
+        let _ = serde_json::from_str::<TokenRecord>(&s);
         let _ = serde_json::from_str::<Receipt>(&s);
-        if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
+        let _ = serde_json::from_str::<ClaimRecord>(&s);
+        let _ = serde_json::from_str::<DispositionEvent>(&s);
+        let _ = serde_json::from_str::<ExecutionSeries>(&s);
+        let _ = serde_json::from_str::<ReductionRecord>(&s);
+        let _ = serde_json::from_str::<CourtChallenge>(&s);
+        let _ = serde_json::from_str::<WitnessStatement>(&s);
+        if let Ok(d) = serde_json::from_str::<Disposition>(&s) {
             assert_disposition_invariant(&d, &format!("random bytes iteration {i}"));
         }
     }
 }
 
 #[test]
-fn mutated_valid_yaml_never_panics() {
-    // Valid documents, then byte-level mutation: flip, insert, truncate.
+fn mutated_valid_documents_never_panic() {
+    // Valid documents (YAML manifests, canonical-JSON evidence), then
+    // byte-level mutation: flip, insert, truncate.
     let seeds: &[&str] = &[
         "disposition: open\n",
         "disposition: fixed\nreason: patched the candidate\n",
         "disposition: intentional\nreason: clearer wording\n",
         "disposition: fixed\nreason: patched and re-observed\nresolution_run_id: run-cli-malformed-input-cafebabe\nclosure_predicate: \"fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality\"\n",
-        r#"schema_version: frf-residual-v1
-id: cli-exit-0001
-court: cli-malformed-input
-run: run-cli-malformed-input-ab12cd34
-axis: exit
-kind: exit
-authority: ref-cli-1.8.2
-scope: malformed-input
-candidate_sha256: cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-raw_reference: '2'
-raw_candidate: '1'
-raw_reference_sha256: 0000000000000000000000000000000000000000000000000000000000000000
-raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111111111
-"#,
+        r#"{"schema_version":"frf-residual-v1","id":"cli-exit-0001","court":"cli-malformed-input","run":"run-cli-malformed-input-ab12cd34","axis":"exit","kind":"exit","authority":"ref-cli-1.8.2","scope":"malformed-input","candidate_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","raw_reference":"2","raw_candidate":"1","raw_reference_sha256":"0000000000000000000000000000000000000000000000000000000000000000","raw_candidate_sha256":"1111111111111111111111111111111111111111111111111111111111111111"}"#,
         r#"court:
   id: cli-malformed-input
   question: does the candidate preserve the exit class?
@@ -189,10 +183,14 @@ raw_candidate_sha256: 1111111111111111111111111111111111111111111111111111111111
         }
         let s = String::from_utf8_lossy(&bytes);
         let _ = serde_yaml::from_str::<CourtManifest>(&s);
-        let _ = serde_yaml::from_str::<ResidualRecord>(&s);
-        let _ = serde_yaml::from_str::<Disposition>(&s);
+        let _ = serde_json::from_str::<ResidualRecord>(&s);
         let _ = serde_json::from_str::<Receipt>(&s);
-        if let Ok(d) = serde_yaml::from_str::<Disposition>(&s) {
+        let _ = serde_json::from_str::<DispositionEvent>(&s);
+        let _ = serde_json::from_str::<ExecutionSeries>(&s);
+        let _ = serde_json::from_str::<ReductionRecord>(&s);
+        let _ = serde_json::from_str::<CourtChallenge>(&s);
+        let _ = serde_json::from_str::<WitnessStatement>(&s);
+        if let Ok(d) = serde_json::from_str::<Disposition>(&s) {
             assert_disposition_invariant(&d, &format!("mutation iteration {i}"));
         }
     }
@@ -220,10 +218,10 @@ fn ids_never_escape_the_store_root() {
         let id = random_id_string(&mut rng, 48);
         if is_valid_id(&id) {
             for (dir, filename) in [
-                ("residuals", format!("{id}.yaml")),
-                ("receipts", format!("{id}.yaml")),
-                ("claims", format!("{id}.yaml")),
-                ("authorities", format!("{id}.yaml")),
+                ("residuals", format!("{id}.json")),
+                ("receipts", format!("{id}.json")),
+                ("claims", format!("{id}.json")),
+                ("authorities", format!("{id}.json")),
             ] {
                 let p = root.join(dir).join(&filename);
                 assert!(p.starts_with(&root), "id {id:?} escaped via {dir}");

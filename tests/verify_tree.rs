@@ -5,7 +5,7 @@
 //! pure functions:
 //!
 //! - authority files still hash to their admitted `executable_sha256`;
-//! - raw capture files hash to the values recorded in `capture.yaml`;
+//! - raw capture files hash to the values recorded in `capture.json`;
 //! - residual raw hashes, token files, and κ output agree byte-for-byte;
 //! - receipt ids are content-addressed (re-serializing a receipt must hash to
 //!   the id's suffix), and every embedded residual/token re-derives;
@@ -30,7 +30,7 @@ fn store() -> Store {
 }
 
 fn load<T: serde::de::DeserializeOwned>(path: &Path) -> T {
-    serde_yaml::from_str(&fs::read_to_string(path).unwrap())
+    serde_json::from_str(&fs::read_to_string(path).unwrap())
         .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
 }
 
@@ -117,7 +117,7 @@ fn authorities_are_self_consistent() {
     let mut found = 0;
     for entry in fs::read_dir(store.root.join("authorities")).unwrap() {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
         let a: AuthorityRecord = load(&path);
@@ -160,7 +160,7 @@ fn captures_are_self_consistent() {
         if !run_dir.is_dir() {
             continue;
         }
-        let cap: CaptureManifest = load(&run_dir.join("capture.yaml"));
+        let cap: CaptureManifest = load(&run_dir.join("capture.json"));
         assert_eq!(cap.schema_version, SCHEMA_CAPTURE);
         assert_eq!(cap.run, run_dir.file_name().unwrap().to_string_lossy());
 
@@ -389,7 +389,7 @@ fn residuals_and_tokens_are_self_consistent() {
     for entry in fs::read_dir(store.root.join("residuals")).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        if name.ends_with(".token.yaml") || !name.ends_with(".yaml") {
+        if name.ends_with(".token.json") || !name.ends_with(".json") {
             continue;
         }
         let r: ResidualRecord = load(&path);
@@ -464,9 +464,9 @@ fn residuals_and_tokens_are_self_consistent() {
             r.id
         );
         // The observation record must never carry a disposition.
-        let raw_yaml = fs::read_to_string(&path).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
         assert!(
-            !raw_yaml.contains("disposition"),
+            !raw.contains("disposition"),
             "observation {} must be immutable (no disposition field)",
             r.id
         );
@@ -941,11 +941,11 @@ fn trajectories_are_self_consistent() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let t: TrajectoryRecord = load(&path);
         assert_eq!(t.schema_version, SCHEMA_TRAJECTORY, "trajectory {name}");
-        // The filename is {lineage}.{coordinate_system}.{series}.yaml and
+        // The filename is {lineage}.{coordinate_system}.{series}.json and
         // MUST match the record.
         assert_eq!(
             name,
-            format!("{}.{}.{}.yaml", t.subject, t.coordinate_system, t.series),
+            format!("{}.{}.{}.json", t.subject, t.coordinate_system, t.series),
             "the filename must be lineage.coordinate-system.series"
         );
         assert_eq!(t.subject.len(), 64, "subject must be a lineage digest");
@@ -1029,8 +1029,8 @@ fn series_are_self_consistent() {
     for entry in fs::read_dir(store.root.join("series")).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        assert!(name.ends_with(".yaml"), "series file name: {name}");
-        let id = name.trim_end_matches(".yaml").to_string();
+        assert!(name.ends_with(".json"), "series file name: {name}");
+        let id = name.trim_end_matches(".json").to_string();
         let series: ExecutionSeries = load(&path);
         assert_eq!(series.schema_version, SCHEMA_SERIES, "series {name}");
         assert_eq!(
@@ -1074,7 +1074,7 @@ fn series_are_self_consistent() {
         }
         // Points are dense, ordered, and reference existing runs.
         for (i, p) in series.points.iter().enumerate() {
-            assert_eq!(p.point_index, (i + 1) as u32, "dense point series");
+            assert_eq!(p.point_index, (i + 1).to_string(), "dense point series");
             assert!(
                 store.run_dir(&p.run).unwrap().is_dir(),
                 "series point {} run {} missing",
@@ -1165,12 +1165,12 @@ fn reductions_are_self_consistent() {
         let path = entry.unwrap().path();
         // The external minimizer's invocation evidence lives under
         // `reductions/<id>/minimizer/` (a directory); the RECORD is the
-        // `<id>.yaml` file.
+        // `<id>.json` file.
         if path.is_dir() {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let id = name.trim_end_matches(".yaml").to_string();
+        let id = name.trim_end_matches(".json").to_string();
         let r: ReductionRecord = load(&path);
         assert_eq!(r.schema_version, SCHEMA_REDUCTION, "reduction {name}");
         assert_eq!(r.id, id, "the filename must be the content address");
@@ -1303,7 +1303,7 @@ fn challenges_are_self_consistent() {
     for entry in fs::read_dir(store.root.join("challenges")).unwrap() {
         let path = entry.unwrap().path();
         let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let id = name.trim_end_matches(".yaml").to_string();
+        let id = name.trim_end_matches(".json").to_string();
         // The verified loader: the content address must rederive from the
         // record's own declared fields (a hand-edited challenge is refused).
         let r: CourtChallenge = store.load_challenge(&id).unwrap();
@@ -1539,17 +1539,12 @@ fn tree_mirrors_section_19_3() {
         .root
         .join("courts/cli-malformed-input/fixtures/malformed-path.conf")
         .is_file());
-    // No stray non-YAML droppings in the generated directories; receipts are
-    // canonical JSON, everything else is YAML.
+    // No stray non-JSON droppings in the generated directories: generated
+    // evidence is canonical JSON; YAML is only human-authored manifests.
     for sub in ["authorities", "receipts", "claims"] {
         for entry in fs::read_dir(store.root.join(sub)).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().to_string();
-            let ok = if sub == "receipts" {
-                name.ends_with(".json")
-            } else {
-                name.ends_with(".yaml")
-            };
-            assert!(ok, "unexpected file {sub}/{name}");
+            assert!(name.ends_with(".json"), "unexpected file {sub}/{name}");
         }
     }
 }

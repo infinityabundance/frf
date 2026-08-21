@@ -95,7 +95,7 @@ pub fn classify(observed: &[bool]) -> Result<TrajectoryDerivation> {
         drift,
         slew,
         localization,
-        bands,
+        bands: bands.to_string(),
     })
 }
 
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(d.drift, TrajectoryDrift::Persistent);
         assert_eq!(d.slew, TrajectorySlew::Stable);
         assert_eq!(d.localization, TrajectoryLocalization::None_);
-        assert_eq!(d.bands, 1);
+        assert_eq!(d.bands, "1");
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod tests {
         assert_eq!(d.drift, TrajectoryDrift::Transient);
         assert_eq!(d.slew, TrajectorySlew::Abrupt);
         assert_eq!(d.localization, TrajectoryLocalization::Start);
-        assert_eq!(d.bands, 1);
+        assert_eq!(d.bands, "1");
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(d.drift, TrajectoryDrift::Transient);
         assert_eq!(d.slew, TrajectorySlew::Burst);
         assert_eq!(d.localization, TrajectoryLocalization::Interior);
-        assert_eq!(d.bands, 1);
+        assert_eq!(d.bands, "1");
     }
 
     #[test]
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(d.drift, TrajectoryDrift::Recurrent);
         assert_eq!(d.slew, TrajectorySlew::Recurrent);
         assert_eq!(d.localization, TrajectoryLocalization::Both);
-        assert_eq!(d.bands, 3);
+        assert_eq!(d.bands, "3");
     }
 
     #[test]
@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(d.drift, TrajectoryDrift::Transient);
         assert_eq!(d.slew, TrajectorySlew::Recurrent);
         assert_eq!(d.localization, TrajectoryLocalization::Interior);
-        assert_eq!(d.bands, 2);
+        assert_eq!(d.bands, "2");
     }
 
     #[test]

@@ -282,7 +282,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
     let claim_path = store.claim_path(receipt_id)?;
     if claim_path.is_file() {
         let bytes = read(&claim_path, "claim")?;
-        let rel = format!("claims/{receipt_id}.yaml");
+        let rel = format!("claims/{receipt_id}.json");
         entries.insert(
             rel.clone(),
             ClosureEntry {
@@ -291,7 +291,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 kind: "claim",
             },
         );
-        let parsed: ClaimRecord = store.parse_yaml(&claim_path)?;
+        let parsed: ClaimRecord = store.parse_evidence(&claim_path)?;
         for head in &parsed.knowledge_snapshot.residual_heads {
             let record = store.load_residual(&head.id)?;
             if !runs.contains(&record.run) {
@@ -309,7 +309,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             let rid = &obj.id;
             let r_path = store.reduction_path(rid)?;
             let bytes = read(&r_path, "reduction")?;
-            let rel = format!("reductions/{rid}.yaml");
+            let rel = format!("reductions/{rid}.json");
             entries.insert(
                 rel.clone(),
                 ClosureEntry {
@@ -358,7 +358,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
 
         // Capture manifest + raw side files (the derived projections rehash
         // against the raw bytes during verification).
-        let mut names = vec!["capture.yaml".to_string()];
+        let mut names = vec!["capture.json".to_string()];
         for side in ["reference", "candidate"] {
             for f in [
                 "stdout",
@@ -374,7 +374,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             let path = dir.join(&name);
             let bytes = read(&path, "capture file")?;
             let rel = format!("captures/{run}/{name}");
-            let kind = if name == "capture.yaml" {
+            let kind = if name == "capture.json" {
                 "capture"
             } else {
                 "side"
@@ -451,7 +451,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         // are never rewritten; the bundle carries the exact admission).
         let authority_path = store.authority_path(&cap.authority)?;
         let bytes = read(&authority_path, "authority")?;
-        let rel = format!("authorities/{}.yaml", cap.authority);
+        let rel = format!("authorities/{}.json", cap.authority);
         entries.insert(
             rel.clone(),
             ClosureEntry {
@@ -657,7 +657,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             }
             let rec_path = store.residual_path(id)?;
             let bytes = read(&rec_path, "residual")?;
-            let rel = format!("residuals/{id}.yaml");
+            let rel = format!("residuals/{id}.json");
             entries.insert(
                 rel.clone(),
                 ClosureEntry {
@@ -670,9 +670,9 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             let events = store.disposition_events(id)?;
             let ev_dir = store.events_dir(id)?;
             for (i, e) in events.iter().enumerate() {
-                let path = ev_dir.join(format!("{:04}.yaml", i + 1));
+                let path = ev_dir.join(format!("{:04}.json", i + 1));
                 let bytes = read(&path, "disposition event")?;
-                let rel = format!("residuals/{id}.events/{:04}.yaml", i + 1);
+                let rel = format!("residuals/{id}.events/{:04}.json", i + 1);
                 entries.insert(
                     rel.clone(),
                     ClosureEntry {
@@ -745,7 +745,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 }
                 let s_path = store.series_path(&s.id)?;
                 let bytes = read(&s_path, "series")?;
-                let rel = format!("series/{}.yaml", s.id);
+                let rel = format!("series/{}.json", s.id);
                 entries.insert(
                     rel.clone(),
                     ClosureEntry {
@@ -762,7 +762,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 if t_path.is_file() {
                     let bytes = read(&t_path, "trajectory")?;
                     let rel = format!(
-                        "trajectories/{}.{}.{}.yaml",
+                        "trajectories/{}.{}.{}.json",
                         lineage, s.coordinate_system, s.id
                     );
                     entries.insert(
