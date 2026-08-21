@@ -132,3 +132,63 @@ func TestSeriesIdentityRederives(t *testing.T) {
 		t.Fatal("the child snapshot must not collide with its parent")
 	}
 }
+
+// The extended trajectory vocabulary rederives: boundary-localized,
+// version-stratified, and gradual (a monotonic magnitude ramp).
+func TestTrajectoryVocabularyRederives(t *testing.T) {
+	none := func(n int) []*string { return make([]*string, n) }
+	strPtr := func(s string) *string { return &s }
+
+	// Persistent + stable with no measure.
+	drift, slew, loc, bands, trend := trajectoryClassify([]bool{true, true, true}, "repeat_index", none(3), "none")
+	if drift != "persistent" || slew != "stable" || loc != "none" || bands != "1" || trend != "unknown" {
+		t.Fatalf("persistent: %s/%s/%s/%s/%s", drift, slew, loc, bands, trend)
+	}
+	// A cessation confined to the start: boundary-localized.
+	drift, slew, loc, bands, _ = trajectoryClassify([]bool{true, false, false}, "candidate_revision", none(3), "none")
+	if drift != "boundary-localized" || slew != "abrupt" || loc != "start" {
+		t.Fatalf("boundary-localized: %s/%s/%s", drift, slew, loc)
+	}
+	// Two interior bands on a version ladder: version-stratified.
+	drift, slew, loc, bands, _ = trajectoryClassify([]bool{false, true, false, true, false}, "authority_version", none(5), "none")
+	if drift != "version-stratified" || slew != "recurrent" || loc != "interior" || bands != "2" {
+		t.Fatalf("version-stratified: %s/%s/%s/%s", drift, slew, loc, bands)
+	}
+	// The same pattern on the environment axis is not stratified.
+	drift, _, _, _, _ = trajectoryClassify([]bool{false, true, false, true, false}, "environment", none(5), "none")
+	if drift != "transient" {
+		t.Fatalf("environment pattern must be transient, got %s", drift)
+	}
+	// A monotonic magnitude ramp is gradual.
+	mags := []*string{strPtr("1"), strPtr("2"), strPtr("3"), strPtr("4")}
+	drift, slew, _, _, trend = trajectoryClassify([]bool{true, true, true, true}, "candidate_revision", mags, "line-edit-distance")
+	if drift != "persistent" || slew != "gradual" || trend != "increasing" {
+		t.Fatalf("gradual: %s/%s/%s", drift, slew, trend)
+	}
+	// Flat magnitude is not gradual.
+	flat := []*string{strPtr("2"), strPtr("2"), strPtr("2")}
+	_, slew, _, _, trend = trajectoryClassify([]bool{true, true, true}, "repeat_index", flat, "exit-code-distance")
+	if slew != "stable" || trend != "flat" {
+		t.Fatalf("flat: %s/%s", slew, trend)
+	}
+}
+
+// The magnitude measures rederive deterministically.
+func TestDivergenceMagnitudeRederives(t *testing.T) {
+	e := divergenceMagnitude("exit", "2", "1")
+	if e == nil || *e != "1" {
+		t.Fatalf("exit magnitude: %v", e)
+	}
+	same := divergenceMagnitude("exit", "2", "2")
+	if same == nil || *same != "0" {
+		t.Fatalf("equal exit magnitude: %v", same)
+	}
+	l := divergenceMagnitude("stderr", "tool: line 4: unknown directive", "error: unknown directive")
+	if l == nil || *l == "0" {
+		t.Fatalf("line magnitude must be nonzero: %v", l)
+	}
+	n := divergenceMagnitude("filesystem.tree", "abc", "def")
+	if n != nil {
+		t.Fatalf("tree must declare no magnitude: %v", n)
+	}
+}

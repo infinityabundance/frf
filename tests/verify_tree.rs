@@ -997,10 +997,22 @@ fn trajectories_are_self_consistent() {
                         .expect("observed entry has a fingerprint"),
                     "observation fingerprint must match the residual"
                 );
+                // The magnitude REDERIVES from the observed residual's
+                // compared projections (the declared measure); it is never
+                // trusted from the trajectory file.
+                let expected_mag = frf::comparators::divergence_magnitude(
+                    rec.axis.as_str(),
+                    &rec.raw_reference,
+                    &rec.raw_candidate,
+                );
+                assert_eq!(
+                    o.magnitude, expected_mag,
+                    "observation magnitude must rederive from the residual"
+                );
                 assert_eq!(rec.axis.as_str(), t.axis);
             } else {
                 assert!(
-                    o.residual.is_none() && o.fingerprint.is_none(),
+                    o.residual.is_none() && o.fingerprint.is_none() && o.magnitude.is_none(),
                     "an unobserved entry names no residual"
                 );
             }
@@ -1010,9 +1022,26 @@ fn trajectories_are_self_consistent() {
             observed.iter().any(|o| *o),
             "a trajectory only exists for an observed divergence"
         );
-        // The derivation is the deterministic classification of the pattern,
-        // localization and bands included.
-        let expected = frf::trajectory::classify(&observed).unwrap();
+        // The derivation is the deterministic classification of the pattern
+        // over the coordinate system with the rederived magnitudes — trend
+        // and magnitude_kind included.
+        let magnitudes: Vec<Option<String>> = t
+            .observations
+            .iter()
+            .map(|o| {
+                o.residual.as_ref().and_then(|rid| {
+                    let rec = store.load_residual(rid).unwrap();
+                    frf::comparators::divergence_magnitude(
+                        rec.axis.as_str(),
+                        &rec.raw_reference,
+                        &rec.raw_candidate,
+                    )
+                })
+            })
+            .collect();
+        let kind = frf::comparators::magnitude_kind(&t.axis);
+        let expected =
+            frf::trajectory::classify(&observed, &t.coordinate_system, &magnitudes, &kind).unwrap();
         assert_eq!(t.derivation, expected, "derivation must rederive");
         found += 1;
     }

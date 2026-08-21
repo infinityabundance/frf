@@ -250,7 +250,7 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     trajectories.sort_by_key(|t| t["subject"].as_str().unwrap().to_string());
     let mut series_id = String::new();
     for t in &trajectories {
-        assert_eq!(t["schema_version"], "frf-trajectory-v3");
+        assert_eq!(t["schema_version"], "frf-trajectory-v4");
         assert_eq!(t["coordinate_system"], "repeat_index");
         assert_eq!(t["derivation"]["drift"], "persistent");
         assert_eq!(t["derivation"]["slew"], "stable");
@@ -389,7 +389,7 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
     for path in &files {
         let t: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(t["schema_version"], "frf-trajectory-v3");
+        assert_eq!(t["schema_version"], "frf-trajectory-v4");
         assert_eq!(t["coordinate_system"], "repeat_index");
         let obs = t["observations"].as_array().unwrap();
         assert_eq!(obs.len(), 5);
@@ -415,6 +415,11 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
             "persistent"
         } else if tset.first() == Some(&0) && tset.last() == Some(&(n - 1)) {
             "recurrent"
+        } else if tset.last().unwrap() - tset.first().unwrap() + 1 == tset.len()
+            && (tset.first() == Some(&0) || tset.last() == Some(&(n - 1)))
+        {
+            // A single contiguous band touching exactly one bound.
+            "boundary-localized"
         } else {
             "transient"
         };
@@ -431,11 +436,38 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
         };
         assert_eq!(t["derivation"]["drift"], expected_drift);
         assert_eq!(t["derivation"]["slew"], expected_slew);
-        // The derivation's localization/bands are the deterministic
-        // companions (re-derived by frf::trajectory::classify).
-        let d = frf::trajectory::classify(&observed).unwrap();
+        // The derivation's localization/bands/trend/magnitude_kind are the
+        // deterministic companions (re-derived by frf::trajectory::classify
+        // over the coordinate system with the rederived magnitudes).
+        let magnitudes: Vec<Option<String>> = obs
+            .iter()
+            .map(|o| {
+                o["residual"].as_str().and_then(|rid| {
+                    let record: serde_json::Value = serde_json::from_str(
+                        &fs::read_to_string(work.path(&format!("frf/residuals/{rid}.json")))
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    frf::comparators::divergence_magnitude(
+                        record["axis"].as_str().unwrap(),
+                        record["raw_reference"].as_str().unwrap(),
+                        record["raw_candidate"].as_str().unwrap(),
+                    )
+                })
+            })
+            .collect();
+        let kind = frf::comparators::magnitude_kind(t["axis"].as_str().unwrap());
+        let d = frf::trajectory::classify(
+            &observed,
+            t["coordinate_system"].as_str().unwrap(),
+            &magnitudes,
+            &kind,
+        )
+        .unwrap();
         assert_eq!(t["derivation"]["localization"], d.localization.as_str());
         assert_eq!(t["derivation"]["bands"], d.bands);
+        assert_eq!(t["derivation"]["trend"], d.trend.as_str());
+        assert_eq!(t["derivation"]["magnitude_kind"], d.magnitude_kind);
         // Observed entries reference a real residual whose fingerprint is the
         // observation fingerprint, recorded against a real run.
         for o in obs {

@@ -18,6 +18,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"frf-verifier-go/jcs"
 )
@@ -48,6 +50,200 @@ func envDigest(os, arch, kernel, locale, timezone, umask string) string {
 		"os=%s\narch=%s\nkernel=%s\nlocale=%s\ntimezone=%s\numask=%s",
 		os, arch, kernel, locale, timezone, umask)))
 }
+
+// trajectoryClassify — the deterministic ordered-axis classification
+// (mirrors the reference engine's trajectory::classify, frf-trajectory-v4):
+// drift/slew/localization/bands/trend. The stratified axes (authority_version,
+// candidate_revision) yield `version-stratified` for 2+ bands; a single
+// contiguous band touching one bound is `boundary-localized`; a monotonic
+// magnitude trend licenses `gradual`.
+func trajectoryClassify(observed []bool, coordinateSystem string, magnitudes []*string, magnitudeKind string) (string, string, string, string, string) {
+	n := len(observed)
+	var t []int
+	for i, o := range observed {
+		if o {
+			t = append(t, i)
+		}
+	}
+	if len(t) == 0 {
+		panic("no observations in the series")
+	}
+	first := t[0]
+	last := t[len(t)-1]
+	bands := 1
+	for i := 1; i < len(t); i++ {
+		if t[i] != t[i-1]+1 {
+			bands++
+		}
+	}
+	contiguous := last-first+1 == len(t)
+	stratified := coordinateSystem == "authority_version" || coordinateSystem == "candidate_revision"
+	var drift, slew, localization string
+	switch {
+	case len(t) == n:
+		drift, slew, localization = "persistent", "stable", "none"
+	case contiguous && first == 0:
+		drift, slew, localization = "boundary-localized", "abrupt", "start"
+	case contiguous && last == n-1:
+		drift, slew, localization = "boundary-localized", "abrupt", "end"
+	case contiguous:
+		drift, slew, localization = "transient", "burst", "interior"
+	case bands >= 2 && stratified:
+		drift = "version-stratified"
+		slew = "recurrent"
+		switch {
+		case first == 0 && last == n-1:
+			localization = "both"
+		case first == 0:
+			localization = "start"
+		case last == n-1:
+			localization = "end"
+		default:
+			localization = "interior"
+		}
+	case first == 0 && last == n-1:
+		drift, slew, localization = "recurrent", "recurrent", "both"
+	default:
+		drift, slew = "transient", "recurrent"
+		switch {
+		case first == 0:
+			localization = "start"
+		case last == n-1:
+			localization = "end"
+		default:
+			localization = "interior"
+		}
+	}
+	trend := trajectoryTrend(observed, magnitudes, magnitudeKind)
+	if trend == "increasing" || trend == "decreasing" {
+		slew = "gradual"
+	}
+	return drift, slew, localization, itoa(bands), trend
+}
+
+// trajectoryTrend — the magnitude trend over the observed points (mirrors
+// the reference engine): `unknown` when no measure is declared or fewer than
+// three observed magnitudes; else flat/increasing/decreasing/non-monotonic.
+// Only OBSERVED points carry a magnitude.
+func trajectoryTrend(observed []bool, magnitudes []*string, magnitudeKind string) string {
+	if magnitudeKind == "none" {
+		return "unknown"
+	}
+	var values []int64
+	for i, m := range magnitudes {
+		if m == nil || !observed[i] {
+			continue
+		}
+		if v, err := strconv.ParseInt(*m, 10, 64); err == nil {
+			values = append(values, v)
+		}
+	}
+	if len(values) < 3 {
+		return "unknown"
+	}
+	increasing, decreasing := false, false
+	for i := 1; i < len(values); i++ {
+		if values[i] > values[i-1] {
+			increasing = true
+		} else if values[i] < values[i-1] {
+			decreasing = true
+		}
+	}
+	switch {
+	case !increasing && !decreasing:
+		return "flat"
+	case increasing && !decreasing:
+		return "increasing"
+	case !increasing && decreasing:
+		return "decreasing"
+	default:
+		return "non-monotonic"
+	}
+}
+
+// divergenceMagnitude — the deterministic divergence degree between a
+// residual observation's compared projections on `axis` (mirrors the
+// reference engine's comparators::divergence_magnitude, bound included): a
+// decimal string, or nil when the axis declares no measure.
+func divergenceMagnitude(axis, rawReference, rawCandidate string) *string {
+	const magnitudeBound = 2048
+	switch axis {
+	case "exit":
+		a, errA := strconv.ParseInt(strings.TrimSpace(rawReference), 10, 64)
+		b, errB := strconv.ParseInt(strings.TrimSpace(rawCandidate), 10, 64)
+		if errA != nil || errB != nil {
+			return nil
+		}
+		d := a - b
+		if d < 0 {
+			d = -d
+		}
+		s := itoa(int(d))
+		return &s
+	case "stderr", "stdout", "structured.state":
+		d := editDistance(truncate(rawReference, magnitudeBound), truncate(rawCandidate, magnitudeBound))
+		s := itoa(d)
+		return &s
+	default:
+		return nil
+	}
+}
+
+func magnitudeKind(axis string) string {
+	switch axis {
+	case "exit":
+		return "exit-code-distance"
+	case "stderr", "stdout":
+		return "line-edit-distance"
+	case "structured.state":
+		return "value-edit-distance"
+	default:
+		return "none"
+	}
+}
+
+func truncate(s string, bound int) string {
+	if len(s) <= bound {
+		return s
+	}
+	return s[:bound]
+}
+
+// editDistance — the Levenshtein (byte edit) distance, the declared
+// line/value distance measure of the text-family comparators.
+func editDistance(a, b string) int {
+	if a == b {
+		return 0
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 0
+			if a[i-1] != b[j-1] {
+				cost = 1
+			}
+			m := prev[j] + 1
+			if curr[j-1]+1 < m {
+				m = curr[j-1] + 1
+			}
+			if prev[j-1]+cost < m {
+				m = prev[j-1] + cost
+			}
+			curr[j] = m
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
+// itoa — the canonical value domain has no numbers; every integer in an
+// evidence document is a decimal string.
+func itoa(v int) string { return strconv.Itoa(v) }
 
 // object helpers over the jcs.Value tree.
 func str(v jcs.Value, key string) string {

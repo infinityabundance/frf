@@ -488,8 +488,16 @@ pub fn knowledge_snapshot_identity(snapshot: &Value) -> String {
 }
 
 /// The deterministic ordered-axis classification: drift, slew, localization,
-/// and bands. Mirrors the reference engine's trajectory::classify.
-pub fn classify(observed: &[bool]) -> (String, String, String, u32) {
+/// bands, trend, and magnitude kind. Mirrors the reference engine's
+/// trajectory::classify (frf-trajectory-v4): the stratified axes get
+/// `version-stratified` for 2+ bands, boundary-touching single bands get
+/// `boundary-localized`, and a monotonic magnitude trend licenses `gradual`.
+pub fn classify(
+    observed: &[bool],
+    coordinate_system: &str,
+    magnitudes: &[Option<String>],
+    magnitude_kind: &str,
+) -> (String, String, String, u32, String) {
     let n = observed.len();
     let t: Vec<usize> = observed
         .iter()
@@ -509,18 +517,33 @@ pub fn classify(observed: &[bool]) -> (String, String, String, u32) {
         }
     }
     let contiguous = last - first + 1 == t.len();
-    if t.len() == n {
-        ("persistent".into(), "stable".into(), "none".into(), bands)
+    let stratified = matches!(
+        coordinate_system,
+        "authority_version" | "candidate_revision"
+    );
+    let (drift, slew, localization) = if t.len() == n {
+        ("persistent", "stable", "none")
     } else if contiguous {
         if first == 0 {
-            ("transient".into(), "abrupt".into(), "start".into(), bands)
+            ("boundary-localized", "abrupt", "start")
         } else if last == n - 1 {
-            ("transient".into(), "abrupt".into(), "end".into(), bands)
+            ("boundary-localized", "abrupt", "end")
         } else {
-            ("transient".into(), "burst".into(), "interior".into(), bands)
+            ("transient", "burst", "interior")
         }
+    } else if bands >= 2 && stratified {
+        let localization = if first == 0 && last == n - 1 {
+            "both"
+        } else if first == 0 {
+            "start"
+        } else if last == n - 1 {
+            "end"
+        } else {
+            "interior"
+        };
+        ("version-stratified", "recurrent", localization)
     } else if first == 0 && last == n - 1 {
-        ("recurrent".into(), "recurrent".into(), "both".into(), bands)
+        ("recurrent", "recurrent", "both")
     } else {
         let localization = if first == 0 {
             "start"
@@ -529,11 +552,126 @@ pub fn classify(observed: &[bool]) -> (String, String, String, u32) {
         } else {
             "interior"
         };
-        (
-            "transient".into(),
-            "recurrent".into(),
-            localization.into(),
-            bands,
-        )
+        ("transient", "recurrent", localization)
+    };
+    let trend = magnitude_trend(observed, magnitudes, magnitude_kind);
+    let slew = if matches!(trend.as_str(), "increasing" | "decreasing") {
+        "gradual"
+    } else {
+        slew
+    };
+    (
+        drift.to_string(),
+        slew.to_string(),
+        localization.to_string(),
+        bands,
+        trend,
+    )
+}
+
+/// The magnitude trend over the observed points (mirrors the reference
+/// engine): `unknown` when no measure is declared or fewer than three
+/// observed magnitudes; else `flat` / `increasing` / `decreasing` /
+/// `non-monotonic`. Only OBSERVED points carry a magnitude.
+pub fn magnitude_trend(
+    observed: &[bool],
+    magnitudes: &[Option<String>],
+    magnitude_kind: &str,
+) -> String {
+    if magnitude_kind == "none" {
+        return "unknown".to_string();
     }
+    let values: Vec<i64> = observed
+        .iter()
+        .zip(magnitudes.iter())
+        .filter(|(o, _)| **o)
+        .filter_map(|(_, m)| m.as_deref().and_then(|v| v.parse::<i64>().ok()))
+        .collect();
+    // A trend needs at least THREE observed magnitudes.
+    if values.len() < 3 {
+        return "unknown".to_string();
+    }
+    let mut increasing = false;
+    let mut decreasing = false;
+    for w in values.windows(2) {
+        if w[1] > w[0] {
+            increasing = true;
+        } else if w[1] < w[0] {
+            decreasing = true;
+        }
+    }
+    if !increasing && !decreasing {
+        "flat".to_string()
+    } else if increasing && !decreasing {
+        "increasing".to_string()
+    } else if !increasing && decreasing {
+        "decreasing".to_string()
+    } else {
+        "non-monotonic".to_string()
+    }
+}
+
+/// The deterministic divergence degree between a residual observation's
+/// compared projections on `axis` (mirrors the reference engine's
+/// comparators::divergence_magnitude, bound included): a decimal string, or
+/// `None` when the axis declares no measure.
+pub fn divergence_magnitude(
+    axis: &str,
+    raw_reference: &str,
+    raw_candidate: &str,
+) -> Option<String> {
+    const MAGNITUDE_BOUND: usize = 2048;
+    match axis {
+        "exit" => {
+            let a = raw_reference.trim().parse::<i64>().ok()?;
+            let b = raw_candidate.trim().parse::<i64>().ok()?;
+            Some((a - b).abs().to_string())
+        }
+        "stderr" | "stdout" | "structured.state" => Some(
+            edit_distance(
+                &truncate(raw_reference, MAGNITUDE_BOUND),
+                &truncate(raw_candidate, MAGNITUDE_BOUND),
+            )
+            .to_string(),
+        ),
+        _ => None,
+    }
+}
+
+pub fn magnitude_kind(axis: &str) -> String {
+    match axis {
+        "exit" => "exit-code-distance".to_string(),
+        "stderr" | "stdout" => "line-edit-distance".to_string(),
+        "structured.state" => "value-edit-distance".to_string(),
+        _ => "none".to_string(),
+    }
+}
+
+fn truncate(s: &str, bound: usize) -> String {
+    if s.len() <= bound {
+        s.to_string()
+    } else {
+        s[..bound].to_string()
+    }
+}
+
+/// The Levenshtein (byte edit) distance — the declared line/value distance
+/// measure of the text-family comparators.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    let a: Vec<u8> = a.as_bytes().to_vec();
+    let b: Vec<u8> = b.as_bytes().to_vec();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr: Vec<usize> = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        curr[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b.len()]
 }
