@@ -18,7 +18,7 @@ use crate::store::Store;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The series options of `frf court run`. Exactly one may be set; absent,
 /// the court is single-run.
@@ -412,6 +412,11 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                     &sha,
                     &arguments,
                     &capture.environment.digest,
+                    // Minimization holds the comparator fixed; the residual's
+                    // axis routes to the minimizer, and a produced-artifact
+                    // axis has no built-in route (the generic κ row yields
+                    // `none`), so no produced context ever reaches here.
+                    None,
                 );
                 let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
                 let (outcome, _) = crate::comparators::run_external(
@@ -431,11 +436,11 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                                 axis.as_str()
                             ))
                         })?;
-                let (_, raw_ref, raw_cand) = builtin.compare(
+                let divergences = builtin.compare(
                     &SideCapture::from_outcome(&reference),
                     &SideCapture::from_outcome(&candidate),
                 );
-                raw_ref != raw_cand
+                !divergences.is_empty()
             }
         };
         let sha = host::sha256_bytes(bytes);
@@ -677,6 +682,37 @@ pub fn run_once(
         )));
     }
 
+    // -- the produced-artifact clause (the filesystem-tree surface) -----------
+    // When the court declares `produce`, the sides write their OUTPUT to the
+    // declared path (transient: cleared between sides, captured immutably
+    // into the run). The path must be a contained relative path.
+    let produce_path: Option<PathBuf> = match &spec.produce {
+        Some(p) => {
+            let path = Path::new(&p.path);
+            if path.is_absolute()
+                || path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return Err(FrfError::new(format!(
+                    "produce path {:?} must be a contained relative path (no absolute path, no '..')",
+                    p.path
+                )));
+            }
+            Some(path.to_path_buf())
+        }
+        None => None,
+    };
+    // The built-in filesystem.tree axis observes PRODUCED artifacts; a court
+    // declaring it without a produce clause would compare two empty trees.
+    for axis in &observables {
+        if axis.as_str() == "filesystem.tree" && produce_path.is_none() {
+            return Err(FrfError::new(
+                "the filesystem.tree axis observes produced artifacts; the court must declare `produce` (the output directory each side writes)",
+            ));
+        }
+    }
+
     // -- read + hash BEFORE any execution -----------------------------------
     //
     // Every artifact is hashed first and executed ONLY through an immutable
@@ -819,7 +855,8 @@ pub fn run_once(
 
     // The fixture argument resolves to the SNAPSHOT path: the side reads
     // exactly the hashed bytes, and the recorded arguments are replayable
-    // without the original tree.
+    // without the original tree. `{output}` (with a produce clause) resolves
+    // to the declared output path — the side writes its produced tree there.
     let fixture_arg = fixture_snapshot.to_string_lossy().into_owned();
     let arguments: Vec<String> = spec
         .fixture
@@ -827,12 +864,21 @@ pub fn run_once(
         .iter()
         .map(|a| {
             if a == "{fixture}" {
-                fixture_arg.clone()
+                Ok(fixture_arg.clone())
+            } else if a == "{output}" {
+                produce_path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .ok_or_else(|| {
+                        FrfError::new(
+                            "the fixture arguments reference '{output}' but the court declares no produce clause",
+                        )
+                    })
             } else {
-                a.clone()
+                Ok(a.clone())
             }
         })
-        .collect();
+        .collect::<Result<_>>()?;
     if !arguments.contains(&fixture_arg) {
         eprintln!(
             "frf: warning: fixture {} is not referenced by the declared arguments; this execution does not exercise it",
@@ -842,11 +888,43 @@ pub fn run_once(
 
     // -- observe both sides ---------------------------------------------------
 
-    let reference_out = host::run_process(&authority_snapshot, &arguments)?;
-    let candidate_out = host::run_process(&candidate_snapshot, &arguments)?;
+    // With a produce clause, each side writes its output tree to the
+    // (transient) produce path: the harness clears it before each side,
+    // walks it after, stages the bytes, and captures the tree immutably.
+    let staging = crate::produced::ProducedStaging::new("court")?;
+    let clear_produce = |path: &Path| -> Result<()> {
+        if path.exists() {
+            if path.is_dir() {
+                fs::remove_dir_all(path)
+                    .map_err(|e| FrfError::new(format!("cannot clear {}: {e}", path.display())))?;
+            } else {
+                fs::remove_file(path)
+                    .map_err(|e| FrfError::new(format!("cannot clear {}: {e}", path.display())))?;
+            }
+        }
+        Ok(())
+    };
 
-    let reference = SideCapture::from_outcome(&reference_out);
-    let candidate = SideCapture::from_outcome(&candidate_out);
+    if let Some(prod) = &produce_path {
+        clear_produce(prod)?;
+    }
+    let reference_out = host::run_process(&authority_snapshot, &arguments)?;
+    let mut reference = SideCapture::from_outcome(&reference_out);
+    if let Some(prod) = &produce_path {
+        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
+        reference.produced = Some(crate::produced::produced_side(files)?);
+        clear_produce(prod)?;
+    }
+
+    let candidate_out = host::run_process(&candidate_snapshot, &arguments)?;
+    let mut candidate = SideCapture::from_outcome(&candidate_out);
+    if let Some(prod) = &produce_path {
+        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
+        candidate.produced = Some(crate::produced::produced_side(files)?);
+        // The transient output directory is never evidence; the run-dir
+        // copies below are.
+        clear_produce(prod)?;
+    }
 
     // -- diff the declared axes (Section 12 comparators) -----------------------
 
@@ -893,6 +971,7 @@ pub fn run_once(
                     &fixture_sha256,
                     &arguments,
                     &environment.digest,
+                    reference.produced.as_ref().zip(candidate.produced.as_ref()),
                 );
                 let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
                 let (outcome, response_bytes) = crate::comparators::run_external(
@@ -927,15 +1006,13 @@ pub fn run_once(
             None => {
                 // A built-in axis is compared in-process (the reference
                 // implementation of the same protocol): the extractor row's
-                // projection.
+                // projection, or the domain comparator's per-file/per-field
+                // divergences (filesystem.tree over the produced trees,
+                // bytes.wire over the raw streams, structured.state over the
+                // stdout JSON).
                 let builtin = crate::comparators::BuiltinKind::from_id(axis.as_str())
                     .expect("a non-declared axis was validated to be a built-in");
-                let (surface, raw_ref, raw_cand) = builtin.compare(&reference, &candidate);
-                if raw_ref != raw_cand {
-                    vec![(surface.map(str::to_string), raw_ref, raw_cand)]
-                } else {
-                    vec![]
-                }
+                builtin.compare(&reference, &candidate)
             }
         };
         for (surface, raw_ref, raw_cand) in projections {
@@ -1022,6 +1099,25 @@ pub fn run_once(
         .map_err(|e| FrfError::new(format!("cannot create {}: {e}", run_dir.display())))?;
     write_side_files(&run_dir, "reference", &reference_out, &reference)?;
     write_side_files(&run_dir, "candidate", &candidate_out, &candidate)?;
+    // The produced trees: the staged bytes are copied under the run (the
+    // transient produce path is already cleared), immutable and rehashed by
+    // verification.
+    if let Some(prod) = &reference.produced {
+        crate::produced::write_produced_dir(
+            &run_dir,
+            "reference",
+            &staging.dir.join("reference"),
+            &prod.files,
+        )?;
+    }
+    if let Some(prod) = &candidate.produced {
+        crate::produced::write_produced_dir(
+            &run_dir,
+            "candidate",
+            &staging.dir.join("candidate"),
+            &prod.files,
+        )?;
+    }
 
     // Fill in run id + axis hashes, then persist the immutable observation
     // records and their (open) endoduction tokens.
@@ -1444,6 +1540,8 @@ impl SideCapture {
             stdout_first_line_sha256: host::sha256_bytes(stdout_first_line.as_bytes()),
             stdout_sha256: host::sha256_bytes(&outcome.stdout),
             stderr_sha256: host::sha256_bytes(&outcome.stderr),
+            produced: None,
+            stdout_bytes: outcome.stdout.clone(),
         }
     }
 }

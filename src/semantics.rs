@@ -168,6 +168,15 @@ pub fn run_identity(p: &RunPreimage) -> Result<String> {
             "stderr_sha256": s.stderr_sha256,
             "stdout_first_line": s.stdout_first_line,
             "stderr_first_line": s.stderr_first_line,
+            "produced": s.produced.as_ref().map(|p| json!({
+                "schema_version": p.schema_version,
+                "manifest_sha256": p.manifest_sha256,
+                "files": p.files.iter().map(|f| json!({
+                    "path": f.path,
+                    "sha256": f.sha256,
+                    "executable": f.executable,
+                })).collect::<Vec<_>>(),
+            })),
         })
     };
     let doc = json!({
@@ -575,6 +584,7 @@ mod tests {
                 normalizers: vec![],
                 replay_scope: "single-run".into(),
             },
+            produce: None,
         }
     }
 
@@ -734,6 +744,8 @@ mod tests {
                 stdout_first_line_sha256: "0".repeat(64),
                 stdout_sha256: "0".repeat(64),
                 stderr_sha256: "0".repeat(64),
+                produced: None,
+                stdout_bytes: vec![],
             },
             candidate: SideCapture {
                 exit: "0".into(),
@@ -744,6 +756,8 @@ mod tests {
                 stdout_first_line_sha256: "0".repeat(64),
                 stdout_sha256: "0".repeat(64),
                 stderr_sha256: "0".repeat(64),
+                produced: None,
+                stdout_bytes: vec![],
             },
             residuals: vec![],
             evidence_refs: vec![],

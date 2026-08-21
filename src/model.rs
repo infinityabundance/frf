@@ -38,8 +38,13 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// EXECUTION PROFILE: which reference execution contract observed the run
 /// (`execution_profile` + the applied `capture_bounds`), so exact replay can
 /// require the same bounds and the receipt never guesses what the harness
-/// actually enforced.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v8";
+/// actually enforced. v9 binds the sides' PRODUCED ARTIFACTS (the
+/// filesystem-tree surface): when the court declares `produce`, each side's
+/// output directory is walked after execution and captured immutably —
+/// every produced file is copied under the run, hashed, and recorded in the
+/// side capture, so a court observes what its sides BUILD, not only what
+/// they print.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v9";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -223,9 +228,20 @@ pub const SCHEMA_SERIES: &str = "frf-series-v1";
 /// and the canonical JSON response it must produce on stdout. v2 adds
 /// `request_id` to the RESPONSE: the SHA-256 of the exact canonical request
 /// bytes the comparator received, so a response cryptographically names the
-/// request it answers (the court refuses a response that does not).
-pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v2";
+/// request it answers (the court refuses a response that does not). v3
+/// carries the sides' PRODUCED ARTIFACT TREES in the request context (the
+/// filesystem-tree surface): when the court declares `produce`, the request
+/// delivers each side's produced-file manifest (paths + content hashes), so
+/// an external comparator can compare what the sides BUILT, not only what
+/// they printed.
+pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v3";
 pub const SCHEMA_COMPARATOR_RESPONSE: &str = "frf-comparator-response-v2";
+
+/// The produced-artifact observation schema: one side's output tree as a
+/// canonical manifest (relative path → content hash + executable flag). The
+/// manifest's SHA-256 is the tree's observation identity; the raw files are
+/// copied under the run directory and rehashed by verification.
+pub const SCHEMA_PRODUCED: &str = "frf-produced-v1";
 
 /// The comparator INVOCATION evidence record: what was invoked, against
 /// which request, by which implementation, under which runner — written at
@@ -753,6 +769,26 @@ pub struct CourtSpec {
     pub candidate: CandidateSpec,
     pub fixture: FixtureSpec,
     pub admissibility_envelope: AdmissibilityEnvelope,
+    /// The produced-artifact clause: the sides write their OUTPUT to this
+    /// directory (working-directory-relative, transient — cleared between
+    /// sides and captured immutably into the run), and the harness observes
+    /// the produced tree (the filesystem-tree surface). Absent = the sides
+    /// are observed through their streams only.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub produce: Option<ProduceSpec>,
+}
+
+/// The produced-artifact clause. v0: one output directory per side,
+/// walked recursively after execution; every produced file is copied under
+/// the run, hashed, and recorded in the side capture. Symlinks are refused
+/// (a hostile or careless side cannot smuggle a link outside its output).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProduceSpec {
+    /// The output root each side writes (working-directory-relative, or
+    /// relative to the side's working directory under replay; the literal
+    /// `{output}` in the fixture arguments substitutes to this path).
+    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1045,7 +1081,7 @@ pub struct ArtifactIdentity {
     pub interpreter: Option<InterpreterIdentity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SideCapture {
     /// Exit code as a string, or `signal(<n>)` if terminated by a signal.
@@ -1059,6 +1095,68 @@ pub struct SideCapture {
     pub stdout_first_line_sha256: String,
     pub stdout_sha256: String,
     pub stderr_sha256: String,
+    /// The produced-artifact tree this side wrote (when the court declares
+    /// `produce`): every produced file's path + content hash. The raw files
+    /// are copied under the run directory and rehashed by verification.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub produced: Option<ProducedSide>,
+    /// The raw stdout bytes, retained IN MEMORY ONLY (never serialized — the
+    /// raw stream already lives as a capture file; the domain comparators
+    /// that parse it need the bytes, not just the hash). Excluded from
+    /// equality: the captured document defaults it to empty on load, and the
+    /// content identity is the recorded `stdout_sha256`.
+    #[serde(skip_serializing, default)]
+    pub stdout_bytes: Vec<u8>,
+}
+
+impl PartialEq for SideCapture {
+    /// The observed surface equality — every serialized field. The raw
+    /// stdout BYTES are not part of it (they are not serialized, and the
+    /// captured document loads with them empty); the recorded `stdout_sha256`
+    /// is the byte identity and IS compared.
+    fn eq(&self, other: &Self) -> bool {
+        self.exit == other.exit
+            && self.exit_sha256 == other.exit_sha256
+            && self.stderr_first_line == other.stderr_first_line
+            && self.stderr_first_line_sha256 == other.stderr_first_line_sha256
+            && self.stdout_first_line == other.stdout_first_line
+            && self.stdout_first_line_sha256 == other.stdout_first_line_sha256
+            && self.stdout_sha256 == other.stdout_sha256
+            && self.stderr_sha256 == other.stderr_sha256
+            && self.produced == other.produced
+    }
+}
+
+impl Eq for SideCapture {}
+
+impl SideCapture {
+    /// The raw stdout bytes (the domain comparators' input).
+    pub fn stdout(&self) -> &[u8] {
+        &self.stdout_bytes
+    }
+}
+
+/// One produced file: relative path, content hash, executable flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducedFile {
+    pub path: String,
+    pub sha256: String,
+    pub executable: bool,
+}
+
+/// One side's produced-artifact observation: the canonical manifest (sorted
+/// files) and its content address. The manifest formula is shared with the
+/// independent verifier, so the tree observation rederives cross-language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducedSide {
+    pub schema_version: String,
+    /// SHA-256 of the canonical manifest document (see
+    /// [`crate::produced::manifest_bytes`]).
+    pub manifest_sha256: String,
+    /// Sorted by path.
+    pub files: Vec<ProducedFile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,6 +1803,29 @@ pub struct ComparatorContext<'a> {
     pub fixture_sha256: &'a str,
     pub arguments: &'a [String],
     pub environment_digest: &'a str,
+    /// The sides' PRODUCED ARTIFACT TREES (when the court declares
+    /// `produce`): the manifests the comparator compares. Absent for
+    /// stream-only courts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub produced: Option<ProducedContext<'a>>,
+}
+
+/// The produced-artifact context delivered to a comparator: each side's
+/// manifest (paths + content hashes), so the comparator compares what the
+/// sides BUILT. v0 delivers the manifests only — raw-file access is a
+/// future extension.
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducedContext<'a> {
+    pub reference: ProducedSideContext<'a>,
+    pub candidate: ProducedSideContext<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducedSideContext<'a> {
+    pub manifest_sha256: &'a str,
+    pub files: &'a [ProducedFile],
 }
 
 /// The canonical response a comparator must produce on stdout.

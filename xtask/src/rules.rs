@@ -739,9 +739,11 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             .cloned()
             .unwrap_or_default();
         for (i, (resolved_arg, declared_arg)) in resolved.iter().zip(declared.iter()).enumerate() {
-            if as_str(resolved_arg) != as_str(declared_arg) && as_str(declared_arg) != "{fixture}" {
+            let is_substitution =
+                as_str(declared_arg) == "{fixture}" || as_str(declared_arg) == "{output}";
+            if as_str(resolved_arg) != as_str(declared_arg) && !is_substitution {
                 v.push(format!(
-                    "argv[{i}] {:?} is neither the declared argument nor a {{fixture}} substitution",
+                    "argv[{i}] {:?} is neither the declared argument nor a {{fixture}}/{{output}} substitution",
                     resolved_arg
                 ));
             }

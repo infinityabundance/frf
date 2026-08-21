@@ -1,12 +1,12 @@
 schema_version: frf-token-v1
 residual_id: cli-text-0003
-token: text/diagnostic-routing/first-line-token-change/open
+token: text/filesystem.tree-divergence/observed/open
 kind: text
-surface: diagnostic-routing
-authority: ref-cli-1.8.2
-magnitude: first-line-token-change
-scope: malformed-input
+surface: filesystem.tree-divergence
+authority: treegen-ref-1.0
+magnitude: observed
+scope: tree-build
 disposition: open
-next_court: cli-diagnostic-minimize
+next_court: none
 blocks_claims:
-- byte-identical diagnostics
+- tree-build filesystem.tree parity

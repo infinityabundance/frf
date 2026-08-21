@@ -174,6 +174,27 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             ] {
                 needed.insert(format!("captures/{run}/{side}.{f}"));
             }
+            // The PRODUCED ARTIFACT tree (the filesystem-tree surface): every
+            // produced file a side built, walked under the run.
+            let produced_root = bundle.join(format!("captures/{run}/produced/{side}"));
+            if produced_root.is_dir() {
+                let mut pending: Vec<std::path::PathBuf> = vec![produced_root];
+                while let Some(d) = pending.pop() {
+                    for entry in std::fs::read_dir(&d).unwrap().flatten() {
+                        let p = entry.path();
+                        if entry.file_type().unwrap().is_dir() {
+                            pending.push(p);
+                            continue;
+                        }
+                        let rel = p
+                            .strip_prefix(bundle)
+                            .unwrap()
+                            .to_string_lossy()
+                            .to_string();
+                        needed.insert(rel);
+                    }
+                }
+            }
         }
         needed.insert(format!("authorities/{}.yaml", as_str(&cap["authority"])));
         // Objects: walk the capture's typed evidence references (the generic

@@ -990,9 +990,8 @@ impl Store {
                         axis.as_str()
                     ))
                 })?;
-            let (_, raw_ref, raw_cand) =
-                builtin.compare(&resolution.reference, &resolution.candidate);
-            raw_ref == raw_cand
+            let divergences = builtin.compare(&resolution.reference, &resolution.candidate);
+            divergences.is_empty()
         };
         if !closes {
             return Err(FrfError::new(format!(

@@ -530,20 +530,43 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                         obs.axis
                     ))
                     })?;
-                let (ref_h, cand_h) = match builtin {
+                let hashes_ok = match builtin {
                     crate::comparators::BuiltinKind::Exit => {
-                        (&cap.reference.exit_sha256, &cap.candidate.exit_sha256)
+                        obs.raw_reference_hash == cap.reference.exit_sha256
+                            && obs.raw_candidate_hash == cap.candidate.exit_sha256
                     }
-                    crate::comparators::BuiltinKind::Stderr => (
-                        &cap.reference.stderr_first_line_sha256,
-                        &cap.candidate.stderr_first_line_sha256,
-                    ),
-                    crate::comparators::BuiltinKind::Stdout => (
-                        &cap.reference.stdout_first_line_sha256,
-                        &cap.candidate.stdout_first_line_sha256,
-                    ),
+                    crate::comparators::BuiltinKind::Stderr => {
+                        obs.raw_reference_hash == cap.reference.stderr_first_line_sha256
+                            && obs.raw_candidate_hash == cap.candidate.stderr_first_line_sha256
+                    }
+                    crate::comparators::BuiltinKind::Stdout => {
+                        obs.raw_reference_hash == cap.reference.stdout_first_line_sha256
+                            && obs.raw_candidate_hash == cap.candidate.stdout_first_line_sha256
+                    }
+                    // The domain surfaces' raw observation: the produced
+                    // tree's manifest hash, or the raw stdout stream's hash.
+                    crate::comparators::BuiltinKind::Tree => {
+                        let ref_h = cap
+                            .reference
+                            .produced
+                            .as_ref()
+                            .map(|p| p.manifest_sha256.as_str())
+                            .unwrap_or("");
+                        let cand_h = cap
+                            .candidate
+                            .produced
+                            .as_ref()
+                            .map(|p| p.manifest_sha256.as_str())
+                            .unwrap_or("");
+                        obs.raw_reference_hash == ref_h && obs.raw_candidate_hash == cand_h
+                    }
+                    crate::comparators::BuiltinKind::Bytes
+                    | crate::comparators::BuiltinKind::Json => {
+                        obs.raw_reference_hash == cap.reference.stdout_sha256
+                            && obs.raw_candidate_hash == cap.candidate.stdout_sha256
+                    }
                 };
-                if obs.raw_reference_hash != *ref_h || obs.raw_candidate_hash != *cand_h {
+                if !hashes_ok {
                     return Err(FrfError::new(format!(
                         "receipt {id}: observable {} raw hashes do not match the capture",
                         obs.axis
@@ -777,9 +800,10 @@ impl Receipt {
         }
 
         // The resolved argv and the declared arguments must correspond: v0
-        // courts resolve `{fixture}` to the snapshot path and pass everything
-        // else verbatim, so every resolved argument is either the declared
-        // argument or a `{fixture}` substitution.
+        // courts resolve `{fixture}` to the snapshot path, `{output}` to the
+        // declared produce path, and pass everything else verbatim, so every
+        // resolved argument is either the declared argument or a declared
+        // substitution.
         if let Some(f) = self.fixtures.first() {
             if f.arguments.len() != f.declared_arguments.len() {
                 fail(
@@ -793,9 +817,10 @@ impl Receipt {
                 .zip(f.declared_arguments.iter())
                 .enumerate()
             {
-                if resolved != declared && declared != "{fixture}" {
+                let is_substitution = declared == "{fixture}" || declared == "{output}";
+                if resolved != declared && !is_substitution {
                     fail(&mut violations, format!(
-                        "argv[{i}] {resolved:?} is neither the declared argument nor a {{fixture}} substitution (declared {declared:?})"
+                        "argv[{i}] {resolved:?} is neither the declared argument nor a {{fixture}}/{{output}} substitution (declared {declared:?})"
                     ));
                 }
             }
@@ -1443,6 +1468,7 @@ mod tests {
                 normalizers: vec![],
                 replay_scope: "single-run".into(),
             },
+            produce: None,
         };
         let semantic = crate::semantics::court_semantic_identity(
             &spec,

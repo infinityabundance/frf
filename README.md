@@ -51,7 +51,7 @@ Allow five minutes; it takes about five seconds.
 | verb | what it does |
 |---|---|
 | `frf authority admit PATH --name N --version V` | admits an executable reference (sha-256, platform), writes `authorities/N-V.yaml`; admission is once |
-| `frf court run MANIFEST.yaml [--repeat N] [--candidate-revisions P1,P2,…] [--authority-versions V1,V2,…] [--environment-point LABEL] [--time-point LABEL]` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit; writes `open` residuals + endoduction tokens for each declared-axis disagreement. Observable axes are PROTOCOL IDENTIFIERS (the built-ins are `exit`, `stderr`, `stdout`; any valid id can be declared) and each declared observable must be SERVED by a comparator: an in-binary registry row, or an EXTERNAL comparator program the manifest declares (`comparators:` — the extension protocol: canonical JSON request on stdin with base64 side streams, a response that must cryptographically name the request it answers, fail-closed interpretation). An externally served axis's canonical request + response + content-addressed invocation/result records are preserved under the run — the instrument is part of the evidence. One axis may be declared: `--repeat N` (re-execute N times — nondeterminism is the point), `--candidate-revisions` (one run per candidate artifact), `--authority-versions` (one run per admitted authority version), `--environment-point`/`--time-point` (this run is one point of the environment/time experiment at a declared coordinate; the series accumulates). A series court writes an `ExecutionSeries` (`series/<id>.yaml`, content-addressed — every append is a new immutable snapshot) and derives one residual TRAJECTORY per observed lineage (`trajectories/<lineage>.<coordinate-system>.<series>.yaml`): the ordered observations plus the deterministic drift/slew/localization/bands classification. The lineage identity (`FRF/RESIDUAL-LINEAGE/v1`) is stable across candidate revisions, authority versions, environments, and time — a trajectory records the MOVEMENT of a divergence, not merely the exact recurrence of one byte pattern. Runs never know which experiments reference them |
+| `frf court run MANIFEST.yaml [--repeat N] [--candidate-revisions P1,P2,…] [--authority-versions V1,V2,…] [--environment-point LABEL] [--time-point LABEL]` | hashes every artifact BEFORE executing, materializes immutable content-addressed snapshots under `objects/sha256/`, and executes THOSE; binds runner + comparator identity and the court's semantic identity at observation time; captures raw stdout/stderr/exit (and, with a `produce` clause, the sides' PRODUCED ARTIFACT TREES — the filesystem-tree surface: each side's output directory is walked after execution, every produced file copied under the run and hashed, so the court observes what its sides BUILD, not only what they print — `spec/produced-artifacts.md`); writes `open` residuals + endoduction tokens for each declared-axis disagreement. Observable axes are PROTOCOL IDENTIFIERS (the built-ins are `exit`, `stderr`, `stdout`, `filesystem.tree`, `bytes.wire`, `structured.state`; any valid id can be declared) and each declared observable must be SERVED by a comparator: an in-binary registry row, or an EXTERNAL comparator program the manifest declares (`comparators:` — the extension protocol: canonical JSON request on stdin with base64 side streams, a response that must cryptographically name the request it answers, fail-closed interpretation). An externally served axis's canonical request + response + content-addressed invocation/result records are preserved under the run — the instrument is part of the evidence. One axis may be declared: `--repeat N` (re-execute N times — nondeterminism is the point), `--candidate-revisions` (one run per candidate artifact), `--authority-versions` (one run per admitted authority version), `--environment-point`/`--time-point` (this run is one point of the environment/time experiment at a declared coordinate; the series accumulates). A series court writes an `ExecutionSeries` (`series/<id>.yaml`, content-addressed — every append is a new immutable snapshot) and derives one residual TRAJECTORY per observed lineage (`trajectories/<lineage>.<coordinate-system>.<series>.yaml`): the ordered observations plus the deterministic drift/slew/localization/bands classification. The lineage identity (`FRF/RESIDUAL-LINEAGE/v1`) is stable across candidate revisions, authority versions, environments, and time — a trajectory records the MOVEMENT of a divergence, not merely the exact recurrence of one byte pattern. Runs never know which experiments reference them |
 | `frf court minimize RESIDUAL_ID` | the routed minimizer (the residual's κ token routes `cli-exit-minimize`/`cli-diagnostic-minimize`): deterministic ddmin over the fixture's lines, holding the candidate, authority, comparator, and environment fixed, while the fixture shrinks. Every attempt is recorded in a content-addressed `ReductionRecord` (`reductions/<id>.yaml`); the final reproducer is court-verified (the residual's LINEAGE survives) and carries provenance back to the original residual. v0.1.22 reducer: text fixtures at line granularity (binary fixtures are refused honestly) |
 | `frf court challenge MANIFEST [--operators exit-class,stderr-first-line,…]` | the negative controls (spec/challenge.md): a passing court proves nothing unless it can SEE the defect classes it declares. For every built-in mutation operator whose targeted axis the court declares (default) or the requested set, the challenge runs the court against a MUTANT candidate — a deterministic wrapper of the admitted reference that alters exactly one observable dimension (`exit-class`, `stderr-first-line`, `stdout-first-line`; the wrapper resolves the reference relative to itself, so the mutant bytes are root-independent and rederivable) — and requires a divergence on the targeted axis and ONLY on it. Each challenge writes a content-addressed `CourtChallenge` (`challenges/<id>.yaml`; the verdicts `saw_defect`/`specificity_clean` rederive from the run, never from the file); the mutant runs are ordinary content-addressed runs that replay like any other. A court that is BLIND to a seeded defect, or conflates it with another axis, is refused — the records remain as evidence, the command exits non-zero |
 | `frf residual dispose ID --disposition D --reason "..."` | appends an immutable, content-addressed disposition EVENT to `residuals/<id>.events/` (`fixed \| intentional \| environmental \| oracle_version \| harness \| unknown`); a one-line reason is mandatory, `open` is not settable, and `fixed` requires `--resolution-run` — a court run that reran the same question under a compatible envelope and shows the residual no longer reproduces (a disposition is not evidence). Events are hash-chained: each carries its own `event_id` (SHA-256 of its content), its `parent_event_id`, and its `evidence_refs` (the resolution run). The observation file is never rewritten; the current disposition is the projection of the last event |
@@ -161,14 +161,17 @@ says no more than that receipt licenses.
 - **Corpus admission, version ladders, environment matrices, independent
   witness maps** — v0 proves the kernel on one authority, one candidate, one fixture.
 - **Observable axes are OPEN PROTOCOL IDENTIFIERS, not a closed enum** —
-  the built-in comparators remain `exit`, `stderr`, and `stdout` (first line
-  only); any valid lowercase identifier (`dns.wire`, `filesystem.tree`,
-  `tzif.bytes`, …) can be declared in the envelope and served by an
-  external comparator through the extension protocol, and residual kinds
-  are extensible identifiers too (the built-in classifiers are `exit` and
-  `text`; an external comparator's declaration names its own). The
-  evidence core runs observables without knowing what stdout, packets, or
-  filesystem trees are. Comparator identity is recorded in every receipt.
+  the in-binary registry serves SIX built-in comparators: the three
+  Section-12 CLI surfaces (`exit`, `stderr`, `stdout`) and three
+  domain-general surfaces (`filesystem.tree` over PRODUCED ARTIFACTS,
+  `bytes.wire` over the raw stdout stream, `structured.state` over stdout
+  JSON); any valid lowercase identifier (`dns.wire`, `tzif.bytes`, …) can
+  be declared in the envelope and served by an external comparator through
+  the extension protocol, and residual kinds are extensible identifiers
+  too (the built-in classifiers are `exit` and `text`; an external
+  comparator's declaration names its own). The evidence core runs
+  observables without knowing what stdout, packets, or filesystem trees
+  are. Comparator identity is recorded in every receipt.
 - **Comparator extension protocol** (`spec/comparator.md`): an observable
   axis can be served by an EXTERNAL program — any language — through a
   canonical stdin/stdout protocol (base64 raw streams, canonical JSON
@@ -247,6 +250,22 @@ says no more than that receipt licenses.
   axes await a mutation extension protocol), and claim admission does not
   yet REQUIRE challenge evidence — binding a claim's `requires[]` to the
   challenge records for its claimed axes is the natural next step.
+- **The first non-CLI courts exist** (Phase 8, `spec/produced-artifacts.md`
+  + `tests/noncli_courts.rs`): a court observes what its sides BUILD and
+  what they emit on ANY surface, not only CLI text. `produce` captures the
+  sides' output trees immutably (every produced file copied under the run,
+  hashed, recorded in the side capture; the manifest formula is shared with
+  the independent verifier) and the built-in `filesystem.tree` comparator
+  diffs them per path; `bytes.wire` compares the raw stdout stream
+  byte-exactly; `structured.state` diffs stdout JSON field by field
+  (residuals surfaced by JSON pointer); `timing.latency` is served by an
+  EXTERNAL envelope comparator through the extension protocol. The full
+  pipeline runs on every surface — capture, residuals, tokens, receipts,
+  claim gating, replay, bundles — and the golden demo now runs the
+  filesystem-tree court. v0 produced capture refuses symlinks and
+  non-regular files; a mutation operator for the domain surfaces (and
+  produced trees in the challenge battery) awaits the mutation extension
+  protocol.
 - **Residual trajectories are executable over five axes**: the repeat
   axis (`--repeat N`), the candidate-revision axis (`--candidate-revisions`),
   the authority-version axis (`--authority-versions`), and the

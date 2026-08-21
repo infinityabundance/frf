@@ -70,6 +70,24 @@ pub const SPECS: &[ComparatorSpec] = &[
         extractor: "stdout-first-line",
         residual_classifier: "text",
     },
+    ComparatorSpec {
+        id: "filesystem.tree",
+        relation: "eq",
+        extractor: "produced-tree",
+        residual_classifier: "text",
+    },
+    ComparatorSpec {
+        id: "bytes.wire",
+        relation: "eq",
+        extractor: "stdout-bytes",
+        residual_classifier: "text",
+    },
+    ComparatorSpec {
+        id: "structured.state",
+        relation: "eq",
+        extractor: "json-fields",
+        residual_classifier: "text",
+    },
 ];
 
 /// The registry row serving `id`, if the axis is a built-in.
@@ -241,15 +259,30 @@ pub fn interpret(
 // The built-in extractors (strongly typed helpers for the three built-ins)
 // ---------------------------------------------------------------------------
 
-/// The three in-binary comparator implementations, as strongly typed helpers.
+/// The in-binary comparator implementations, as strongly typed helpers.
 /// The evidence core never matches on these directly — the registry keys the
 /// comparison on the observable id — but the built-in extractors live here,
-/// next to their registry rows.
+/// next to their registry rows. Six built-ins: the three Section-12 CLI
+/// surfaces (exit, stderr, stdout) and three domain-general surfaces
+/// (filesystem.tree over PRODUCED ARTIFACTS, bytes.wire over the raw stdout
+/// stream, structured.state over stdout JSON).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinKind {
     Exit,
     Stderr,
     Stdout,
+    /// The filesystem-tree surface: compares the sides' PRODUCED ARTIFACT
+    /// trees (the `produce` clause) file by file. A court declaring this
+    /// axis MUST declare `produce`.
+    Tree,
+    /// The byte/wire surface: compares the sides' raw stdout streams
+    /// byte-exactly (base64 projections — lossy text decoding would miss a
+    /// divergence between two byte sequences that decode to the same text).
+    Bytes,
+    /// The structured-state surface: parses both sides' stdout as JSON and
+    /// compares field by field (residual per differing field, surfaced by
+    /// its JSON pointer).
+    Json,
 }
 
 impl BuiltinKind {
@@ -259,6 +292,9 @@ impl BuiltinKind {
             "exit" => Some(BuiltinKind::Exit),
             "stderr" => Some(BuiltinKind::Stderr),
             "stdout" => Some(BuiltinKind::Stdout),
+            "filesystem.tree" => Some(BuiltinKind::Tree),
+            "bytes.wire" => Some(BuiltinKind::Bytes),
+            "structured.state" => Some(BuiltinKind::Json),
             _ => None,
         }
     }
@@ -268,6 +304,9 @@ impl BuiltinKind {
             BuiltinKind::Exit => "exit",
             BuiltinKind::Stderr => "stderr",
             BuiltinKind::Stdout => "stdout",
+            BuiltinKind::Tree => "filesystem.tree",
+            BuiltinKind::Bytes => "bytes.wire",
+            BuiltinKind::Json => "structured.state",
         }
     }
 
@@ -277,29 +316,185 @@ impl BuiltinKind {
             BuiltinKind::Exit => None,
             BuiltinKind::Stderr => Some("first-diagnostic-line"),
             BuiltinKind::Stdout => Some("first-stdout-line"),
+            BuiltinKind::Tree | BuiltinKind::Bytes | BuiltinKind::Json => None,
         }
     }
 
-    /// The raw projection this built-in extracts from one side.
+    /// The raw projection this built-in extracts from one side (the
+    /// single-surface built-ins only; the domain comparators dispatch in
+    /// [`BuiltinKind::compare`]).
     pub fn project(self, side: &SideCapture) -> String {
         match self {
             BuiltinKind::Exit => side.exit.clone(),
             BuiltinKind::Stderr => side.stderr_first_line.clone(),
             BuiltinKind::Stdout => side.stdout_first_line.clone(),
+            BuiltinKind::Bytes | BuiltinKind::Json | BuiltinKind::Tree => {
+                unreachable!("domain comparators dispatch in compare()")
+            }
         }
     }
 
-    /// Compare two sides: `(surface, raw_reference, raw_candidate)`.
+    /// Compare two sides: every divergence as
+    /// `(surface, raw_reference, raw_candidate)`. The single-surface
+    /// built-ins (exit, stderr, stdout, bytes) yield at most one; the
+    /// domain comparators (filesystem.tree, structured.state) yield one per
+    /// differing file or field.
     pub fn compare(
         self,
         reference: &SideCapture,
         candidate: &SideCapture,
-    ) -> (Option<&'static str>, String, String) {
-        (
-            self.surface(),
-            self.project(reference),
-            self.project(candidate),
-        )
+    ) -> Vec<(Option<String>, String, String)> {
+        match self {
+            BuiltinKind::Tree => {
+                // One residual per differing produced file: the surface is
+                // the relative path, the raw projections are the content
+                // hashes (or `<absent>` when the file exists on one side
+                // only). No produced observation on either side is an empty
+                // tree: both produced nothing, and nothing diverges.
+                let ref_files = reference
+                    .produced
+                    .as_ref()
+                    .map(|p| p.files.as_slice())
+                    .unwrap_or(&[]);
+                let cand_files = candidate
+                    .produced
+                    .as_ref()
+                    .map(|p| p.files.as_slice())
+                    .unwrap_or(&[]);
+                let mut out = Vec::new();
+                let mut i = 0;
+                let mut j = 0;
+                while i < ref_files.len() || j < cand_files.len() {
+                    let ref_f = ref_files.get(i);
+                    let cand_f = cand_files.get(j);
+                    let (path, ref_sha, cand_sha) = match (ref_f, cand_f) {
+                        (Some(r), Some(c)) if r.path == c.path => {
+                            i += 1;
+                            j += 1;
+                            (r.path.clone(), r.sha256.clone(), c.sha256.clone())
+                        }
+                        (Some(r), Some(c)) if r.path < c.path => {
+                            i += 1;
+                            (r.path.clone(), r.sha256.clone(), "<absent>".to_string())
+                        }
+                        (Some(r), _) => {
+                            i += 1;
+                            (r.path.clone(), r.sha256.clone(), "<absent>".to_string())
+                        }
+                        (_, Some(c)) => {
+                            j += 1;
+                            (c.path.clone(), "<absent>".to_string(), c.sha256.clone())
+                        }
+                        (None, None) => break,
+                    };
+                    if ref_sha != cand_sha {
+                        out.push((Some(format!("path:{path}")), ref_sha, cand_sha));
+                    }
+                }
+                out
+            }
+            BuiltinKind::Json => {
+                // Parse both sides' stdout as JSON; one residual per
+                // differing field (surface = the JSON pointer), or a single
+                // parse residual when a side is not valid JSON.
+                let ref_text = String::from_utf8_lossy(reference.stdout()).into_owned();
+                let cand_text = String::from_utf8_lossy(candidate.stdout()).into_owned();
+                let ref_val = serde_json::from_str::<serde_json::Value>(&ref_text);
+                let cand_val = serde_json::from_str::<serde_json::Value>(&cand_text);
+                match (ref_val, cand_val) {
+                    (Ok(r), Ok(c)) if r == c => vec![],
+                    (Ok(r), Ok(c)) => {
+                        let mut out = Vec::new();
+                        diff_json(&mut out, "$", &r, &c);
+                        out
+                    }
+                    (Err(_), Err(_)) => vec![],
+                    (Err(_), Ok(_)) => vec![(Some("json-parse".to_string()), ref_text, cand_text)],
+                    (Ok(_), Err(_)) => vec![(Some("json-parse".to_string()), ref_text, cand_text)],
+                }
+            }
+            // The byte/wire surface: the raw stdout stream, compared by
+            // content identity (the stream hash IS the byte-identity — no
+            // lossy decoding can miss a divergence).
+            BuiltinKind::Bytes => {
+                let raw_ref = reference.stdout_sha256.clone();
+                let raw_cand = candidate.stdout_sha256.clone();
+                if raw_ref != raw_cand {
+                    vec![(None, raw_ref, raw_cand)]
+                } else {
+                    vec![]
+                }
+            }
+            other => {
+                let raw_ref = other.project(reference);
+                let raw_cand = other.project(candidate);
+                if raw_ref != raw_cand {
+                    vec![(other.surface().map(str::to_string), raw_ref, raw_cand)]
+                } else {
+                    vec![]
+                }
+            }
+        }
+    }
+}
+
+/// Field-level JSON diff: one `(surface, raw_ref, raw_cand)` per differing
+/// leaf, surfaced by JSON pointer (`$.a.b[2]`).
+fn diff_json(
+    out: &mut Vec<(Option<String>, String, String)>,
+    pointer: &str,
+    reference: &serde_json::Value,
+    candidate: &serde_json::Value,
+) {
+    match (reference, candidate) {
+        (serde_json::Value::Object(r), serde_json::Value::Object(c)) => {
+            let mut keys: Vec<&String> = r.keys().chain(c.keys()).collect();
+            keys.sort();
+            keys.dedup();
+            for k in keys {
+                let sub = format!("{pointer}.{k}");
+                match (r.get(k), c.get(k)) {
+                    (Some(rv), Some(cv)) => diff_json(out, &sub, rv, cv),
+                    (Some(rv), None) => out.push((
+                        Some(sub.clone()),
+                        serde_json::to_string(rv).unwrap_or_default(),
+                        "<absent>".to_string(),
+                    )),
+                    (None, Some(cv)) => out.push((
+                        Some(sub.clone()),
+                        "<absent>".to_string(),
+                        serde_json::to_string(cv).unwrap_or_default(),
+                    )),
+                    (None, None) => {}
+                }
+            }
+        }
+        (serde_json::Value::Array(r), serde_json::Value::Array(c)) => {
+            let n = r.len().max(c.len());
+            for i in 0..n {
+                let sub = format!("{pointer}[{i}]");
+                match (r.get(i), c.get(i)) {
+                    (Some(rv), Some(cv)) => diff_json(out, &sub, rv, cv),
+                    (Some(rv), None) => out.push((
+                        Some(sub.clone()),
+                        serde_json::to_string(rv).unwrap_or_default(),
+                        "<absent>".to_string(),
+                    )),
+                    (None, Some(cv)) => out.push((
+                        Some(sub.clone()),
+                        "<absent>".to_string(),
+                        serde_json::to_string(cv).unwrap_or_default(),
+                    )),
+                    (None, None) => {}
+                }
+            }
+        }
+        (r, c) if r == c => {}
+        (r, c) => out.push((
+            Some(pointer.to_string()),
+            serde_json::to_string(r).unwrap_or_default(),
+            serde_json::to_string(c).unwrap_or_default(),
+        )),
     }
 }
 
@@ -322,6 +517,10 @@ pub fn build_request<'a>(
     fixture_sha256: &'a str,
     arguments: &'a [String],
     environment_digest: &'a str,
+    produced: Option<(
+        &'a crate::model::ProducedSide,
+        &'a crate::model::ProducedSide,
+    )>,
 ) -> crate::model::ComparatorRequest<'a> {
     crate::model::ComparatorRequest {
         schema_version: crate::model::SCHEMA_COMPARATOR_REQUEST,
@@ -341,6 +540,16 @@ pub fn build_request<'a>(
             fixture_sha256,
             arguments,
             environment_digest,
+            produced: produced.map(|(r, c)| crate::model::ProducedContext {
+                reference: crate::model::ProducedSideContext {
+                    manifest_sha256: &r.manifest_sha256,
+                    files: &r.files,
+                },
+                candidate: crate::model::ProducedSideContext {
+                    manifest_sha256: &c.manifest_sha256,
+                    files: &c.files,
+                },
+            }),
         },
     }
 }
@@ -588,6 +797,8 @@ mod tests {
             stdout_first_line_sha256: "c".repeat(64),
             stdout_sha256: "d".repeat(64),
             stderr_sha256: "e".repeat(64),
+            produced: None,
+            stdout_bytes: vec![],
         };
         let candidate = SideCapture {
             exit: "1".into(),
@@ -598,21 +809,21 @@ mod tests {
             stdout_first_line_sha256: "c".repeat(64),
             stdout_sha256: "h".repeat(64),
             stderr_sha256: "i".repeat(64),
+            produced: None,
+            stdout_bytes: vec![],
         };
-        let (surface, raw_ref, raw_cand) = BuiltinKind::Exit.compare(&reference, &candidate);
-        assert_eq!(surface, None);
-        assert_eq!((raw_ref.as_str(), raw_cand.as_str()), ("2", "1"));
-        let (surface, raw_ref, raw_cand) = BuiltinKind::Stderr.compare(&reference, &candidate);
-        assert_eq!(surface, Some("first-diagnostic-line"));
+        let divergences = BuiltinKind::Exit.compare(&reference, &candidate);
+        assert_eq!(divergences, vec![(None, "2".to_string(), "1".to_string())]);
+        let divergences = BuiltinKind::Stderr.compare(&reference, &candidate);
         assert_eq!(
-            (raw_ref.as_str(), raw_cand.as_str()),
-            ("ref diag", "cand diag")
+            divergences,
+            vec![(
+                Some("first-diagnostic-line".to_string()),
+                "ref diag".to_string(),
+                "cand diag".to_string()
+            )]
         );
-        let (surface, raw_ref, raw_cand) = BuiltinKind::Stdout.compare(&reference, &candidate);
-        assert_eq!(surface, Some("first-stdout-line"));
-        assert_eq!(
-            (raw_ref.as_str(), raw_cand.as_str()),
-            ("ref out", "ref out")
-        );
+        let divergences = BuiltinKind::Stdout.compare(&reference, &candidate);
+        assert_eq!(divergences, vec![]);
     }
 }

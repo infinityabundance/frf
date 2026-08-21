@@ -1,0 +1,38 @@
+# Court declaration for the first NON-CLI court: the filesystem-tree
+# surface. The sides are tree BUILDERS, not text printers — each writes its
+# output tree to the declared produce path, and the harness captures the
+# produced trees immutably (every file copied under the run, hashed,
+# recorded in the side capture). The built-in filesystem.tree comparator
+# diffs the produced files per path. This is source — a declaration — not
+# tool output.
+#
+# The produce path is transient (cleared between sides, never evidence); the
+# captured trees live under the run. The candidate writes src/main.c with
+# different content and drops build/config — the divergences this court must
+# see.
+court:
+  id: fs-tree-build
+  question: >-
+    For the build spec in fixture family tree-build, does the candidate
+    produce the same filesystem tree as the reference?
+  falsifier: >-
+    The candidate's produced tree diverges from the reference's on some
+    path or file content.
+  authority: treegen-ref-1.0
+  candidate:
+    name: treegen-cand
+    version_or_commit: "0.1.0"
+    build_profile: debug
+    path: golden/treegen-cand.sh
+  fixture:
+    id: tree-spec.conf
+    path: frf/courts/fs-tree-build/fixtures/tree-spec.conf
+    arguments: ["--spec", "{fixture}", "--out", "{output}"]
+  admissibility_envelope:
+    fixture_family: tree-build
+    platforms: ["x86_64-linux"]
+    observables: [filesystem.tree]
+    normalizers: []
+    replay_scope: single-run
+  produce:
+    path: golden/work/tree-out/

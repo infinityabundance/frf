@@ -1,0 +1,12 @@
+schema_version: frf-token-v1
+residual_id: cli-text-0005
+token: text/diagnostic-routing/first-line-token-change/open
+kind: text
+surface: diagnostic-routing
+authority: ref-cli-1.8.2
+magnitude: first-line-token-change
+scope: malformed-input
+disposition: open
+next_court: cli-diagnostic-minimize
+blocks_claims:
+- byte-identical diagnostics

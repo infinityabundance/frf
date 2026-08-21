@@ -6,7 +6,7 @@ the SAME question while being a completely different implementation (a Python
 comparator, not the frf executable).
 
 Protocol (spec/comparator.md): reads a canonical JSON
-frf-comparator-request-v2 on stdin, writes a canonical JSON
+frf-comparator-request-v3 on stdin, writes a canonical JSON
 frf-comparator-response-v2 on stdout. The raw side streams arrive base64.
 
 The response MUST echo `request_id` — the SHA-256 of the exact request bytes
@@ -20,7 +20,7 @@ import sys
 
 raw = sys.stdin.buffer.read()
 req = json.loads(raw.decode("utf-8"))
-assert req["schema_version"] == "frf-comparator-request-v2", req
+assert req["schema_version"] == "frf-comparator-request-v3", req
 assert req["axis"] == "stderr", req
 request_id = hashlib.sha256(raw).hexdigest()
 

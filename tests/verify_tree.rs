@@ -407,22 +407,35 @@ fn residuals_and_tokens_are_self_consistent() {
                 assert_eq!(r.axis, ObservableId::exit());
                 assert_eq!(r.surface, None, "exit residual must not carry a surface");
             }
-            "text" => {
-                assert!(
-                    matches!(r.axis.as_str(), "stderr" | "stdout"),
-                    "text residual on unexpected axis {:?}",
-                    r.axis.as_str()
-                );
-                assert_eq!(
+            "text" => match r.axis.as_str() {
+                "stderr" => assert_eq!(
                     r.surface.as_deref(),
-                    match r.axis.as_str() {
-                        "stderr" => Some("first-diagnostic-line"),
-                        "stdout" => Some("first-stdout-line"),
-                        _ => unreachable!(),
-                    },
+                    Some("first-diagnostic-line"),
                     "surface must match the axis"
-                );
-            }
+                ),
+                "stdout" => assert_eq!(
+                    r.surface.as_deref(),
+                    Some("first-stdout-line"),
+                    "surface must match the axis"
+                ),
+                // The domain surfaces (Phase 8): the produced-tree comparator
+                // surfaces divergences by path, the JSON comparator by JSON
+                // pointer, the byte/wire comparator carries no surface.
+                "filesystem.tree" => assert!(
+                    r.surface.as_deref().is_some_and(|s| s.starts_with("path:")),
+                    "tree residual must be surfaced by path, got {:?}",
+                    r.surface
+                ),
+                "bytes.wire" => assert_eq!(r.surface, None),
+                axis => {
+                    // structured.state and any externally served axis: the
+                    // surface is whatever the comparator declared.
+                    assert!(
+                        matches!(axis, "structured.state" | "timing.latency"),
+                        "text residual on unexpected axis {axis:?}"
+                    );
+                }
+            },
             other => panic!("unexpected residual kind {other:?}"),
         }
         assert_eq!(
@@ -702,6 +715,23 @@ fn receipts_are_self_consistent() {
                             frf::comparators::BuiltinKind::Stdout => (
                                 cap.reference.stdout_first_line_sha256.clone(),
                                 cap.candidate.stdout_first_line_sha256.clone(),
+                            ),
+                            frf::comparators::BuiltinKind::Tree => (
+                                cap.reference
+                                    .produced
+                                    .as_ref()
+                                    .map(|p| p.manifest_sha256.clone())
+                                    .unwrap_or_default(),
+                                cap.candidate
+                                    .produced
+                                    .as_ref()
+                                    .map(|p| p.manifest_sha256.clone())
+                                    .unwrap_or_default(),
+                            ),
+                            frf::comparators::BuiltinKind::Bytes
+                            | frf::comparators::BuiltinKind::Json => (
+                                cap.reference.stdout_sha256.clone(),
+                                cap.candidate.stdout_sha256.clone(),
                             ),
                         };
                         (ref_h, cand_h, None, None)

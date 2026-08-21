@@ -54,6 +54,22 @@ step "2b. the negative controls — the court must prove it can see"
 echo "-- exit-class mutant and stderr-first-line mutant: the court must see each seeded defect and nothing else"
 "$FRF_BIN" --root "$ROOT" court challenge frf/courts/cli-malformed-input/manifest.yaml
 
+step "2c. the first non-CLI court — the filesystem tree"
+# The court observes what its sides BUILD, not what they print: each side
+# writes its output tree to the declared produce path (golden/work/tree-out/,
+# transient), the harness captures the produced trees immutably under the
+# run, and the built-in filesystem.tree comparator diffs the produced files
+# per path. The candidate writes src/main.c differently and drops
+# build/config — the two divergences the court must see.
+echo "-- treegen-ref vs treegen-cand: two produced files diverge, surfaced by path"
+"$FRF_BIN" --root "$ROOT" authority admit golden/treegen-ref.sh --name treegen-ref --version 1.0
+TREE_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/fs-tree-build/manifest.yaml)
+echo "tree run: $TREE_RUN"
+echo "-- the produced trees are captured under the run; the tree observation replays byte-for-byte"
+"$FRF_BIN" --root "$ROOT" replay "$TREE_RUN" --policy exact
+TREE_RECEIPT=$("$FRF_BIN" --root "$ROOT" receipt emit "$TREE_RUN")
+echo "tree receipt: $TREE_RECEIPT"
+
 step "3. try to compile a claim while both residuals are open (must be refused)"
 RECEIPT_OPEN=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")
 if "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_OPEN" 2>golden/work/refusal.txt; then

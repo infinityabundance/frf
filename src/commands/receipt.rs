@@ -76,6 +76,28 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                                 capture.reference.stdout_first_line_sha256.clone(),
                                 capture.candidate.stdout_first_line_sha256.clone(),
                             ),
+                            // The domain surfaces' raw observation: the
+                            // produced tree's manifest hash, or the raw stdout
+                            // stream's hash.
+                            crate::comparators::BuiltinKind::Tree => (
+                                capture
+                                    .reference
+                                    .produced
+                                    .as_ref()
+                                    .map(|p| p.manifest_sha256.clone())
+                                    .unwrap_or_default(),
+                                capture
+                                    .candidate
+                                    .produced
+                                    .as_ref()
+                                    .map(|p| p.manifest_sha256.clone())
+                                    .unwrap_or_default(),
+                            ),
+                            crate::comparators::BuiltinKind::Bytes
+                            | crate::comparators::BuiltinKind::Json => (
+                                capture.reference.stdout_sha256.clone(),
+                                capture.candidate.stdout_sha256.clone(),
+                            ),
                         };
                         (ref_h, cand_h, None, None)
                     }

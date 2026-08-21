@@ -1,16 +1,16 @@
 # The comparator extension protocol
 
-*Version: `frf-comparator-request-v2` / `frf-comparator-response-v2`
+*Version: `frf-comparator-request-v3` / `frf-comparator-response-v2`
 (`frf-comparator-invocation-v1` / `frf-comparator-result-v1` for the
 preserved invocation evidence).*
 
 An observable axis is served by a comparator RELATION. The reference
-implementation ships three in-binary comparators (`exit`, `stderr`,
-`stdout` — see `src/comparators.rs`), but a comparator is a *protocol
-participant*, not Rust code: any program that speaks this protocol can serve
-an axis, so a Python packet comparator, a Go filesystem comparator, or a
-domain tool can emit the same FRF residual structure without changing the
-core.
+implementation ships six in-binary comparators (`exit`, `stderr`, `stdout`,
+`filesystem.tree`, `bytes.wire`, `structured.state` — see
+`src/comparators.rs`), but a comparator is a *protocol participant*, not
+Rust code: any program that speaks this protocol can serve an axis, so a
+Python packet comparator, a Go filesystem comparator, or a domain tool can
+emit the same FRF residual structure without changing the core.
 
 **Observable axes are protocol identifiers, not a closed enum.** Any valid
 lowercase identifier (`dns.wire`, `filesystem.tree`, `tzif.bytes`,
@@ -74,7 +74,7 @@ Rules:
 
 ```json
 {
-  "schema_version": "frf-comparator-request-v2",
+  "schema_version": "frf-comparator-request-v3",
   "comparator": {
     "id": "stderr",
     "relation_id": "eq",
@@ -93,6 +93,12 @@ Rules:
   }
 }
 ```
+
+v3 adds an optional `context.produced` block (present only when the court
+declares `produce` — see `spec/produced-artifacts.md`): each side's
+produced-file manifest (paths + content hashes), so a comparator can compare
+what the sides BUILT, not only what they printed. v2 requests (without the
+block) remain the same bytes.
 
 The raw side streams are delivered base64 so the protocol is byte-exact. The
 comparator MUST verify `comparator.specification_hash` against the spec it
