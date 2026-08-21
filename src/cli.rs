@@ -177,16 +177,34 @@ pub enum BundleCmd {
     Export {
         /// Receipt id (printed by `frf receipt emit`)
         receipt: String,
-        /// Output bundle directory (default: bundles/<receipt-id>.frf)
-        #[arg(long, value_name = "DIR")]
+        /// Output path: a bundle directory, or the single-file archive with
+        /// --single (default: bundles/<receipt-id>.frf)
+        #[arg(long, value_name = "PATH")]
         output: Option<PathBuf>,
+        /// Seal the bundle as ONE deterministic tar archive (the manifest
+        /// inside declares the single-tar container)
+        #[arg(long)]
+        single: bool,
     },
     /// Verify a bundle: prove every inventory file, recompute the receipt's
     /// required closure, and verify the receipt against the bundled evidence
     /// alone — no original source tree or FRF installation needed
     Verify {
-        /// Path to the bundle directory (e.g. bundles/<receipt-id>.frf)
+        /// Path to the bundle: a directory, or a single-file archive
         path: PathBuf,
+    },
+    /// Replay a bundle: re-execute its snapshotted authority + candidate
+    /// with the captured argv under a checked environment, from the bundle
+    /// ALONE (no original source tree, no exporting installation). The
+    /// bundle is verified against itself first; exact replay also requires
+    /// the same execution provenance, semantic admits and reports drift
+    Replay {
+        /// Path to the bundle: a directory, or a single-file archive
+        path: PathBuf,
+        /// Reproduction policy: `exact` (same execution provenance, default)
+        /// or `semantic` (same bounded observation, provenance drift reported)
+        #[arg(long, value_name = "exact|semantic", default_value = "exact")]
+        policy: String,
     },
 }
 

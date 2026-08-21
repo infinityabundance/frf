@@ -1,6 +1,6 @@
 [package]
 name = "frf"
-version = "0.1.24"
+version = "0.1.25"
 edition = "2021"
 description = "Minimal reference implementation of the Forensic Residual Framework kernel: authority -> court -> capture -> residual -> endoduction -> disposition -> receipt -> claim."
 license = "MIT OR Apache-2.0"
@@ -23,11 +23,17 @@ sha2 = "0.10"
 # Comparator extension protocol: raw side streams are passed to external
 # comparator programs base64-encoded inside canonical JSON requests.
 base64 = "0.22"
+# Single-file bundles: the OpenReceipt closure sealed as one deterministic
+# tar archive (the manifest inside declares the container).
+tar = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
+# Integration tests re-pack tampered archives to prove the single-file
+# bundle's hash sealing (the same `tar` crate the engine ships).
+tar = "0.4"
 # No jsonschema dev-dependency: every released version resolves url to 2.5.x,
 # which unconditionally enables idna's `compiled_data` feature -> ICU
 # (idna_adapter 1.2.2 and icu_* 2.3.0 require rustc 1.86/1.88), breaking the

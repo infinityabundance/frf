@@ -223,7 +223,13 @@ fn provenance_drift(store: &Store, capture: &CaptureManifest) -> Result<Vec<Stri
     Ok(drift)
 }
 
-pub fn run(store: &Store, id: &str, policy_str: &str) -> Result<()> {
+/// Replay a run or receipt id from the store. `side_cwd` is the working
+/// directory the sides execute under: tree replay passes the invocation cwd
+/// (the recorded argv paths resolve against the tree), while bundle replay
+/// passes the reconstructed invocation root, so recorded root-relative argv
+/// paths resolve to the bundle's own objects — the sides never silently read
+/// the surrounding tree.
+pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result<()> {
     let policy = ReplayPolicy::parse(policy_str)?;
     // The name is a claim until recomputed: a run id must rederive its run
     // identity, and a receipt id must verify (content-addressed, semantically
@@ -298,8 +304,11 @@ pub fn run(store: &Store, id: &str, policy_str: &str) -> Result<()> {
     store.verified_object_bytes(&capture.fixture_sha256)?;
 
     // -- execute the exact captured argv ------------------------------------
-    let reference_out = host::run_process(&authority_snapshot, &capture.arguments)?;
-    let candidate_out = host::run_process(&candidate_snapshot, &capture.arguments)?;
+    // The sides run from `side_cwd`: bundle replay reconstructs the
+    // invocation root there, so the recorded root-relative argv paths
+    // resolve to the bundle's own verified objects.
+    let reference_out = host::run_process_in(&authority_snapshot, &capture.arguments, side_cwd)?;
+    let candidate_out = host::run_process_in(&candidate_snapshot, &capture.arguments, side_cwd)?;
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
 
@@ -392,6 +401,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str) -> Result<()> {
                     &axis,
                     &request_bytes,
                     &request_cid,
+                    side_cwd,
                 )?;
                 let outcome_str = match &outcome {
                     crate::comparators::ComparatorOutcome::Equivalent => "equivalent",

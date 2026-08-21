@@ -68,6 +68,78 @@ fn as_str(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
+/// A temp directory that removes itself on drop (single-file bundles are
+/// verified from an extraction; the archive is never mutated).
+struct TempRoot(std::path::PathBuf);
+
+impl TempRoot {
+    fn new() -> TempRoot {
+        let dir = std::env::temp_dir().join(format!(
+            "frf-xtask-bundle-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir)
+            .unwrap_or_else(|e| panic!("cannot create {}: {e}", dir.display()));
+        TempRoot(dir)
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Extract a single-file bundle's tar archive into `root`, refusing hostile
+/// archives the same way the reference engine does: escaped or absolute
+/// paths, links, and unbounded extractions.
+fn extract_tar(bytes: &[u8], root: &Path) {
+    let mut archive = tar::Archive::new(bytes);
+    let entries = archive
+        .entries()
+        .unwrap_or_else(|e| panic!("not a readable single-file bundle: {e}"));
+    let mut total: u64 = 0;
+    let mut count: usize = 0;
+    for entry in entries {
+        let mut entry = entry.unwrap_or_else(|e| panic!("single-file bundle is corrupt: {e}"));
+        let path = entry
+            .path()
+            .unwrap_or_else(|e| panic!("single-file bundle is corrupt: {e}"))
+            .into_owned();
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            panic!("single-file bundle refuses entry with path {path:?}");
+        }
+        let etype = entry.header().entry_type();
+        if etype.is_symlink() || etype.is_hard_link() {
+            panic!("single-file bundle refuses link entry {path:?}");
+        }
+        if !etype.is_file() && !etype.is_dir() {
+            panic!("single-file bundle refuses entry {path:?} of unsupported type");
+        }
+        count += 1;
+        if count > 10_000 {
+            panic!("single-file bundle exceeds the 10 000-entry ceiling");
+        }
+        if etype.is_file() {
+            total = total.saturating_add(entry.size());
+            if total > 1 << 30 {
+                panic!("single-file bundle exceeds the 1 GiB extraction ceiling");
+            }
+        }
+        entry
+            .unpack_in(root)
+            .unwrap_or_else(|e| panic!("cannot extract {}: {e}", path.display()));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bundle verification
 // ---------------------------------------------------------------------------
@@ -235,13 +307,20 @@ fn residual_lineage_of(bundle: &Path, record: &Value, cap: &Value) -> String {
 }
 
 /// Verify a bundle against itself. Panics (exit 1) on the first violation;
-/// every check names what failed.
-fn verify_bundle(bundle: &Path) -> rules::ClaimIr {
+/// every check names what failed. `container` is how the bundle was opened
+/// (directory or single-tar) and must match the manifest's declaration.
+fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     let manifest = load_json(&safe_rel(bundle, "manifest.json"));
-    if as_str(&manifest["schema_version"]) != "frf-bundle-v2" {
+    if as_str(&manifest["schema_version"]) != "frf-bundle-v3" {
         panic!(
             "unsupported bundle schema version {:?}",
             manifest["schema_version"]
+        );
+    }
+    let declared = manifest["container"].as_str().unwrap_or("<missing>");
+    if declared != container {
+        panic!(
+            "bundle container mismatch: the manifest declares {declared:?} but the bundle is a {container}"
         );
     }
     let receipt_id = as_str(&manifest["receipt_id"]).to_string();
@@ -717,7 +796,17 @@ fn main() {
     let result = std::panic::catch_unwind(|| match args[1].as_str() {
         "verify" => match args[2].as_str() {
             "bundle" => {
-                let _ = verify_bundle(Path::new(&args[3]));
+                let path = Path::new(&args[3]);
+                if path.is_file() {
+                    // A single-file bundle: verify from a temp extraction;
+                    // the archive itself is never mutated.
+                    let bytes = read(path);
+                    let temp = TempRoot::new();
+                    extract_tar(&bytes, &temp.0);
+                    let _ = verify_bundle(&temp.0, "single-tar");
+                } else {
+                    let _ = verify_bundle(path, "directory");
+                }
             }
             "corpus" => verify_corpus(Path::new(&args[3])),
             other => {

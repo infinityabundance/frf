@@ -236,12 +236,14 @@ same bundles as the reference engine:
   canonical bytes and pinned hashes (`valid/` + `canonical/` + `hashes/`),
   structural refusals (`invalid/` — including duplicate property names and
   unknown properties), and semantic refusals (`invalid-semantic/`).
-- **Bundle.** `cargo xtask verify bundle <bundle.frf/>` verifies a bundle
-  against itself — manifest hash proof, receipt content-addressing,
-  run-identity rederivation, side-file rehash, event-chain/sign/token
-  rederivation (the drift/slew classification REDERIVES from the trajectory
-  observations), resolution edges, closure completeness — and derives the
-  admissible Claim IR the claim compiler would license.
+- **Bundle.** `cargo xtask verify bundle <bundle.frf>` verifies a bundle
+  against itself — manifest hash proof, container/evidence-root checks,
+  receipt content-addressing, run-identity rederivation, side-file rehash,
+  event-chain/sign/token rederivation (the drift/slew classification
+  REDERIVES from the trajectory observations), resolution edges, closure
+  completeness — and derives the admissible Claim IR the claim compiler
+  would license. Both container forms are accepted: a directory, or a
+  single-file archive (verified from a temp extraction, like the engine).
 
 CI runs both engines against both oracles (the Rust suite in
 `tests/conformance.rs` and `tests/independent.rs`, the verifier in the demo
@@ -256,9 +258,10 @@ canonical-JSON manifest:
 
 ```text
 bundle.frf/
-  manifest.json        frf-bundle-v2: schema_version, receipt_id, run,
-                       created_by, and the content-addressed inventory
-                       (path, sha256, kind per file)
+  manifest.json        frf-bundle-v3: schema_version, container,
+                       receipt_id, run, created_by, and the
+                       content-addressed inventory (path, sha256, kind
+                       per file)
   receipts/<id>.json
   captures/<run>/      capture.yaml + raw side files, for the receipt's run
                        and — transitively — every resolution run its
@@ -287,6 +290,53 @@ all rechecked against the bundle; and (3) the manifest covers the receipt's
 complete required closure, recomputed from the bundle. Export only ever
 carries VERIFIED evidence: `frf bundle export` refuses a receipt that does
 not verify against the source tree first.
+
+### 6.1 Container forms — directory or single-file
+
+The same evidence graph ships in two containers, declared by the manifest
+itself (`container`, `frf-bundle-v3`):
+
+| Container    | Form                                                             |
+| ------------ | ---------------------------------------------------------------- |
+| `directory`  | the tree above, sealed read-only (0444)                          |
+| `single-tar` | ONE deterministic tar archive carrying the identical layout, the |
+|              | manifest at its root, fixed metadata (epoch mtime, root         |
+|              | ownership), entries in path order — two exports of the same     |
+|              | receipt are byte-identical                                       |
+
+`frf bundle export --single` writes the archive; `verify` and `replay`
+auto-detect the container (a directory is used in place, an archive is
+verified from a temp extraction and never mutated). A bundle whose manifest
+claims one container while the filesystem provides the other is refused.
+The verifier refuses hostile archives the same way the engine does: escaped
+paths, links, and unbounded extractions.
+
+### 6.2 Replay from the bundle — re-execution without the tree
+
+`frf bundle replay BUNDLE.frf [--policy exact|semantic]` re-executes the
+bundle's snapshots with the captured argv under a checked environment, from
+the bundle ALONE. The bundle is first proven against itself (manifest,
+closure, receipt), then the receipt is replayed with the reproduction
+policy.
+
+The temp store is laid out under the receipt's declared evidence root
+(`replay.evidence_root`, the `--root` the observation ran under), and the
+sides execute from that reconstructed invocation root: a recorded
+root-relative argv path like `frf/objects/sha256/<H>` resolves to the
+BUNDLE's own verified object — the sides never silently read the surrounding
+tree, and the replay works even when the original tree's objects are gone.
+The sealed bundle (directory or archive) is never mutated; re-materialization
+re-seals what it executes inside the temp copy.
+
+The exact/semantic distinction is unchanged: exact replay additionally
+requires the same execution provenance — profile, bounds, environment
+digest, and the recorded working directory — so an exact bundle replay
+reproduces from the recorded cwd; replaying from a foreign directory is a
+semantic reproduction (the cwd drift is reported), and an observation whose
+output embeds the recorded working directory or other filesystem content
+reproduces only when that environment is actually present.
+
+## 7. Residual trajectories — the generalized protocol
 
 ## 7. Residual trajectories — the generalized protocol
 

@@ -418,6 +418,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                     axis,
                     &request_bytes,
                     &request_cid,
+                    std::path::Path::new("."),
                 )?;
                 matches!(outcome, crate::comparators::ComparatorOutcome::Divergent(_))
             }
@@ -898,6 +899,7 @@ pub fn run_once(
                     axis,
                     &request_bytes,
                     &request_cid,
+                    std::path::Path::new("."),
                 )?;
                 let response_cid = host::sha256_bytes(&response_bytes);
                 let invocation = ComparatorInvocation {

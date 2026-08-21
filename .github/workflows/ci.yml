@@ -82,6 +82,7 @@ jobs:
       - name: Independent verifier agrees on the regenerated bundle + corpus
         run: |
           cargo xtask verify bundle golden/work/portable.frf
+          cargo xtask verify bundle golden/work/portable-single.frf
           cargo xtask verify corpus conformance
 
   fuzz:

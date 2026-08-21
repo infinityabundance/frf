@@ -1,8 +1,8 @@
 schema_version: frf-capture-v8
-run: run-cli-malformed-input-62b78f48ad14b6003f945dcd7c156dc8231c9432ea89e9915884ad21f3061c96
+run: run-cli-malformed-input-b2b5108c7fea1d1aa19fb46448d28f651f64137fa22ab7d1f0b921bbbfb5a81a
 court: cli-malformed-input
 authority: ref-cli-1.8.2
-manifest: frf/courts/cli-malformed-input/manifest.yaml
+manifest: frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml
 fixture: malformed-path.conf
 fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
 arguments:
@@ -25,9 +25,9 @@ court_spec:
   authority: ref-cli-1.8.2
   candidate:
     name: cand-cli
-    version_or_commit: 0.1.0
+    version_or_commit: 0.1.0-fixed
     build_profile: debug
-    path: golden/candidate.sh
+    path: golden/work/candidate-fixed.sh
   fixture:
     id: malformed-path.conf
     path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
@@ -60,15 +60,15 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.24
-    frf_executable_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
+    frf_version: 0.1.25
+    frf_executable_hash: fc8023ada67c6459de5eb124955bfe363e570c24469c86b0a346c7de4704a170
   comparator_implementations:
   - id: exit
-    implementation_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
-    runner_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
+    implementation_hash: fc8023ada67c6459de5eb124955bfe363e570c24469c86b0a346c7de4704a170
+    runner_hash: fc8023ada67c6459de5eb124955bfe363e570c24469c86b0a346c7de4704a170
   - id: stderr
-    implementation_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
-    runner_hash: 12ff6a27ebf1c392530a246496f289e492c8aa0eb5c8a891c88b84ac41f37449
+    implementation_hash: fc8023ada67c6459de5eb124955bfe363e570c24469c86b0a346c7de4704a170
+    runner_hash: fc8023ada67c6459de5eb124955bfe363e570c24469c86b0a346c7de4704a170
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
@@ -81,8 +81,8 @@ authority_artifact:
       path: /usr/bin/bash
       sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
 candidate_artifact:
-  path: objects/sha256/94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
-  sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+  path: objects/sha256/86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+  sha256: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
   interpreter:
     kernel_interpreter:
       path: /usr/bin/bash
@@ -109,8 +109,8 @@ reference:
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
   stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
 candidate:
-  exit: '1'
-  exit_sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+  exit: '2'
+  exit_sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35
   stderr_first_line: 'error: unknown directive servre at line 4'
   stderr_first_line_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
   stdout_first_line: 'ok: server 192.168.1.1'
@@ -118,15 +118,14 @@ candidate:
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
   stderr_sha256: ee8bcc603017deafa72e8702594478bb9747916e3ca1adecfd251525a2b317f2
 residuals:
-- cli-exit-0001
-- cli-text-0001
+- cli-text-0002
 evidence_refs:
 - role: authority-artifact
   object_kind: object
   cid: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
 - role: candidate-artifact
   object_kind: object
-  cid: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+  cid: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
 - role: fixture-object
   object_kind: object
   cid: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
