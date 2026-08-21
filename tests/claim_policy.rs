@@ -148,12 +148,16 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v5");
+    assert_eq!(claim["schema_version"], "frf-claim-v6");
     assert_eq!(claim["policy"], "sensitivity-backed");
     assert_eq!(claim["observable_scope"], serde_json::json!(["exit"]));
     let capability = claim["capability"].as_array().unwrap();
     assert_eq!(capability.len(), 1, "one capability entry per claimed axis");
     assert_eq!(capability[0]["axis"], "exit");
+    assert_eq!(
+        capability[0]["receipt"], receipt,
+        "the capability entry binds the premise receipt it covers"
+    );
     let challenge_ids: Vec<String> = capability[0]["challenge_ids"]
         .as_array()
         .unwrap()
@@ -223,7 +227,7 @@ fn independently_witnessed_requires_a_verified_attestation_of_the_receipt() {
     );
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("no verified witness statement attests this receipt"),
+        stderr(&out).contains("no verified witness statement attests premise receipt"),
         "stderr: {}",
         stderr(&out)
     );
@@ -300,6 +304,222 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         serde_json::json!([wid]),
         "the claim names the exact verified attestation"
     );
+}
+
+/// The second premise manifest used by the multi-premise tests: the SAME
+/// authority and the SAME candidate artifact (candidate-fixed.sh, byte-
+/// identical) observed on a surface the resolution court never covered — a
+/// stdout-only court whose axis passes for the fixed candidate.
+const STDOUT_ONLY_MANIFEST: &str = r#"
+court:
+  id: cli-stdout-only
+  question: >-
+    For malformed input in fixture family malformed-input, does the candidate
+    preserve the admitted reference's stdout?
+  falsifier: >-
+    The candidate's stdout diverges from the admitted reference on a fixture
+    in family malformed-input.
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: "0.1.0-fixed"
+    build_profile: debug
+    path: golden/work/candidate-fixed.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments: ["--strict", "{fixture}"]
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [stdout]
+    normalizers: []
+    replay_scope: single-run
+"#;
+
+/// Run the stdout-only court (the second premise) and emit its receipt.
+fn stdout_only_receipt(work: &Workdir) -> String {
+    let manifest = "frf/courts/cli-malformed-input/manifest-stdout-only.yaml";
+    fs::write(work.path(manifest), STDOUT_ONLY_MANIFEST).unwrap();
+    let out = frf(work, &["--root", ROOT, "court", "run", manifest]);
+    assert_success(&out, "stdout-only court run");
+    let run2 = stdout(&out);
+    let out = frf(work, &["--root", ROOT, "receipt", "emit", &run2]);
+    assert_success(&out, "stdout-only receipt emit");
+    stdout(&out)
+}
+
+#[test]
+fn multi_premise_claim_compiles_under_the_region_algebra() {
+    let work = Workdir::new("multi-premise");
+    work.copy_canonical_tree();
+    let (_run, receipt) = resolution_receipt(&work);
+    let receipt2 = stdout_only_receipt(&work);
+
+    // K = {exit} ∪ {stdout}; P = {exit,stderr} ∪ {stdout}. The multi-premise
+    // claim covers BOTH axes and names BOTH premises; the region cells are
+    // the per-premise clean surfaces, never a merged product.
+    let out = frf(
+        &work,
+        &["--root", ROOT, "claim", "compile", &receipt, &receipt2],
+    );
+    assert_success(&out, "multi-premise claim");
+    let claim: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(claim["schema_version"], "frf-claim-v6");
+    assert_eq!(
+        claim["requires"],
+        serde_json::json!([receipt, receipt2]),
+        "the claim names every premise receipt"
+    );
+    assert_eq!(claim["receipt"], receipt);
+    assert_eq!(
+        claim["observable_scope"],
+        serde_json::json!(["exit", "stdout"])
+    );
+    // The scope is a REGION: one cell per premise's clean surface.
+    let cells = claim["scope"]["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 2, "one cell per premise: {cells:?}");
+    let cell_axes: Vec<Vec<String>> = cells
+        .iter()
+        .map(|c| {
+            c["observables"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect();
+    assert!(
+        cell_axes.contains(&vec!["exit".to_string()]),
+        "the resolution premise's cell: {cell_axes:?}"
+    );
+    assert!(
+        cell_axes.contains(&vec!["stdout".to_string()]),
+        "the stdout premise's cell: {cell_axes:?}"
+    );
+    // One conservative sentence per premise cell.
+    assert_eq!(claim["positive"].as_array().unwrap().len(), 2);
+    let prop = claim["proposition"].as_str().unwrap();
+    assert!(prop.starts_with("parity(cells="), "proposition: {prop}");
+    assert!(
+        prop.contains("exit"),
+        "proposition names the exit cell: {prop}"
+    );
+    assert!(
+        prop.contains("stdout"),
+        "proposition names the stdout cell: {prop}"
+    );
+
+    // Subject coherence: a receipt binding a DIFFERENT candidate artifact
+    // cannot join the premises — a claim asserts parity of ONE candidate.
+    // (The original candidate's run already exists, so a genuinely different
+    // artifact is needed: overwrite the candidate with new bytes.)
+    work.write_candidate(
+        "#!/bin/sh\n# a third candidate: different artifact, different exit class\nexit 3\n",
+    );
+    let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
+    assert_success(&out, "third-candidate court run");
+    let run_orig = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run_orig]);
+    assert_success(&out, "original-candidate receipt emit");
+    let receipt_orig = stdout(&out);
+    let out = frf(
+        &work,
+        &["--root", ROOT, "claim", "compile", &receipt, &receipt_orig],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("different candidate artifacts"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn multi_premise_capability_binds_each_premise_receipt() {
+    let work = Workdir::new("multi-premise-capability");
+    work.copy_canonical_tree();
+    let (_run, receipt) = resolution_receipt(&work);
+    let receipt2 = stdout_only_receipt(&work);
+
+    // Sensitivity coverage is PER PREMISE: the exit axis needs a challenge of
+    // the resolution court, the stdout axis a challenge of the stdout court
+    // — and the compiled capability entries bind the premise they cover.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            MANIFEST,
+            "--operators",
+            "exit-class",
+        ],
+    );
+    assert_success(&out, "court challenge (exit-class)");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            "frf/courts/cli-malformed-input/manifest-stdout-only.yaml",
+            "--operators",
+            "stdout-first-line",
+        ],
+    );
+    assert_success(&out, "court challenge (stdout-first-line)");
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            &receipt2,
+            "--policy",
+            "sensitivity-backed",
+        ],
+    );
+    assert_success(&out, "multi-premise sensitivity-backed claim");
+    let claim: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
+    )
+    .unwrap();
+    let capability = claim["capability"].as_array().unwrap();
+    assert_eq!(capability.len(), 2, "one capability entry per claimed axis");
+    let exit_cap = capability
+        .iter()
+        .find(|c| c["axis"] == "exit")
+        .expect("exit capability");
+    assert_eq!(exit_cap["receipt"], receipt);
+    assert!(!exit_cap["challenge_ids"].as_array().unwrap().is_empty());
+    let stdout_cap = capability
+        .iter()
+        .find(|c| c["axis"] == "stdout")
+        .expect("stdout capability");
+    assert_eq!(stdout_cap["receipt"], receipt2);
+    assert!(!stdout_cap["challenge_ids"].as_array().unwrap().is_empty());
+    // The challenge records are content-addressed and bound to the RIGHT
+    // court: the exit challenge answers the resolution court's question, the
+    // stdout challenge the stdout-only court's question.
+    let store = Store::new(work.path(ROOT));
+    for cid in exit_cap["challenge_ids"].as_array().unwrap() {
+        let ch = store.load_challenge(cid.as_str().unwrap()).unwrap();
+        assert_eq!(ch.court, "cli-malformed-input");
+    }
+    for cid in stdout_cap["challenge_ids"].as_array().unwrap() {
+        let ch = store.load_challenge(cid.as_str().unwrap()).unwrap();
+        assert_eq!(ch.court, "cli-stdout-only");
+    }
 }
 
 #[test]

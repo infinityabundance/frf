@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"frf-verifier-go/jcs"
 )
 
 // The conformance triangle, from the Go side: the corpus pins must reproduce
@@ -66,5 +68,67 @@ func TestSingleFileBundleVerifies(t *testing.T) {
 	ir := verifyBundle(dir)
 	if !ir.Admissible {
 		t.Fatalf("the single-file bundle must derive an admissible claim: %+v", ir)
+	}
+}
+
+// The disposition event identity must rederive for the FIRST event (null
+// parent) and for a chained event (a real parent id) — a typed nil *string
+// parent must not leak into the canonical preimage.
+func TestDispositionEventIdentityRederives(t *testing.T) {
+	first := &jcs.Object{
+		Keys:   []string{"disposition", "event_id", "evidence_refs", "parent_event_id", "reason", "residual_id", "schema_version"},
+		Values: []jcs.Value{"intentional", "", []jcs.Value{}, nil, "wording", "cli-text-0001", "frf-disposition-v2"},
+	}
+	// The event id rederives from the canonical content over the NULL parent.
+	refs := []jcs.Value{}
+	id, err := dispositionEventIdentity("cli-text-0001", nil, dispositionDoc(first), refs)
+	if err != nil {
+		t.Fatalf("first event identity: %v", err)
+	}
+	if id == "" {
+		t.Fatal("first event identity is empty")
+	}
+	// A chained event: the parent id participates as a plain string.
+	second := &jcs.Object{
+		Keys:   []string{"disposition", "event_id", "evidence_refs", "parent_event_id", "reason", "residual_id", "schema_version"},
+		Values: []jcs.Value{"fixed", "", []jcs.Value{}, id, "patched", "cli-text-0001", "frf-disposition-v2"},
+	}
+	secondID, err := dispositionEventIdentity("cli-text-0001", id, dispositionDoc(second), refs)
+	if err != nil {
+		t.Fatalf("chained event identity: %v", err)
+	}
+	if secondID == id {
+		t.Fatal("the chained event must not collide with its parent")
+	}
+	// The chained preimage differs from treating the parent as null.
+	withNullParent, err := dispositionEventIdentity("cli-text-0001", nil, dispositionDoc(second), refs)
+	if err != nil {
+		t.Fatalf("null-parent chained identity: %v", err)
+	}
+	if withNullParent == secondID {
+		t.Fatal("the parent id must participate in the chain identity")
+	}
+}
+
+// The series identity must rederive for the FIRST snapshot (null parent) and
+// a parent-linked append (a real parent id).
+func TestSeriesIdentityRederives(t *testing.T) {
+	point := &jcs.Object{
+		Keys:   []string{"point_index", "coordinate", "run"},
+		Values: []jcs.Value{"1", "golden-machine", "run-x"},
+	}
+	id, err := seriesIdentity("exp-1", nil, "cli-malformed-input", "environment", []*jcs.Object{point})
+	if err != nil {
+		t.Fatalf("first series identity: %v", err)
+	}
+	if id == "" {
+		t.Fatal("series identity is empty")
+	}
+	child, err := seriesIdentity("exp-1", id, "cli-malformed-input", "environment", []*jcs.Object{point})
+	if err != nil {
+		t.Fatalf("child series identity: %v", err)
+	}
+	if child == id {
+		t.Fatal("the child snapshot must not collide with its parent")
 	}
 }

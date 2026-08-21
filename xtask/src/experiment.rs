@@ -445,7 +445,9 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             let mut claim_scope = Vec::new();
             if claim_ok {
                 let claim = load_evidence(&ev.join("claims").join(format!("{receipt}.json")));
-                for o in claim["scope"]["observables"]
+                // K is a REGION of cells since claim v6; the claimed axes are
+                // the flat union across the cells.
+                for o in claim["observable_scope"]
                     .as_array()
                     .cloned()
                     .unwrap_or_default()

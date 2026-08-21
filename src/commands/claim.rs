@@ -8,24 +8,38 @@
 //! is set containment — `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` — and a blocking
 //! residual blocks EXACTLY the claims whose scope intersects its surface.
 //!
+//! Since v6 the compiler is MULTI-PREMISE: `frf claim compile R1 R2 …` takes
+//! any number of verified premise receipts. K is a REGION of cells (one per
+//! premise's clean surface, in disjunctive normal form — a union of Cartesian
+//! products is never the product of dimension-wise unions, so no surface a
+//! premise did not observe is ever invented). The premise union P is the cell
+//! list of the premises' FULL surfaces, and admission is checked literally:
+//! every point of every K cell must lie in SOME premise cell.
+//!
+//! All premises must bind the SAME authority and the SAME candidate artifact:
+//! a claim asserts parity of one candidate against one reference, over a
+//! surface the premises jointly observed. Different fixtures, axes,
+//! environments, and courts are the point of multiple premises.
+//!
 //! - `harness` invalidates the evidence of a premise run: no claim whose
 //!   `requires` includes a harness run, whatever the axes.
 //! - `open` / `unknown` residuals block claims whose scope intersects their
 //!   surface (same authority, same candidate artifact, same fixture, same
 //!   family, same environment, same version, same axis) — WHEREVER the
-//!   divergence was recorded, not merely in this receipt: the compiler scans
-//!   the whole store, so an unexplained divergence about the claimed surface
-//!   blocks the claim even when a later run passed. A residual about a
-//!   different candidate, axis, fixture, or environment does not block (a
-//!   disposition, or a later run, never rewrites an older observation).
-//! - an axis this receipt's run observed diverging is never parity from this
-//!   receipt, whatever its disposition. If every declared axis has a
-//!   residual, no positive claim is licensed; the refusal names the
-//!   resolution run to compile from instead.
-//! - Otherwise the compiler emits exactly one conservative sentence, scoped
-//!   to the receipt's authority, fixture family, environment, executed
+//!   divergence was recorded, not merely in a premise receipt: the compiler
+//!   scans the whole committed universe, so an unexplained divergence about
+//!   any claimed cell's surface blocks the claim even when a later run
+//!   passed. A residual about a different candidate, axis, fixture, or
+//!   environment does not block (a disposition, or a later run, never
+//!   rewrites an older observation).
+//! - an axis a premise's run observed diverging is never parity from THAT
+//!   premise, whatever its disposition — but it remains claimable from
+//!   another premise that observed it passing, unless an unexplained
+//!   divergence on that surface blocks (the cross-run rule).
+//! - Otherwise the compiler emits one conservative sentence per premise
+//!   cell, scoped to the authority, fixture family, environment, executed
 //!   court, and exact candidate artifact — never more — and states the
-//!   non-claim next to it. The claim file carries the full Claim IR; prose
+//!   non-claim next to them. The claim file carries the full Claim IR; prose
 //!   is one renderer (`--json` emits the same IR canonically).
 
 use crate::error::{FrfError, Result};
@@ -43,16 +57,16 @@ fn is_scope_blocking(disposition: &str) -> bool {
 
 /// Scan the EVIDENCE UNIVERSE (the committed [`KnowledgeSnapshot`] the claim
 /// is being compiled against — not a live directory) for residuals whose
-/// surface intersects the claim's scope K and whose head disposition in that
-/// universe is blocking. Returns the residual ids.
+/// surface intersects the claim's scope region K and whose head disposition
+/// in that universe is blocking. Returns the residual ids.
 ///
-/// This is the cross-run part of the algebra: a claim compiled from receipt
-/// R is blocked by an open divergence recorded by ANY run in the universe
-/// about the same surface (same authority, candidate artifact, fixture,
-/// family, environment, version, and axis). A divergence about a different
-/// surface — most importantly, a different candidate artifact — never
-/// blocks: that is the paper's rule that no observation may be rewritten,
-/// generalized to scopes.
+/// This is the cross-run part of the algebra: a claim is blocked by an open
+/// divergence recorded by ANY run in the universe about the same surface
+/// (same authority, candidate artifact, fixture, family, environment,
+/// version, and axis) as ANY of the claim's cells. A divergence about a
+/// different surface — most importantly, a different candidate artifact —
+/// never blocks: that is the paper's rule that no observation may be
+/// rewritten, generalized to scopes.
 ///
 /// The universe is EXPLICIT: the claim is admissible relative to U — no
 /// unresolved residual IN U intersects K — and the compiled claim carries U,
@@ -66,7 +80,7 @@ fn is_scope_blocking(disposition: &str) -> bool {
 /// the SAME scan (one source of truth).
 pub fn store_blockers(
     store: &Store,
-    k: &ClaimScope,
+    k: &EvidenceRegion,
     universe: &KnowledgeSnapshot,
 ) -> Result<Vec<(String, ResidualKind, String)>> {
     let mut blockers = Vec::new();
@@ -97,7 +111,7 @@ pub fn store_blockers(
         let capture = store.load_capture(&record.run)?;
         let authority = store.load_authority(&record.authority)?;
         let surface = scope::residual_scope(&record, &capture, &authority.version);
-        if surface.intersects(k) {
+        if k.intersects(&surface) {
             blockers.push((record.id.clone(), record.kind, head.disposition.clone()));
         }
     }
@@ -147,16 +161,17 @@ fn witness_ids(store: &Store) -> Result<Vec<String>> {
     Ok(ids)
 }
 
-/// The per-axis capability coverage a sensitivity-backed claim requires:
-/// every claimed (clean) observable axis must have a challenge record that
-/// demonstrated sensitivity on EXACTLY that axis — same court semantic
-/// identity (the mutant ran the same question), same reference artifact,
-/// the recomputed verdicts `saw_defect` AND `specificity_clean`. The claim
-/// carries the content-addressed challenge ids; this function refuses the
-/// claim, naming the axis and what would satisfy the tier, when coverage is
-/// missing.
+/// The per-axis capability coverage ONE premise's claim cell requires: every
+/// claimed (clean) observable axis of that premise must have a challenge
+/// record that demonstrated sensitivity on EXACTLY that axis — same court
+/// semantic identity (the mutant ran the same question), same reference
+/// artifact, the recomputed verdicts `saw_defect` AND `specificity_clean`.
+/// The claim carries the content-addressed challenge ids BOUND TO THE
+/// PREMISE RECEIPT; this function refuses the claim, naming the axis and
+/// what would satisfy the tier, when coverage is missing.
 fn capability_coverage(
     store: &Store,
+    receipt_id: &str,
     receipt: &Receipt,
     k: &ClaimScope,
 ) -> Result<Vec<ClaimCapability>> {
@@ -209,11 +224,12 @@ fn capability_coverage(
         }
         if challenge_ids.is_empty() {
             return Err(FrfError::new(format!(
-                "claim refused under policy sensitivity-backed: the court has NOT demonstrated it can see the {axis} defect class — no challenge record (same court semantic identity, same reference artifact, targeted axis, saw_defect and specificity_clean recomputed from the mutant run) covers the claimed axis; run `frf court challenge` before compiling"
+                "claim refused under policy sensitivity-backed: the court has NOT demonstrated it can see the {axis} defect class — no challenge record (same court semantic identity, same reference artifact, targeted axis, saw_defect and specificity_clean recomputed from the mutant run) covers the claimed axis of premise {receipt_id}; run `frf court challenge` before compiling"
             )));
         }
         challenge_ids.sort();
         out.push(ClaimCapability {
+            receipt: receipt_id.to_string(),
             axis: axis.clone(),
             challenge_ids,
         });
@@ -221,11 +237,11 @@ fn capability_coverage(
     Ok(out)
 }
 
-/// The verified witness statements attesting this receipt (`outcome:
-/// affirm`) that an independently-witnessed claim requires. The statement
-/// loader verifies the identity rederives, the preserved request/response
-/// hash to their cids, and the response names its request — an attestation
-/// bound to the exact receipt content address, never a label.
+/// The verified witness statements attesting one premise receipt
+/// (`outcome: affirm`) that an independently-witnessed claim requires. The
+/// statement loader verifies the identity rederives, the preserved
+/// request/response hash to their cids, and the response names its request —
+/// an attestation bound to the exact receipt content address, never a label.
 fn witness_coverage(store: &Store, receipt_id: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for id in witness_ids(store)? {
@@ -239,13 +255,41 @@ fn witness_coverage(store: &Store, receipt_id: &str) -> Result<Vec<String>> {
     }
     if out.is_empty() {
         return Err(FrfError::new(format!(
-            "claim refused under policy independently-witnessed: no verified witness statement attests this receipt (subject kind=receipt, id={receipt_id}, outcome=affirm); attest the receipt before compiling"
+            "claim refused under policy independently-witnessed: no verified witness statement attests premise receipt {receipt_id} (subject kind=receipt, outcome=affirm); attest every premise before compiling"
         )));
     }
     Ok(out)
 }
 
-pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<()> {
+/// The machine-readable proposition of one scope cell.
+fn cell_proposition(cell: &ClaimScope) -> String {
+    format!(
+        "{{observables=[{}]; fixtures=[{}]; family={}; authority=[{}]; candidate=[{}]; environments=[{}]; versions=[{}]}}",
+        cell.observables.join(", "),
+        cell.fixtures.join(", "),
+        cell.fixture_family,
+        cell.authority.join(", "),
+        cell.candidate.join(", "),
+        cell.environments.join(", "),
+        cell.versions.join(", "),
+    )
+}
+
+/// The resolution-run hint for a premise that observed only divergences.
+fn resolution_hint(receipt: &Receipt) -> String {
+    receipt
+        .residuals
+        .iter()
+        .find_map(|res| {
+            (res.disposition == "fixed")
+                .then_some(res.resolution_run_id.as_deref())
+                .flatten()
+        })
+        .map(|run| format!(" — compile the claim from the resolution run '{run}' instead (that premise's run observed the divergence; a disposition never rewrites an observation)"))
+        .unwrap_or_default()
+}
+
+pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> Result<()> {
     // The admission policy is one of the declared tiers (baseline through
     // high-assurance); a tier the engine does not know is refused, never
     // silently downgraded.
@@ -255,91 +299,125 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
             CLAIM_POLICIES.join(", ")
         )));
     }
-    // The semantic non-bypass rule, enforced structurally: claim compilation
-    // accepts ONLY a ReceiptVerified — a receipt whose identity AND derivation
-    // have been verified (content-addressed, semantically conformant, derived
-    // from its verified capture, dispositions evidenced by the event history,
-    // fixed closures re-verified). Parsing data cannot turn it into evidence.
-    let verified = crate::verify::load_receipt_verified(store, receipt_id).map_err(|e| {
-        // An invalid id keeps its validation refusal; a valid id naming no
-        // receipt gets the friendly refusal; anything that exists but fails
-        // verification keeps the specific violation.
-        match store.receipt_path(receipt_id) {
-            Err(validation) => validation,
-            Ok(p) if p.is_file() => e,
-            Ok(_) => FrfError::new(format!("no such receipt '{receipt_id}'")),
-        }
-    })?;
-    let receipt = verified.body();
-    let family = receipt.court.admissibility_envelope.fixture_family.clone();
-
-    // 1. Run-level invalidation: harness on a premise blocks every claim from
-    //    that run.
-    let harness_lines = sentences::harness_refusal_lines(&receipt.residuals, &family);
-    if !harness_lines.is_empty() {
-        for line in &harness_lines {
-            eprintln!("{line}");
-        }
-        for nc in sentences::non_claims(&family) {
-            eprintln!("{nc}");
-        }
-        return Err(FrfError::new(format!(
-            "claim refused: {} harness residual(s) invalidate the evidence of this run — no positive claim emitted",
-            harness_lines.len()
-        )));
-    }
-
-    // 2. Axis-level blocking: an open/unknown residual excludes its axis;
-    //    clean axes remain claimable. The sentence covers only axes THIS run
-    //    observed passing.
-    let Some(sentence) = sentences::positive_claim(receipt) else {
-        // No clean axis: print the axis blockers (the non-claim boundaries)
-        // plus the non-claim sentences, and refuse.
-        for line in sentences::open_refusal_lines(&receipt.residuals, &family) {
-            eprintln!("{line}");
-        }
-        for nc in sentences::non_claims(&family) {
-            eprintln!("{nc}");
-        }
-        // A receipt that observed divergence cannot become a parity receipt;
-        // if it carries resolution edges, point at the run that observed the
-        // passing candidate.
-        let hint = receipt
-            .residuals
-            .iter()
-            .find_map(|res| {
-                (res.disposition == "fixed")
-                    .then_some(res.resolution_run_id.as_deref())
-                    .flatten()
-            })
-            .map(|run| format!(" — compile the claim from the resolution run '{run}' instead (this receipt's run observed the divergence; a disposition never rewrites an observation)"))
-            .unwrap_or_default();
-        return Err(FrfError::new(format!(
-            "claim refused: no declared observable axis for fixture family {family} is established as parity by this receipt's run{hint}"
-        )));
-    };
-
-    // 3. The claim IR. Scope K is the executed surface restricted to the
-    //    clean axes; admission is the containment rule
-    //    Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ) — checked literally against the
-    //    premise surface (it holds by construction for a single receipt; the
-    //    check is the guard that keeps it true when premises grow).
-    let k_scope = scope::claim_scope(receipt);
-    let premise = scope::premise_scope(receipt);
-    if !premise.contains(&k_scope) {
+    if receipt_ids.is_empty() {
         return Err(FrfError::new(
-            "claim refused: Scope(K) ⊄ Scope(P) — the claim's scope exceeds the receipt's executed surface".to_string(),
+            "claim compile needs at least one premise receipt: frf claim compile R1 [R2 …]",
         ));
     }
 
-    // 4. Store-wide blocking: any open/unknown residual about the claimed
-    //    surface blocks, wherever it was recorded. The universe is committed
-    //    BEFORE the scan: the claim is admissible relative to U, and the
-    //    compiled claim carries U (a later store mutation cannot silently
-    //    change what the claim means — the negative search is as portable as
-    //    the premises).
+    // The semantic non-bypass rule, enforced structurally: claim compilation
+    // accepts ONLY ReceiptVerified values — receipts whose identity AND
+    // derivation have been verified (content-addressed, semantically
+    // conformant, derived from their verified captures, dispositions
+    // evidenced by the event history, fixed closures re-verified). Parsing
+    // data cannot turn it into evidence.
+    let mut verified: Vec<crate::verify::ReceiptVerified> = Vec::new();
+    for id in receipt_ids {
+        let v = crate::verify::load_receipt_verified(store, id).map_err(|e| {
+            // An invalid id keeps its validation refusal; a valid id naming
+            // no receipt gets the friendly refusal; anything that exists but
+            // fails verification keeps the specific violation.
+            match store.receipt_path(id) {
+                Err(validation) => validation,
+                Ok(p) if p.is_file() => e,
+                Ok(_) => FrfError::new(format!("no such receipt '{id}'")),
+            }
+        })?;
+        verified.push(v);
+    }
+    let receipts: Vec<&Receipt> = verified.iter().map(|v| v.body()).collect();
+    let first = receipts[0];
+    let family = &first.court.admissibility_envelope.fixture_family;
+
+    // Subject coherence: all premises must bind the SAME authority and the
+    // SAME candidate artifact — a claim asserts parity of one candidate
+    // against one reference, over the surface the premises jointly observed.
+    for r in &receipts[1..] {
+        if r.authority.name != first.authority.name
+            || r.authority.version != first.authority.version
+            || r.authority.identity_hash != first.authority.identity_hash
+        {
+            return Err(FrfError::new(format!(
+                "claim refused: the premises bind different authorities ({} and {}) — a claim asserts parity against ONE reference; compile separate claims instead",
+                format_args!("{}-{}", first.authority.name, first.authority.version),
+                format_args!("{}-{}", r.authority.name, r.authority.version),
+            )));
+        }
+        if r.candidate.identity_hash != first.candidate.identity_hash {
+            return Err(FrfError::new(format!(
+                "claim refused: the premises bind different candidate artifacts ({} and {}) — a claim asserts parity of ONE candidate; compile separate claims instead",
+                &first.candidate.identity_hash[..16],
+                &r.candidate.identity_hash[..16],
+            )));
+        }
+    }
+
+    // 1. Run-level invalidation: harness on ANY premise blocks every claim
+    //    from that premise.
+    for (i, r) in receipts.iter().enumerate() {
+        let fam = &r.court.admissibility_envelope.fixture_family;
+        let harness_lines = sentences::harness_refusal_lines(&r.residuals, fam);
+        if !harness_lines.is_empty() {
+            for line in &harness_lines {
+                eprintln!("{line}");
+            }
+            for nc in sentences::non_claims(fam) {
+                eprintln!("{nc}");
+            }
+            return Err(FrfError::new(format!(
+                "claim refused: premise {} carries {} harness residual(s) which invalidate the evidence of this run — no positive claim emitted",
+                receipt_ids[i],
+                harness_lines.len()
+            )));
+        }
+    }
+
+    // 2. Every premise must contribute at least one claimable (clean) axis;
+    //    a premise that observed only divergences cannot support the claim.
+    for (i, r) in receipts.iter().enumerate() {
+        if sentences::positive_claim(r).is_none() {
+            for line in sentences::open_refusal_lines(
+                &r.residuals,
+                &r.court.admissibility_envelope.fixture_family,
+            ) {
+                eprintln!("{line}");
+            }
+            for nc in sentences::non_claims(&r.court.admissibility_envelope.fixture_family) {
+                eprintln!("{nc}");
+            }
+            let hint = resolution_hint(r);
+            return Err(FrfError::new(format!(
+                "claim refused: premise {} establishes no declared observable axis as parity{}",
+                receipt_ids[i], hint
+            )));
+        }
+    }
+
+    // 3. The claim IR. K is the region of per-premise clean surfaces; the
+    //    premise union P is the region of the premises' FULL surfaces.
+    //    Admission is the containment rule Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ),
+    //    checked literally over the cells — every point of every K cell must
+    //    lie in SOME premise cell (the guard that keeps the union honest as
+    //    premises grow: no dimension-wise merging, so no invented surface).
+    let k_region = scope::claim_region(&receipts);
+    let p_region = scope::premise_region(&receipts);
+    for cell in &k_region.cells {
+        if !p_region.contains(cell) {
+            return Err(FrfError::new(format!(
+                "claim refused: Scope(K) ⊄ Scope(P₁ ∪ … ∪ Pₙ) — the cell {} exceeds the premises' observed surface",
+                cell_proposition(cell)
+            )));
+        }
+    }
+
+    // 4. Store-wide blocking: any open/unknown residual about ANY claimed
+    //    cell's surface blocks, wherever it was recorded. The universe is
+    //    committed BEFORE the scan: the claim is admissible relative to U,
+    //    and the compiled claim carries U (a later store mutation cannot
+    //    silently change what the claim means — the negative search is as
+    //    portable as the premises).
     let knowledge_snapshot = store.knowledge_snapshot()?;
-    let blockers = store_blockers(store, &k_scope, &knowledge_snapshot)?;
+    let blockers = store_blockers(store, &k_region, &knowledge_snapshot)?;
     if !blockers.is_empty() {
         for (id, kind, disposition) in &blockers {
             eprintln!(
@@ -347,7 +425,7 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
                 kind.as_str()
             );
         }
-        for nc in sentences::non_claims(&family) {
+        for nc in sentences::non_claims(family) {
             eprintln!("{nc}");
         }
         return Err(FrfError::new(format!(
@@ -360,8 +438,8 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
     //     `baseline` requires DEMONSTRATED capability evidence, and the
     //     compiled claim carries the evidence that satisfied it — a
     //     sensitivity-backed claim is not "challenge passed" as a boolean, it
-    //     names the exact content-addressed challenges that proved the court
-    //     can SEE each claimed surface.
+    //     names the exact content-addressed challenges that proved each
+    //     premise's court can SEE each claimed surface.
     let sensitivity_required = matches!(
         policy,
         CLAIM_POLICY_SENSITIVITY_BACKED
@@ -369,7 +447,12 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
             | CLAIM_POLICY_HIGH_ASSURANCE
     );
     let capability = if sensitivity_required {
-        capability_coverage(store, receipt, &k_scope)?
+        let mut cap = Vec::new();
+        for (i, r) in receipts.iter().enumerate() {
+            let cell = scope::claim_scope(r);
+            cap.extend(capability_coverage(store, &receipt_ids[i], r, &cell)?);
+        }
+        cap
     } else {
         Vec::new()
     };
@@ -378,85 +461,111 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
         CLAIM_POLICY_INDEPENDENTLY_WITNESSED | CLAIM_POLICY_HIGH_ASSURANCE
     );
     let witness_statements = if witness_required {
-        witness_coverage(store, receipt_id)?
+        let mut all = Vec::new();
+        for rid in receipt_ids {
+            all.extend(witness_coverage(store, rid)?);
+        }
+        all.sort();
+        all.dedup();
+        all
     } else {
         Vec::new()
     };
     let replay_profile = if policy == CLAIM_POLICY_HIGH_ASSURANCE {
-        // High assurance requires the exact-replay contract: the observation
-        // was made under the reference profile with the reference capture
-        // bounds (no permissive overrides). The claim records the contract.
-        if receipt.execution_profile != EXECUTION_PROFILE_LINUX {
-            return Err(FrfError::new(format!(
-                "claim refused under policy {policy:?}: this receipt's run was observed under execution profile {}; high-assurance requires the reference profile {EXECUTION_PROFILE_LINUX}",
-                receipt.execution_profile
-            )));
-        }
-        if receipt.capture_bounds != host::capture_bounds() {
-            return Err(FrfError::new(format!(
-                "claim refused under policy {policy:?}: this receipt's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile)",
-            )));
+        // High assurance requires the exact-replay contract: every premise's
+        // observation was made under the reference profile with the reference
+        // capture bounds (no permissive overrides). The claim records the
+        // contract.
+        for r in &receipts {
+            if r.execution_profile != EXECUTION_PROFILE_LINUX {
+                return Err(FrfError::new(format!(
+                    "claim refused under policy {policy:?}: a premise's run was observed under execution profile {}; high-assurance requires the reference profile {EXECUTION_PROFILE_LINUX}",
+                    r.execution_profile
+                )));
+            }
+            if r.capture_bounds != host::capture_bounds() {
+                return Err(FrfError::new(format!(
+                    "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile)",
+                )));
+            }
         }
         EXECUTION_PROFILE_LINUX.to_string()
     } else {
-        receipt.execution_profile.clone()
+        first.execution_profile.clone()
     };
 
-    // 5. A claim IS licensed (scoped to the clean axes). Print the axis
-    //    blockers as explicit non-claim boundaries, then the claim.
-    for line in sentences::open_refusal_lines(&receipt.residuals, &family) {
-        eprintln!("{line}");
+    // 5. A claim IS licensed. Print each premise's axis blockers as explicit
+    //    non-claim boundaries, then the claim sentences (one per premise
+    //    cell).
+    for r in &receipts {
+        let fam = &r.court.admissibility_envelope.fixture_family;
+        for line in sentences::open_refusal_lines(&r.residuals, fam) {
+            eprintln!("{line}");
+        }
     }
 
     let environment = format!(
         "{}-{} ({})",
-        receipt.environment.architecture,
-        receipt.environment.os,
-        &receipt.environment.digest[..8]
+        first.environment.architecture,
+        first.environment.os,
+        &first.environment.digest[..8]
     );
-    let relation = receipt
-        .observables
-        .iter()
-        .filter(|obs| !receipt.residuals.iter().any(|r| r.axis == obs.axis))
-        .map(|obs| obs.comparator.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
+    let mut relation: Vec<String> = Vec::new();
+    for r in &receipts {
+        for obs in &r.observables {
+            if !r.residuals.iter().any(|res| res.axis == obs.axis)
+                && !relation.contains(&obs.comparator)
+            {
+                relation.push(obs.comparator.clone());
+            }
+        }
+    }
     let proposition = format!(
-        "parity(observables=[{}]; fixtures=[{}]; family={}; authority=[{}]; candidate=[{}]; environments=[{}]; versions=[{}])",
-        k_scope.observables.join(", "),
-        k_scope.fixtures.join(", "),
-        k_scope.fixture_family,
-        k_scope.authority.join(", "),
-        k_scope.candidate.join(", "),
-        k_scope.environments.join(", "),
-        k_scope.versions.join(", "),
+        "parity(cells=[{}])",
+        k_region
+            .cells
+            .iter()
+            .map(cell_proposition)
+            .collect::<Vec<_>>()
+            .join(",")
     );
+    let observable_scope = scope::region_observables(&k_region);
+    let excluded_evidence = scope::region_excluded_evidence(&receipts, &k_region);
+    let positive: Vec<String> = receipts
+        .iter()
+        .filter_map(|r| sentences::positive_claim(r))
+        .collect();
+    assert!(
+        !positive.is_empty(),
+        "validated: every premise has a clean axis"
+    );
+
     let claim = ClaimRecord {
         schema_version: SCHEMA_CLAIM.to_string(),
-        receipt: receipt_id.to_string(),
-        authority: format!("{}-{}", receipt.authority.name, receipt.authority.version),
+        receipt: receipt_ids[0].clone(),
+        authority: format!("{}-{}", first.authority.name, first.authority.version),
         candidate: ClaimCandidate {
-            name: receipt.candidate.name.clone(),
-            version_or_commit: receipt.candidate.version_or_commit.clone(),
-            identity_hash: receipt.candidate.identity_hash.clone(),
+            name: first.candidate.name.clone(),
+            version_or_commit: first.candidate.version_or_commit.clone(),
+            identity_hash: first.candidate.identity_hash.clone(),
         },
-        court: receipt.court.id.clone(),
+        court: first.court.id.clone(),
         fixture_family: family.clone(),
         environment,
-        relation,
+        relation: relation.join(", "),
         proposition,
-        scope: k_scope.clone(),
-        observable_scope: k_scope.observables.clone(),
+        scope: k_region,
+        observable_scope,
         blockers: blockers.iter().map(|(id, _, _)| id.clone()).collect(),
-        excluded_evidence: receipt.residuals.iter().map(|r| r.id.clone()).collect(),
-        requires: vec![receipt_id.to_string()],
+        excluded_evidence,
+        requires: receipt_ids.to_vec(),
         knowledge_snapshot,
         policy: policy.to_string(),
         capability,
         witness_statements,
         replay_profile,
-        positive: vec![sentence.clone()],
-        non_claims: sentences::non_claims(&family),
+        positive: positive.clone(),
+        non_claims: sentences::non_claims(family),
     };
 
     if json {
@@ -466,10 +575,12 @@ pub fn run(store: &Store, receipt_id: &str, json: bool, policy: &str) -> Result<
     }
 
     let json = store.to_evidence(&claim)?;
-    let path = store.claim_path(receipt_id)?;
+    let path = store.claim_path(&receipt_ids[0])?;
     store.write_derived(&path, &json)?;
 
-    println!("{sentence}");
+    for sentence in &positive {
+        println!("{sentence}");
+    }
     for nc in &claim.non_claims {
         println!("{nc}");
     }

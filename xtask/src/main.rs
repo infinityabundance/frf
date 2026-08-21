@@ -385,6 +385,21 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
     if bundle.join(&claim_rel).is_file() {
         needed.insert(claim_rel.clone());
         let claim = load_evidence(&safe_rel(bundle, &claim_rel));
+        // The claim is MULTI-PREMISE since v6: every premise receipt's run is
+        // part of the evidence, so each premise's capture/objects/residuals
+        // enter the traversal, and the premise receipt documents are part of
+        // the closure.
+        if let Some(requires) = claim["requires"].as_array() {
+            for prem_id in requires {
+                let prem_id = as_str(prem_id).to_string();
+                needed.insert(format!("receipts/{prem_id}.json"));
+                let prem = load_evidence(&safe_rel(bundle, &format!("receipts/{prem_id}.json")));
+                let prun = as_str(&prem["run"]).to_string();
+                if !seen_runs.contains(&prun) && !runs.contains(&prun) {
+                    runs.push(prun);
+                }
+            }
+        }
         if let Some(heads) = claim["knowledge_snapshot"]["residual_heads"].as_array() {
             for h in heads {
                 let hid = as_str(&h["id"]);
@@ -525,8 +540,13 @@ fn residual_lineage_of(bundle: &Path, record: &Value, cap: &Value) -> String {
 /// Re-derive a compiled claim's ADMISSION POLICY from the bundle alone — the
 /// claim's `capability` / `witness_statements` / `replay_profile` are
 /// evidence references, and each tier's requirements are checked against the
-/// bundle's own objects (never trusted from the claim file).
-fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &str) {
+/// bundle's own objects (never trusted from the claim file). Since v6 a
+/// claim is MULTI-PREMISE: every capability entry binds the premise receipt
+/// its covered axes belong to, and each tier's obligations hold per premise
+/// (a sensitivity-backed axis must be challenged by THAT premise's court;
+/// every premise receipt must be attested; every premise must carry the
+/// reference execution contract).
+fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: &str) {
     let policy = as_str(&claim["policy"]);
     if ![
         "baseline",
@@ -542,7 +562,42 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
         return;
     }
 
-    // The claimed axes: every one must be covered by a capability entry.
+    // The premise receipts the claim names; the claim file is named after
+    // the first premise.
+    let requires: Vec<String> = claim["requires"]
+        .as_array()
+        .map(|a| a.iter().map(|v| as_str(v).to_string()).collect())
+        .unwrap_or_default();
+    if requires.is_empty() {
+        panic!("claim {receipt_id}: names no premise receipts");
+    }
+    if as_str(&claim["receipt"]) != receipt_id {
+        panic!("claim {receipt_id}: the claim file does not bind its first premise");
+    }
+    let premise = |prem_id: &str| -> Value {
+        load_evidence(&safe_rel(bundle, &format!("receipts/{prem_id}.json")))
+    };
+    // Subject coherence: every premise binds the same authority and the same
+    // candidate artifact (the reference compiler enforces this at compile
+    // time; the verifier re-derives it from the bundle's own receipts).
+    let first = premise(&requires[0]);
+    for prem_id in &requires[1..] {
+        let p = premise(prem_id);
+        if as_str(&p["authority"]["name"]) != as_str(&first["authority"]["name"])
+            || as_str(&p["authority"]["version"]) != as_str(&first["authority"]["version"])
+            || as_str(&p["authority"]["identity_hash"])
+                != as_str(&first["authority"]["identity_hash"])
+        {
+            panic!("claim {receipt_id}: the premises bind different authorities");
+        }
+        if as_str(&p["candidate"]["identity_hash"]) != as_str(&first["candidate"]["identity_hash"])
+        {
+            panic!("claim {receipt_id}: the premises bind different candidate artifacts");
+        }
+    }
+
+    // The claimed axes: every one must be covered by a capability entry
+    // BOUND TO THE PREMISE whose court observed it.
     let claimed: Vec<String> = claim["observable_scope"]
         .as_array()
         .map(|a| a.iter().map(|v| as_str(v).to_string()).collect())
@@ -551,6 +606,13 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
     let mut covered: Vec<String> = Vec::new();
     for cap in &capability {
         let axis = as_str(&cap["axis"]).to_string();
+        let prem_id = as_str(&cap["receipt"]).to_string();
+        if !requires.contains(&prem_id) {
+            panic!(
+                "claim {receipt_id}: capability entry for axis {axis} binds premise {prem_id} which the claim does not require"
+            );
+        }
+        let prem = premise(&prem_id);
         let challenge_ids = cap["challenge_ids"].as_array().cloned().unwrap_or_default();
         if challenge_ids.is_empty() {
             panic!("claim {receipt_id}: capability entry for axis {axis} names no challenge");
@@ -558,9 +620,9 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
         for cid in challenge_ids {
             let cid = as_str(&cid).to_string();
             let ch = load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
-            if as_str(&ch["court"]) != as_str(&body["court"]["id"]) {
+            if as_str(&ch["court"]) != as_str(&prem["court"]["id"]) {
                 panic!(
-                    "claim {receipt_id}: challenge {cid} is not a challenge of the receipt's court"
+                    "claim {receipt_id}: challenge {cid} is not a challenge of premise {prem_id}'s court"
                 );
             }
             if as_str(&ch["target_axis"]) != axis {
@@ -569,18 +631,20 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
                     as_str(&ch["target_axis"])
                 );
             }
-            // The mutant wraps the same reference artifact the receipt binds.
-            if as_str(&ch["reference_sha256"]) != as_str(&body["authority"]["identity_hash"]) {
-                panic!("claim {receipt_id}: challenge {cid} does not wrap the receipt's reference artifact");
+            // The mutant wraps the same reference artifact the premise binds.
+            if as_str(&ch["reference_sha256"]) != as_str(&prem["authority"]["identity_hash"]) {
+                panic!("claim {receipt_id}: challenge {cid} does not wrap premise {prem_id}'s reference artifact");
             }
             // The mutant run answered the same question.
             let chrun = as_str(&ch["run"]);
             let mut_cap =
                 load_evidence(&safe_rel(bundle, &format!("captures/{chrun}/capture.json")));
             if as_str(&mut_cap["court_semantic_identity"])
-                != as_str(&body["court"]["semantic_identity"])
+                != as_str(&prem["court"]["semantic_identity"])
             {
-                panic!("claim {receipt_id}: challenge {cid} did not run the same question");
+                panic!(
+                    "claim {receipt_id}: challenge {cid} did not run premise {prem_id}'s question"
+                );
             }
             // The verdicts RECOMPUTE from the mutant run's residuals.
             let mut on_target = false;
@@ -625,44 +689,44 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
                 "claim {receipt_id}: policy {policy} requires a witness attestation but names none"
             );
         }
-        let mut affirmed = false;
-        for wid in witnesses {
-            let wid = as_str(&wid).to_string();
-            let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
-            if as_str(&stmt["subject"]["kind"]) != "receipt"
-                || as_str(&stmt["subject"]["id"]) != receipt_id
-            {
-                panic!("claim {receipt_id}: witness {wid} does not attest this receipt");
-            }
-            // The preserved documents hash to their cids (the attestation is
-            // bound to the exact request/response evidence).
-            for f in ["request.json", "response.json"] {
-                let bytes = read(&safe_rel(bundle, &format!("witnesses/{wid}/{f}")));
-                let cid_field = if f == "request.json" {
-                    "request_cid"
-                } else {
-                    "response_cid"
-                };
-                if sha256_bytes(&bytes) != as_str(&stmt[cid_field]) {
-                    panic!(
-                        "claim {receipt_id}: witness {wid} preserved {f} does not hash to its cid"
-                    );
+        // EVERY premise receipt must have at least one affirming attestation
+        // of ITSELF (the compiler attests each premise before compiling).
+        for prem_id in &requires {
+            let mut affirmed_this = false;
+            for wid in &witnesses {
+                let wid = as_str(wid).to_string();
+                let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
+                if as_str(&stmt["subject"]["kind"]) != "receipt"
+                    || as_str(&stmt["subject"]["id"]) != *prem_id
+                {
+                    continue;
+                }
+                // The preserved documents hash to their cids (the attestation
+                // is bound to the exact request/response evidence).
+                for f in ["request.json", "response.json"] {
+                    let bytes = read(&safe_rel(bundle, &format!("witnesses/{wid}/{f}")));
+                    let cid_field = if f == "request.json" {
+                        "request_cid"
+                    } else {
+                        "response_cid"
+                    };
+                    if sha256_bytes(&bytes) != as_str(&stmt[cid_field]) {
+                        panic!(
+                            "claim {receipt_id}: witness {wid} preserved {f} does not hash to its cid"
+                        );
+                    }
+                }
+                if as_str(&stmt["attestation"]["outcome"]) == "affirm" {
+                    affirmed_this = true;
                 }
             }
-            if as_str(&stmt["attestation"]["outcome"]) == "affirm" {
-                affirmed = true;
+            if !affirmed_this {
+                panic!("claim {receipt_id}: no named witness affirms premise receipt {prem_id}");
             }
-        }
-        if !affirmed {
-            panic!("claim {receipt_id}: no named witness affirms the receipt");
         }
     }
 
     if policy == "high-assurance" {
-        if as_str(&body["execution_profile"]) != "frf-exec-linux-v1" {
-            panic!("claim {receipt_id}: high-assurance requires the reference execution profile");
-        }
-        let bounds = &body["capture_bounds"];
         let reference = serde_json::json!({
             "timeout_ms": "60000",
             "max_stream_bytes": "16777216",
@@ -670,8 +734,15 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, body: &Value, receipt_id: &
             "rlimit_cpu_s": "30",
             "rlimit_nofile": "1024",
         });
-        if bounds != &reference {
-            panic!("claim {receipt_id}: high-assurance requires the reference capture bounds (the exact-replay contract)");
+        // EVERY premise was observed under the reference execution contract.
+        for prem_id in &requires {
+            let prem = premise(prem_id);
+            if as_str(&prem["execution_profile"]) != "frf-exec-linux-v1" {
+                panic!("claim {receipt_id}: high-assurance requires the reference execution profile for premise {prem_id}");
+            }
+            if prem["capture_bounds"] != reference {
+                panic!("claim {receipt_id}: high-assurance requires the reference capture bounds (the exact-replay contract) for premise {prem_id}");
+            }
         }
         if as_str(&claim["replay_profile"]) != "frf-exec-linux-v1" {
             panic!("claim {receipt_id}: the claim's replay_profile does not record the reference profile");

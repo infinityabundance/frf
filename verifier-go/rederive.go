@@ -278,7 +278,10 @@ func runIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, error) {
 }
 
 // dispositionEventIdentity: FRF/DISPOSITION-EVENT/v1 over the event content.
-func dispositionEventIdentity(residualID string, parentEventID *string, disposition *jcs.Object, evidenceRefs []jcs.Value) (string, error) {
+// The parent event id is a jcs.Value (nil encodes as null, a string as the
+// string) — a typed nil *string would not match the canonicalizer's `nil`
+// case.
+func dispositionEventIdentity(residualID string, parentEventID jcs.Value, disposition *jcs.Object, evidenceRefs []jcs.Value) (string, error) {
 	doc := &jcs.Object{
 		Keys:   []string{"residual_id", "parent_event_id", "disposition", "evidence_refs"},
 		Values: []jcs.Value{residualID, parentEventID, disposition, evidenceRefs},
@@ -304,8 +307,10 @@ func dispositionDoc(event *jcs.Object) *jcs.Object {
 	}
 }
 
-// seriesIdentity: FRF/SERIES/v2 over the snapshot's own fields.
-func seriesIdentity(experimentID string, parent *string, court, coordinateSystem string, points []*jcs.Object) (string, error) {
+// seriesIdentity: FRF/SERIES/v2 over the snapshot's own fields. The parent
+// series id is a jcs.Value (nil encodes as null, a string as the string) —
+// a typed nil *string would not match the canonicalizer's `nil` case.
+func seriesIdentity(experimentID string, parent jcs.Value, court, coordinateSystem string, points []*jcs.Object) (string, error) {
 	var ps []jcs.Value
 	for _, p := range points {
 		ps = append(ps, &jcs.Object{
