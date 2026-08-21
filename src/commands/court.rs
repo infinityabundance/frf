@@ -398,95 +398,48 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // decided by [`crate::comparators::evaluate`], nothing else.
     let plan = crate::comparators::EvaluationPlan::from_capture(&capture, &record.axis)?;
     let environment_digest = capture.environment.digest.clone();
-    let mut attempts: Vec<ReductionAttempt> = Vec::new();
 
-    // One executable attempt: run both sides against the given fixture bytes,
-    // evaluate the axis through the one comparison operation, record the
-    // attempt with its role/outcome/acceptance. The budget is a HARD gate
-    // around EVERY executable attempt: the closure refuses to execute past
-    // the bound, so neither the outer nor the inner loop can exceed it. A
-    // harness failure (timeout, overflow, refused evaluation) aborts the
-    // minimization — never silently skipped. Returns `None` when the budget
-    // is exhausted, `Some(outcome)` otherwise.
-    let attempt = |bytes: &[u8],
-                   role: ReductionAttemptRole,
-                   accepted: bool,
-                   attempts: &mut Vec<ReductionAttempt>|
-     -> Result<Option<ReductionAttemptOutcome>> {
-        if attempts.len() >= MINIMIZE_MAX_ATTEMPTS {
-            return Ok(None);
-        }
-        let sha = host::sha256_bytes(bytes);
-        let fixture_snapshot = store.materialize_object(bytes, false)?;
-        let fixture_arg = fixture_snapshot.to_string_lossy().into_owned();
-        let arguments: Vec<String> = capture
-            .arguments
-            .iter()
-            .map(|a| {
-                if a == &original_fixture_arg {
-                    fixture_arg.clone()
-                } else {
-                    a.clone()
-                }
-            })
-            .collect();
-        let reference_out = host::run_process(&authority_program, &arguments)?;
-        let candidate_out = host::run_process(&candidate_program, &arguments)?;
-        let reference = SideCapture::from_outcome(&reference_out);
-        let candidate = SideCapture::from_outcome(&candidate_out);
-        let context = crate::comparators::EvaluationContext {
-            fixture_sha256: &sha,
-            arguments: &arguments,
-            environment_digest: &environment_digest,
-            produced: None,
-            cwd: std::path::Path::new("."),
-            raw: Some((&reference_out, &candidate_out)),
-        };
-        let evaluation =
-            crate::comparators::evaluate(store, &plan, &reference, &candidate, &context);
-        let (outcome, recordable) = match evaluation {
-            Ok(e) => (
-                if matches!(e.result, crate::comparators::EvaluationResult::Divergent(_)) {
-                    ReductionAttemptOutcome::Preserved
-                } else {
-                    ReductionAttemptOutcome::Lost
-                },
-                true,
-            ),
-            Err(e) => {
-                attempts.push(ReductionAttempt {
-                    attempt: attempts.len() as u32 + 1,
-                    role,
-                    fixture_sha256: sha,
-                    outcome: ReductionAttemptOutcome::HarnessFailure,
-                    accepted: false,
-                });
-                return Err(FrfError::new(format!(
-                    "minimization of {residual_id} aborted: an executable attempt could not be evaluated: {e}"
-                )));
-            }
-        };
-        if recordable {
-            attempts.push(ReductionAttempt {
-                attempt: attempts.len() as u32 + 1,
-                role,
-                fixture_sha256: sha,
-                outcome,
-                accepted,
-            });
-        }
-        Ok(Some(outcome))
-    };
+    // The routed minimizer (the extension protocol, spec/minimizer.md): the
+    // residual's κ route names the reducer that may serve it. A declared
+    // minimizer for that route is an EXTERNAL program the court bound at
+    // observation time; the core COURT-VERIFIES its proposal with the one
+    // comparison operation. No declaration = the built-in ddmin reducer.
+    let route = crate::kappa::token_shape(&record.axis).next_court;
+    if let Some(semantic) = capture.minimizer_semantics.iter().find(|m| m.id == route) {
+        return minimize_external(
+            store,
+            &capture,
+            &record,
+            semantic,
+            &fixture_bytes,
+            original_lines,
+            &plan,
+            &authority_program,
+            &candidate_program,
+            &original_fixture_arg,
+            &environment_digest,
+        );
+    }
+
+    let mut attempts: Vec<ReductionAttempt> = Vec::new();
 
     // The initial check: the ORIGINAL fixture must reproduce the lineage
     // under the minimizer's own comparison (if it does not, the reduction
     // cannot even start — fail closed). A baseline is never an accepted
     // reduction (nothing shrank).
-    let baseline = attempt(
+    let baseline = run_attempt(
+        store,
+        &capture,
+        &plan,
+        &authority_program,
+        &candidate_program,
+        &original_fixture_arg,
+        &environment_digest,
         &fixture_bytes,
         ReductionAttemptRole::Baseline,
         false,
         &mut attempts,
+        residual_id,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -514,11 +467,19 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             let mut candidate: Vec<Vec<u8>> = elements[..start].to_vec();
             candidate.extend_from_slice(&elements[end..]);
             let candidate_bytes: Vec<u8> = candidate.concat();
-            let outcome = attempt(
+            let outcome = run_attempt(
+                store,
+                &capture,
+                &plan,
+                &authority_program,
+                &candidate_program,
+                &original_fixture_arg,
+                &environment_digest,
                 &candidate_bytes,
                 ReductionAttemptRole::Candidate,
                 false,
                 &mut attempts,
+                residual_id,
             )?;
             let Some(outcome) = outcome else {
                 break 'outer; // budget exhausted — the gate sits around the execution
@@ -555,11 +516,19 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // ran it); a final explicit confirmation keeps the record honest even
     // when the budget cut the search short. The budget gates this execution
     // too: if it is exhausted the record cannot claim a verified reproducer.
-    let outcome = attempt(
+    let outcome = run_attempt(
+        store,
+        &capture,
+        &plan,
+        &authority_program,
+        &candidate_program,
+        &original_fixture_arg,
+        &environment_digest,
         &final_bytes,
         ReductionAttemptRole::FinalVerification,
         false,
         &mut attempts,
+        residual_id,
     )?
     .ok_or_else(|| {
         FrfError::new(format!(
@@ -604,6 +573,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         &attempts,
         &derivation,
         &transform,
+        None, // the built-in ddmin reducer binds no external minimizer
     )?;
     let reduction = ReductionRecord {
         schema_version: SCHEMA_REDUCTION.to_string(),
@@ -625,6 +595,12 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         attempts,
         derivation: derivation.clone(),
         transform: transform.clone(),
+        minimizer_semantic_id: None,
+        minimizer_semantic_hash: None,
+        minimizer_implementation_hash: None,
+        minimizer_implementation_artifact: None,
+        minimizer_invocation_id: None,
+        minimizer_result_id: None,
     };
     store.write_reduction(&reduction)?;
 
@@ -636,6 +612,461 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         reduction.attempts.len(),
         derivation.minimality.kind,
         derivation.minimality.granularity,
+        derivation.minimality.proven,
+        &final_sha[..16]
+    );
+    Ok(id)
+}
+
+/// Run one executable fixture attempt during a minimization: materialize the
+/// fixture, execute both sides, re-apply the declared normalizers (the
+/// COMPARISON SURFACE — the same surface the court compared), evaluate the
+/// residual's axis through THE ONE comparison operation, and record the
+/// attempt with its role/outcome/acceptance. The budget is a HARD gate
+/// around EVERY executable attempt; a harness failure aborts the
+/// minimization, never silently skipped. Returns `None` when the budget is
+/// exhausted.
+#[allow(clippy::too_many_arguments)] // one argument per evidence dimension; the doc is the protocol shape
+fn run_attempt(
+    store: &Store,
+    capture: &CaptureManifest,
+    plan: &crate::comparators::EvaluationPlan,
+    authority_program: &Path,
+    candidate_program: &Path,
+    original_fixture_arg: &str,
+    environment_digest: &str,
+    bytes: &[u8],
+    role: ReductionAttemptRole,
+    accepted: bool,
+    attempts: &mut Vec<ReductionAttempt>,
+    what: &str,
+) -> Result<Option<ReductionAttemptOutcome>> {
+    if attempts.len() >= MINIMIZE_MAX_ATTEMPTS {
+        return Ok(None);
+    }
+    let sha = host::sha256_bytes(bytes);
+    let fixture_snapshot = store.materialize_object(bytes, false)?;
+    let fixture_arg = fixture_snapshot.to_string_lossy().into_owned();
+    let arguments: Vec<String> = capture
+        .arguments
+        .iter()
+        .map(|a| {
+            if a == original_fixture_arg {
+                fixture_arg.clone()
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    let raw_reference_out = host::run_process(authority_program, &arguments)?;
+    let raw_candidate_out = host::run_process(candidate_program, &arguments)?;
+    // The comparison surface is the NORMALIZED streams: re-apply the exact
+    // snapshotted normalizers the court bound (a fresh attempt is a NEW
+    // observation — its requests are not checked against the run's evidence).
+    let reference_out = crate::normalizers::apply_capture_normalizers(
+        store,
+        capture,
+        "reference",
+        &raw_reference_out,
+        None,
+        std::path::Path::new("."),
+    )?;
+    let candidate_out = crate::normalizers::apply_capture_normalizers(
+        store,
+        capture,
+        "candidate",
+        &raw_candidate_out,
+        None,
+        std::path::Path::new("."),
+    )?;
+    let reference = SideCapture::from_outcome(&reference_out);
+    let candidate = SideCapture::from_outcome(&candidate_out);
+    let context = crate::comparators::EvaluationContext {
+        fixture_sha256: &sha,
+        arguments: &arguments,
+        environment_digest,
+        produced: None,
+        cwd: std::path::Path::new("."),
+        raw: Some((&raw_reference_out, &raw_candidate_out)),
+        compared: Some((&reference_out, &candidate_out)),
+    };
+    let evaluation = crate::comparators::evaluate(store, plan, &reference, &candidate, &context);
+    let (outcome, recordable) = match evaluation {
+        Ok(e) => (
+            if matches!(e.result, crate::comparators::EvaluationResult::Divergent(_)) {
+                ReductionAttemptOutcome::Preserved
+            } else {
+                ReductionAttemptOutcome::Lost
+            },
+            true,
+        ),
+        Err(e) => {
+            attempts.push(ReductionAttempt {
+                attempt: attempts.len() as u32 + 1,
+                role,
+                fixture_sha256: sha,
+                outcome: ReductionAttemptOutcome::HarnessFailure,
+                accepted: false,
+            });
+            return Err(FrfError::new(format!(
+                "minimization of {what} aborted: an executable attempt could not be evaluated: {e}"
+            )));
+        }
+    };
+    if recordable {
+        attempts.push(ReductionAttempt {
+            attempt: attempts.len() as u32 + 1,
+            role,
+            fixture_sha256: sha,
+            outcome,
+            accepted,
+        });
+    }
+    Ok(Some(outcome))
+}
+
+/// The EXTERNAL minimizer path (the extension protocol, spec/minimizer.md):
+/// the residual's κ route is served by a declared minimizer whose program the
+/// court bound at observation time. The minimizer proposes a reduced fixture;
+/// the core COURT-VERIFIES it with the one comparison operation — a proposal
+/// that does not preserve the lineage is recorded-but-not-accepted (the
+/// refusal is itself evidence, content-addressed under the residual), and a
+/// proposal that cannot be evaluated aborts as a harness failure. The
+/// accepted reduction binds the minimizer's semantic + implementation
+/// identities and the content-addressed invocation + result records.
+#[allow(clippy::too_many_arguments)] // one argument per evidence dimension; the doc is the protocol shape
+fn minimize_external(
+    store: &Store,
+    capture: &CaptureManifest,
+    record: &ResidualRecord,
+    semantic: &MinimizerSemantic,
+    fixture_bytes: &[u8],
+    original_lines: u32,
+    plan: &crate::comparators::EvaluationPlan,
+    authority_program: &Path,
+    candidate_program: &Path,
+    original_fixture_arg: &str,
+    environment_digest: &str,
+) -> Result<String> {
+    let residual_id = record.id.clone();
+    let implementation = capture
+        .provenance
+        .minimizer_implementations
+        .iter()
+        .find(|i| i.id == semantic.id)
+        .ok_or_else(|| {
+            FrfError::new(format!(
+                "residual {residual_id}: the capture carries no implementation for minimizer {}",
+                semantic.id
+            ))
+        })?;
+    let artifact = implementation.artifact.as_ref().ok_or_else(|| {
+        FrfError::new(format!(
+            "residual {residual_id}: minimizer {} has no snapshotted implementation artifact",
+            semantic.id
+        ))
+    })?;
+    let snapshot = crate::comparators::materialize_implementation(store, artifact)?;
+
+    // The canonical minimizer request: the residual + the original fixture
+    // (base64) + the proposal budget the core will honor. The response must
+    // cryptographically name the request it answers.
+    let request = MinimizerRequest {
+        schema_version: crate::model::SCHEMA_MINIMIZER_REQUEST,
+        minimizer: semantic,
+        residual: MinimizerResidual {
+            id: &record.id,
+            axis: record.axis.as_str(),
+            kind: record.kind.as_str(),
+            authority: &record.authority,
+            candidate_sha256: &record.candidate_sha256,
+        },
+        fixture: MinimizerFixture {
+            sha256: &capture.fixture_sha256,
+            raw_base64: crate::ext::b64(fixture_bytes),
+        },
+        budget: MINIMIZE_MAX_ATTEMPTS.to_string(),
+        context: MinimizerContext {
+            court_semantic_identity: &capture.court_semantic_identity,
+            environment_digest,
+        },
+    };
+    let request_bytes = crate::canon::canonical(&request)?.into_bytes();
+    let request_cid = crate::ext::request_cid(&request_bytes);
+    let response_bytes =
+        crate::ext::run_program(&snapshot, &request_bytes, std::path::Path::new("."))?;
+    let response: MinimizerResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
+        FrfError::new(format!(
+            "minimizer {} produced an unparseable response: {e}",
+            semantic.id
+        ))
+    })?;
+    if response.schema_version != crate::model::SCHEMA_MINIMIZER_RESPONSE {
+        return Err(FrfError::new(format!(
+            "minimizer response has unsupported schema version {:?}",
+            response.schema_version
+        )));
+    }
+    if response.request_id != request_cid {
+        return Err(FrfError::new(format!(
+            "minimizer {} does not name the request it answers",
+            semantic.id
+        )));
+    }
+    if response.indeterminate {
+        return Err(FrfError::new(format!(
+            "minimizer {} returned indeterminate; refusing to record inconclusive evidence",
+            semantic.id
+        )));
+    }
+    if let Some(f) = &response.failure {
+        return Err(FrfError::new(format!(
+            "minimizer {} reported failure: {f}",
+            semantic.id
+        )));
+    }
+    let proposal_bytes = crate::ext::unb64(&response.fixture_base64, "proposed fixture")?;
+    let proposal_sha = host::sha256_bytes(&proposal_bytes);
+    if proposal_sha != response.fixture_sha256 {
+        return Err(FrfError::new(format!(
+            "minimizer {} proposed a fixture that does not hash to its declared sha256; refusing to court-verify a self-contradictory proposal",
+            semantic.id
+        )));
+    }
+    if proposal_bytes == fixture_bytes {
+        return Err(FrfError::new(format!(
+            "minimizer {} proposed the original fixture; nothing was reduced",
+            semantic.id
+        )));
+    }
+
+    let mut attempts: Vec<ReductionAttempt> = Vec::new();
+    // The baseline: the ORIGINAL fixture must reproduce the lineage (as in
+    // the built-in reducer) before any proposal is even considered.
+    let baseline = run_attempt(
+        store,
+        capture,
+        plan,
+        authority_program,
+        candidate_program,
+        original_fixture_arg,
+        environment_digest,
+        fixture_bytes,
+        ReductionAttemptRole::Baseline,
+        false,
+        &mut attempts,
+        &residual_id,
+    )?
+    .ok_or_else(|| {
+        FrfError::new(format!(
+            "minimization of {residual_id}: the attempt budget was exhausted by the baseline check"
+        ))
+    })?;
+    if baseline != ReductionAttemptOutcome::Preserved {
+        return Err(FrfError::new(format!(
+            "residual {residual_id}: the original fixture does not reproduce the {} divergence under this comparator; refusing to minimize",
+            record.axis.as_str()
+        )));
+    }
+
+    // Court-verify the proposal: THE comparison operation decides, never the
+    // minimizer's claim. This is the only other executable attempt.
+    let outcome = run_attempt(
+        store,
+        capture,
+        plan,
+        authority_program,
+        candidate_program,
+        original_fixture_arg,
+        environment_digest,
+        &proposal_bytes,
+        ReductionAttemptRole::FinalVerification,
+        false,
+        &mut attempts,
+        &residual_id,
+    )?
+    .ok_or_else(|| {
+        FrfError::new(format!(
+            "minimization of {residual_id}: the attempt budget was exhausted before the proposed fixture could be court-verified"
+        ))
+    })?;
+
+    let response_cid = crate::host::sha256_bytes(&response_bytes);
+    let invocation = MinimizerInvocation {
+        schema_version: crate::model::SCHEMA_MINIMIZER_INVOCATION.to_string(),
+        invocation_id: crate::semantics::minimizer_invocation_identity(
+            &crate::semantics::MinimizerInvocationContent {
+                minimizer_id: &semantic.id,
+                residual_id: &record.id,
+                request_cid: &request_cid,
+                minimizer_semantic_cid: &semantic.specification_hash,
+                minimizer_implementation_artifact: artifact,
+                execution_provenance: &capture.provenance.runner,
+            },
+        )?,
+        minimizer_id: semantic.id.clone(),
+        residual_id: record.id.clone(),
+        request_cid: request_cid.clone(),
+        minimizer_semantic_cid: semantic.specification_hash.clone(),
+        minimizer_implementation_artifact: artifact.clone(),
+        execution_provenance: capture.provenance.runner.clone(),
+    };
+    let court_verified = outcome == ReductionAttemptOutcome::Preserved;
+    let result = MinimizerResult {
+        schema_version: crate::model::SCHEMA_MINIMIZER_RESULT.to_string(),
+        result_id: crate::semantics::minimizer_result_identity(
+            &crate::semantics::MinimizerResultContent {
+                request_cid: &request_cid,
+                response_cid: &response_cid,
+                proposed_fixture_sha256: &proposal_sha,
+                court_verified,
+            },
+        )?,
+        invocation_id: invocation.invocation_id.clone(),
+        request_cid,
+        response_cid,
+        proposed_fixture_sha256: proposal_sha.clone(),
+        court_verified,
+        outcome: if court_verified {
+            "accepted".to_string()
+        } else {
+            "rejected".to_string()
+        },
+    };
+
+    if !court_verified {
+        // Recorded-but-not-accepted: the proposal failed court verification.
+        // The refusal is itself evidence — the canonical request/response +
+        // invocation + result are preserved, content-addressed by the request,
+        // under the residual.
+        let dir = store
+            .residual_path(&record.id)?
+            .parent()
+            .expect("residual path has a parent")
+            .join(format!("{}.minimizer", record.id))
+            .join(&result.request_cid);
+        crate::ext::write_evidence(
+            store,
+            &dir,
+            &request_bytes,
+            &response_bytes,
+            &serde_json::to_value(&invocation).map_err(|e| {
+                FrfError::new(format!("cannot serialize the minimizer invocation: {e}"))
+            })?,
+            &serde_json::to_value(&result).map_err(|e| {
+                FrfError::new(format!("cannot serialize the minimizer result: {e}"))
+            })?,
+        )?;
+        return Err(FrfError::new(format!(
+            "minimizer {} proposed fixture {} which does not preserve the {} lineage under court verification; the proposal was recorded but NOT accepted — no reduction produced",
+            semantic.id,
+            &proposal_sha[..16],
+            record.axis.as_str()
+        )));
+    }
+
+    // Accepted: the proposal is the court-verified minimal reproducer.
+    if let Some(last) = attempts.last_mut() {
+        last.accepted = true;
+    }
+    let final_sha = proposal_sha;
+    let final_text = String::from_utf8(proposal_bytes.clone()).map_err(|_| {
+        FrfError::new(format!(
+            "minimizer {} proposed a non-UTF-8 fixture; this version's derivation records line counts (text reducers only)",
+            semantic.id
+        ))
+    })?;
+    let final_lines = final_text.lines().count() as u32;
+
+    let derivation = ReductionDerivation {
+        strategy: format!("external:{}", semantic.relation_id),
+        original_lines,
+        final_lines,
+        minimality: ReductionMinimality {
+            kind: "one-minimal".to_string(),
+            granularity: "line".to_string(),
+            // The minimizer's own claim, recorded as claimed; the final
+            // proposal's survival is independently court-verified above.
+            proven: response.minimal,
+        },
+    };
+    let transform = EvidenceTransform::reduction(&record.id, &plan.semantic.relation_label());
+    let id = crate::semantics::reduction_identity(
+        &record.id,
+        &record.run,
+        record.axis.as_str(),
+        record.kind.clone(),
+        &capture.court_semantic_identity,
+        &capture.authority_artifact.sha256,
+        &capture.candidate_artifact.sha256,
+        environment_digest,
+        &plan.semantic.id,
+        &plan.semantic.specification_hash,
+        &plan.implementation.implementation_hash,
+        &capture.arguments,
+        &capture.fixture_sha256,
+        &final_sha,
+        &attempts,
+        &derivation,
+        &transform,
+        Some((
+            &semantic.id,
+            &semantic.specification_hash,
+            &implementation.implementation_hash,
+            artifact,
+            &invocation.invocation_id,
+            &result.result_id,
+        )),
+    )?;
+    let reduction = ReductionRecord {
+        schema_version: SCHEMA_REDUCTION.to_string(),
+        id: id.clone(),
+        residual_id: record.id.clone(),
+        source_run: record.run.clone(),
+        axis: record.axis.as_str().to_string(),
+        kind: record.kind.clone(),
+        court_semantic_identity: capture.court_semantic_identity.clone(),
+        authority_artifact_sha256: capture.authority_artifact.sha256.clone(),
+        candidate_artifact_sha256: capture.candidate_artifact.sha256.clone(),
+        environment_digest: environment_digest.to_string(),
+        comparator_semantic_id: plan.semantic.id.clone(),
+        comparator_semantic_hash: plan.semantic.specification_hash.clone(),
+        comparator_implementation_hash: plan.implementation.implementation_hash.clone(),
+        argv_template: capture.arguments.clone(),
+        original_fixture_sha256: capture.fixture_sha256.clone(),
+        final_fixture_sha256: final_sha.clone(),
+        attempts,
+        derivation: derivation.clone(),
+        transform: transform.clone(),
+        minimizer_semantic_id: Some(semantic.id.clone()),
+        minimizer_semantic_hash: Some(semantic.specification_hash.clone()),
+        minimizer_implementation_hash: Some(implementation.implementation_hash.clone()),
+        minimizer_implementation_artifact: Some(artifact.clone()),
+        minimizer_invocation_id: Some(invocation.invocation_id.clone()),
+        minimizer_result_id: Some(result.result_id.clone()),
+    };
+    // The minimizer's invocation evidence lives under the reduction, bound by
+    // the record; then the record itself (content-addressed, write-once).
+    crate::ext::write_evidence(
+        store,
+        &store.minimizer_dir(&id)?,
+        &request_bytes,
+        &response_bytes,
+        &serde_json::to_value(&invocation).map_err(|e| {
+            FrfError::new(format!("cannot serialize the minimizer invocation: {e}"))
+        })?,
+        &serde_json::to_value(&result)
+            .map_err(|e| FrfError::new(format!("cannot serialize the minimizer result: {e}")))?,
+    )?;
+    store.write_reduction(&reduction)?;
+
+    eprintln!(
+        "reduction {}: {} -> {} line(s) (external minimizer {}, {} attempt(s), minimality proven={}, court-verified); reproducer object {}",
+        &id[..16],
+        derivation.original_lines,
+        derivation.final_lines,
+        semantic.id,
+        reduction.attempts.len(),
         derivation.minimality.proven,
         &final_sha[..16]
     );
@@ -743,12 +1174,92 @@ pub fn run_once(
     // Declaration must never masquerade as enforcement: anything the executor
     // does not actually enforce is refused up front.
     let envelope = &spec.admissibility_envelope;
-    if !envelope.normalizers.is_empty() {
-        return Err(FrfError::new(format!(
-            "normalizers are not supported in this version (declared: {:?}); a declared normalizer that is not applied would falsify the evidence — remove the declaration",
-            envelope.normalizers
-        )));
+
+    // -- the normalizer extension protocol (spec/normalizer.md) --------------
+    // The envelope's `normalizers` list names exactly the declared normalizer
+    // ids that are APPLIED, in application order. Fail closed both ways: an
+    // applied normalizer that is not declared would run unverifiable code; a
+    // declared normalizer that is not applied would make the declaration a
+    // lie. The set must match exactly; the order is the envelope's.
+    for id in &envelope.normalizers {
+        crate::store::validate_id("normalizer", id)?;
+        if !manifest.normalizers.iter().any(|n| &n.id == id) {
+            return Err(FrfError::new(format!(
+                "the envelope applies normalizer {id:?} but no normalizer with that id is declared in the manifest; refusing to run unverifiable normalization"
+            )));
+        }
     }
+    let mut seen_normalizer: Vec<&str> = Vec::new();
+    for n in &manifest.normalizers {
+        crate::store::validate_id("normalizer", &n.id)?;
+        if seen_normalizer.contains(&n.id.as_str()) {
+            return Err(FrfError::new(format!(
+                "duplicate normalizer id '{}' in the manifest; a normalizer is applied at most once per side",
+                n.id
+            )));
+        }
+        seen_normalizer.push(&n.id);
+        if !matches!(n.applies_to.as_str(), "stdout" | "stderr" | "both") {
+            return Err(FrfError::new(format!(
+                "normalizer {} declares applies_to {:?}; the protocol admits stdout, stderr, or both",
+                n.id, n.applies_to
+            )));
+        }
+        if !envelope.normalizers.iter().any(|id| id == &n.id) {
+            return Err(FrfError::new(format!(
+                "normalizer {} is declared but the envelope does not apply it; a declared normalizer that is not applied would falsify the evidence — apply it or remove the declaration",
+                n.id
+            )));
+        }
+    }
+
+    // -- the capture-adapter extension protocol (spec/capture-adapter.md) ----
+    // An adapter serves ONE externally served observable axis: it captures
+    // the observation (dns.wire, sql.schema, …) the external comparator
+    // consumes. An adapted axis MUST be served by an external comparator (the
+    // adapter defines the observation format; no built-in knows it), and an
+    // axis may have at most one adapter.
+    let mut seen_adapter: Vec<&str> = Vec::new();
+    for a in &manifest.capture_adapters {
+        crate::store::validate_id("capture-adapter", &a.axis)?;
+        if !observables.iter().any(|o| o.as_str() == a.axis) {
+            return Err(FrfError::new(format!(
+                "capture adapter serves axis '{}' which is not in the envelope's observables; refusing to capture an axis the court did not declare",
+                a.axis
+            )));
+        }
+        if seen_adapter.contains(&a.axis.as_str()) {
+            return Err(FrfError::new(format!(
+                "duplicate capture adapter for axis '{}'; an axis has at most one capture",
+                a.axis
+            )));
+        }
+        seen_adapter.push(&a.axis);
+        let externally_served = manifest.comparators.iter().any(|c| c.axis == a.axis);
+        if !externally_served {
+            return Err(FrfError::new(format!(
+                "capture adapter serves axis '{}' but no external comparator is declared for it; an adapted observation has a format only its comparator knows — declare the comparator",
+                a.axis
+            )));
+        }
+    }
+
+    // -- the minimizer extension protocol (spec/minimizer.md) ----------------
+    // Declared minimizers serve κ routes; each id must be a valid identifier
+    // and unique. Resolution happens at `frf court minimize` time against
+    // this run's capture.
+    let mut seen_minimizer: Vec<&str> = Vec::new();
+    for m in &manifest.minimizers {
+        crate::store::validate_id("minimizer", &m.id)?;
+        if seen_minimizer.contains(&m.id.as_str()) {
+            return Err(FrfError::new(format!(
+                "duplicate minimizer id '{}' in the manifest; one minimizer per κ route",
+                m.id
+            )));
+        }
+        seen_minimizer.push(&m.id);
+    }
+
     if envelope.replay_scope != "single-run" {
         return Err(FrfError::new(format!(
             "replay_scope '{:?}' is not supported: only 'single-run' execution exists, and a declared scope that is not executed would falsify the evidence",
@@ -928,11 +1439,114 @@ pub fn run_once(
             }
         })
         .collect::<Result<_>>()?;
+    // Normalizer implementations: read + hash + seal BEFORE any execution;
+    // the snapshots are what run against the sides' raw streams.
+    let normalizer_hosts: Vec<(NormalizerDeclaration, crate::ext::ProgramSnapshot)> = envelope
+        .normalizers
+        .iter()
+        .map(|id| {
+            let decl = manifest
+                .normalizers
+                .iter()
+                .find(|n| &n.id == id)
+                .expect("validated: every applied normalizer is declared");
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&decl.program))?;
+            Ok((decl.clone(), snapshot))
+        })
+        .collect::<Result<_>>()?;
+    let normalizer_implementations: Vec<NormalizerImplementation> = normalizer_hosts
+        .iter()
+        .map(|(decl, snap)| NormalizerImplementation {
+            id: decl.id.clone(),
+            implementation_hash: snap.impl_hash.clone(),
+            runner_hash: runner.frf_executable_hash.clone(),
+            artifact: Some(snap.artifact.clone()),
+        })
+        .collect();
+    // Capture-adapter implementations: one per adapted axis.
+    let adapter_hosts: Vec<(CaptureAdapterDeclaration, crate::ext::ProgramSnapshot)> = manifest
+        .capture_adapters
+        .iter()
+        .map(|a| {
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&a.program))?;
+            Ok((a.clone(), snapshot))
+        })
+        .collect::<Result<_>>()?;
+    let adapter_implementations: Vec<CaptureAdapterImplementation> = adapter_hosts
+        .iter()
+        .map(|(decl, snap)| CaptureAdapterImplementation {
+            id: decl.axis.clone(),
+            implementation_hash: snap.impl_hash.clone(),
+            runner_hash: runner.frf_executable_hash.clone(),
+            artifact: Some(snap.artifact.clone()),
+        })
+        .collect();
+    // Minimizer implementations: read + hash + seal BEFORE anything could
+    // execute them. A minimizer runs only at `frf court minimize` time, but
+    // the EXACT reducer the court binds for a κ route is snapshotted at
+    // OBSERVATION time — so minimize works without the original manifest and
+    // the bundle closure carries the reducer that actually reduced.
+    let minimizer_hosts: Vec<(MinimizerDeclaration, crate::ext::ProgramSnapshot)> = manifest
+        .minimizers
+        .iter()
+        .map(|m| {
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&m.program))?;
+            Ok((m.clone(), snapshot))
+        })
+        .collect::<Result<_>>()?;
+    let minimizer_implementations: Vec<MinimizerImplementation> = minimizer_hosts
+        .iter()
+        .map(|(decl, snap)| MinimizerImplementation {
+            id: decl.id.clone(),
+            implementation_hash: snap.impl_hash.clone(),
+            runner_hash: runner.frf_executable_hash.clone(),
+            artifact: Some(snap.artifact.clone()),
+        })
+        .collect();
     let provenance = ObservationProvenance {
         schema_version: SCHEMA_PROVENANCE.to_string(),
         runner: runner.clone(),
         comparator_implementations,
+        normalizer_implementations,
+        adapter_implementations,
+        minimizer_implementations,
     };
+
+    // The normalizer SEMANTIC identities, in application (envelope) order,
+    // and the minimizer semantics the court binds for `court minimize`.
+    let normalizer_semantics: Vec<NormalizerSemantic> = normalizer_hosts
+        .iter()
+        .map(|(decl, _)| crate::normalizers::declared_semantic(decl))
+        .collect::<Result<_>>()?;
+    // The minimizer semantics the court binds for `court minimize`.
+    let minimizer_semantics: Vec<MinimizerSemantic> = manifest
+        .minimizers
+        .iter()
+        .map(|m| {
+            let specification_hash =
+                crate::semantics::minimizer_specification_hash(&m.id, &m.relation)?;
+            Ok(MinimizerSemantic {
+                id: m.id.clone(),
+                relation_id: m.relation.clone(),
+                relation_version: m.relation_version.clone(),
+                specification_hash,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let adapter_semantics: Vec<CaptureAdapterSemantic> = manifest
+        .capture_adapters
+        .iter()
+        .map(|a| {
+            let specification_hash =
+                crate::semantics::capture_adapter_specification_hash(&a.axis, &a.relation)?;
+            Ok(CaptureAdapterSemantic {
+                id: a.axis.clone(),
+                relation_id: a.relation.clone(),
+                relation_version: a.relation_version.clone(),
+                specification_hash,
+            })
+        })
+        .collect::<Result<_>>()?;
     let court_semantic_identity = crate::semantics::court_semantic_identity(
         spec,
         &authority_sha256,
@@ -1013,6 +1627,222 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
+    // -- apply the declared normalizers (spec/normalizer.md) ------------------
+    // A normalizer maps one side's raw streams to the streams the court
+    // COMPARES. Normalizers compose in envelope order; the raw streams survive
+    // as each invocation's request evidence, so an observation is never
+    // rewritten — the comparison surface is. The compared streams are what
+    // the capture records, what the residuals derive from, and what the
+    // external comparator requests carry.
+    struct PendingNormalizer {
+        id: String,
+        side: String,
+        request_bytes: Vec<u8>,
+        response_bytes: Vec<u8>,
+        invocation: NormalizerInvocation,
+        result: NormalizerResult,
+    }
+    let mut pending_normalizers: Vec<PendingNormalizer> = Vec::new();
+    // The produced trees (the normalizers do not touch them; the compared
+    // side captures carry them).
+    let raw_reference_produced = reference.produced.clone();
+    let raw_candidate_produced = candidate.produced.clone();
+    let mut normalize_side = |side: &str,
+                              outcome: &host::ProcessOutcome|
+     -> Result<host::ProcessOutcome> {
+        let mut stdout = outcome.stdout.clone();
+        let mut stderr = outcome.stderr.clone();
+        for (decl, snap) in &normalizer_hosts {
+            let semantic = crate::normalizers::declared_semantic(decl)?;
+            let request = crate::normalizers::build_request(
+                &semantic,
+                side,
+                &stdout,
+                &stderr,
+                &fixture_sha256,
+                &arguments,
+                &environment.digest,
+            );
+            let (request_bytes, _request_cid) = crate::normalizers::canonical_request(&request)?;
+            let (new_stdout, new_stderr, response_bytes) = crate::normalizers::run_side(
+                &snap.snapshot,
+                &request_bytes,
+                &semantic,
+                &stdout,
+                &stderr,
+                std::path::Path::new("."),
+            )?;
+            // The invocation + result records are written once the run id
+            // exists (the evidence lives under captures/<run>/).
+            let (invocation, result) = crate::normalizers::record_evidence(
+                &decl.id,
+                side,
+                &semantic,
+                &snap.artifact,
+                &runner,
+                &request_bytes,
+                &response_bytes,
+                &new_stdout,
+                &new_stderr,
+            )?;
+            pending_normalizers.push(PendingNormalizer {
+                id: decl.id.clone(),
+                side: side.to_string(),
+                request_bytes,
+                response_bytes,
+                invocation,
+                result,
+            });
+            stdout = new_stdout;
+            stderr = new_stderr;
+        }
+        Ok(host::ProcessOutcome {
+            stdout,
+            stderr,
+            exit: outcome.exit.clone(),
+        })
+    };
+    let reference_compared = normalize_side("reference", &reference_out)?;
+    let candidate_compared = normalize_side("candidate", &candidate_out)?;
+
+    // The COMPARED observation: the normalized streams (the raw streams live
+    // in the normalizer request evidence), the produced trees, and — below —
+    // the adapted observations.
+    let mut reference = SideCapture::from_outcome(&reference_compared);
+    reference.produced = raw_reference_produced;
+    let mut candidate = SideCapture::from_outcome(&candidate_compared);
+    candidate.produced = raw_candidate_produced;
+
+    // -- capture adapters (spec/capture-adapter.md) ---------------------------
+    // An adapter captures the observation for one externally served axis: the
+    // side's raw outcome in (the request evidence), the ADAPTED observation
+    // out, attached to the compared side capture — what the axis's external
+    // comparator receives.
+    struct PendingAdapter {
+        axis: String,
+        side: String,
+        request_bytes: Vec<u8>,
+        response_bytes: Vec<u8>,
+        invocation: CaptureAdapterInvocation,
+        result: CaptureAdapterResult,
+    }
+    let mut pending_adapters: Vec<PendingAdapter> = Vec::new();
+    for (decl, snap) in &adapter_hosts {
+        let semantic = adapter_semantics
+            .iter()
+            .find(|s| s.id == decl.axis)
+            .expect("validated: adapter semantics match declarations")
+            .clone();
+        for (side, raw_outcome, compared_side) in [
+            ("reference", &reference_out, &mut reference),
+            ("candidate", &candidate_out, &mut candidate),
+        ] {
+            let request = crate::model::CaptureAdapterRequest {
+                schema_version: crate::model::SCHEMA_CAPTURE_ADAPTER_REQUEST,
+                adapter: &semantic,
+                side,
+                outcome: crate::model::CaptureAdapterOutcome {
+                    exit: &raw_outcome.exit,
+                    stdout_base64: crate::ext::b64(&raw_outcome.stdout),
+                    stderr_base64: crate::ext::b64(&raw_outcome.stderr),
+                    produced: None,
+                },
+                context: crate::model::NormalizerContext {
+                    fixture_sha256: &fixture_sha256,
+                    arguments: &arguments,
+                    environment_digest: &environment.digest,
+                },
+            };
+            let json = crate::canon::canonical(&request)?;
+            let request_bytes = json.into_bytes();
+            let response_bytes =
+                crate::ext::run_program(&snap.snapshot, &request_bytes, std::path::Path::new("."))?;
+            let response: crate::model::CaptureAdapterResponse =
+                serde_json::from_slice(&response_bytes).map_err(|e| {
+                    FrfError::new(format!(
+                        "capture adapter for axis {} produced an unparseable response: {e}",
+                        decl.axis
+                    ))
+                })?;
+            if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
+                return Err(FrfError::new(format!(
+                    "capture adapter response has unsupported schema version {:?}",
+                    response.schema_version
+                )));
+            }
+            if response.request_id != crate::ext::request_cid(&request_bytes) {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} names request {} but it answers request {}; a response must cryptographically name the exact request it answers",
+                    decl.axis,
+                    &response.request_id[..16.min(response.request_id.len())],
+                    &crate::ext::request_cid(&request_bytes)[..16]
+                )));
+            }
+            if response.indeterminate {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} returned indeterminate; refusing to record inconclusive evidence",
+                    decl.axis
+                )));
+            }
+            if let Some(f) = &response.failure {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} reported failure: {f}",
+                    decl.axis
+                )));
+            }
+            let observation_sha256 = response
+                .observation
+                .as_ref()
+                .map(|o| o.content_sha256.clone())
+                .unwrap_or_default();
+            compared_side.adapted = response.observation.clone();
+            let response_cid = crate::host::sha256_bytes(&response_bytes);
+            let request_cid = crate::ext::request_cid(&request_bytes);
+            let invocation_id = crate::semantics::capture_adapter_invocation_identity(
+                &crate::semantics::CaptureAdapterInvocationContent {
+                    axis: &decl.axis,
+                    side,
+                    request_cid: &request_cid,
+                    adapter_semantic_cid: &semantic.specification_hash,
+                    adapter_implementation_artifact: &snap.artifact,
+                    execution_provenance: &runner,
+                },
+            )?;
+            let result_id = crate::semantics::capture_adapter_result_identity(
+                &crate::semantics::CaptureAdapterResultContent {
+                    request_cid: &request_cid,
+                    response_cid: &response_cid,
+                    observation_sha256: &observation_sha256,
+                },
+            )?;
+            pending_adapters.push(PendingAdapter {
+                axis: decl.axis.clone(),
+                side: side.to_string(),
+                request_bytes,
+                response_bytes,
+                invocation: CaptureAdapterInvocation {
+                    schema_version: crate::model::SCHEMA_CAPTURE_ADAPTER_INVOCATION.to_string(),
+                    invocation_id: invocation_id.clone(),
+                    axis: decl.axis.clone(),
+                    side: side.to_string(),
+                    request_cid: request_cid.clone(),
+                    adapter_semantic_cid: semantic.specification_hash.clone(),
+                    adapter_implementation_artifact: snap.artifact.clone(),
+                    execution_provenance: runner.clone(),
+                },
+                result: CaptureAdapterResult {
+                    schema_version: crate::model::SCHEMA_CAPTURE_ADAPTER_RESULT.to_string(),
+                    result_id,
+                    invocation_id,
+                    request_cid,
+                    response_cid,
+                    observation_sha256,
+                    outcome: "captured".to_string(),
+                },
+            });
+        }
+    }
+
     // -- diff the declared axes (Section 12 comparators) -----------------------
 
     // The comparator serving each axis fixes the relation AND the residual
@@ -1056,6 +1886,7 @@ pub fn run_once(
             produced: reference.produced.as_ref().zip(candidate.produced.as_ref()),
             cwd: std::path::Path::new("."),
             raw: Some((&reference_out, &candidate_out)),
+            compared: Some((&reference_compared, &candidate_compared)),
         };
         let evaluation =
             crate::comparators::evaluate(store, &plan, &reference, &candidate, &context)?;
@@ -1171,8 +2002,8 @@ pub fn run_once(
 
     std::fs::create_dir(&run_dir)
         .map_err(|e| FrfError::new(format!("cannot create {}: {e}", run_dir.display())))?;
-    write_side_files(&run_dir, "reference", &reference_out, &reference)?;
-    write_side_files(&run_dir, "candidate", &candidate_out, &candidate)?;
+    write_side_files(&run_dir, "reference", &reference_compared, &reference)?;
+    write_side_files(&run_dir, "candidate", &candidate_compared, &candidate)?;
     // The produced trees: the staged bytes are copied under the run (the
     // transient produce path is already cleared), immutable and rehashed by
     // verification.
@@ -1285,6 +2116,52 @@ pub fn run_once(
         );
     }
 
+    // -- normalizer + capture-adapter invocation evidence -------------------
+    // The exact instruments that built the COMPARISON SURFACE: each
+    // normalizer's canonical request (one side's raw streams at that point of
+    // the application chain), its canonical response, and the content-
+    // addressed invocation + result records — written once, immutable,
+    // under `captures/<run>/normalizer/<id>/<side>/`. The capture adapters
+    // that produced the ADAPTED observations are the same shape, under
+    // `captures/<run>/capture-adapter/<axis>/<side>/`. Verification rehashes
+    // every file and rederives every identity without executing anything.
+    for pending in &pending_normalizers {
+        crate::ext::write_evidence(
+            store,
+            &run_dir
+                .join("normalizer")
+                .join(&pending.id)
+                .join(&pending.side),
+            &pending.request_bytes,
+            &pending.response_bytes,
+            &serde_json::to_value(&pending.invocation).map_err(|e| {
+                FrfError::new(format!("cannot serialize the normalizer invocation: {e}"))
+            })?,
+            &serde_json::to_value(&pending.result).map_err(|e| {
+                FrfError::new(format!("cannot serialize the normalizer result: {e}"))
+            })?,
+        )?;
+    }
+    for pending in &pending_adapters {
+        crate::ext::write_evidence(
+            store,
+            &run_dir
+                .join("capture-adapter")
+                .join(&pending.axis)
+                .join(&pending.side),
+            &pending.request_bytes,
+            &pending.response_bytes,
+            &serde_json::to_value(&pending.invocation).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot serialize the capture-adapter invocation: {e}"
+                ))
+            })?,
+            &serde_json::to_value(&pending.result).map_err(|e| {
+                FrfError::new(format!("cannot serialize the capture-adapter result: {e}"))
+            })?,
+        )?;
+    }
+
     // -- capture manifest --------------------------------------------------------
 
     // The run's outgoing evidence references: the executed artifacts and the
@@ -1313,6 +2190,27 @@ pub fn run_once(
             cid: host.artifact.sha256.clone(),
         });
     }
+    for (_, snap) in &normalizer_hosts {
+        evidence_refs.push(EvidenceRef {
+            role: "normalizer-implementation".into(),
+            object_kind: "object".into(),
+            cid: snap.impl_hash.clone(),
+        });
+    }
+    for (_, snap) in &adapter_hosts {
+        evidence_refs.push(EvidenceRef {
+            role: "capture-adapter-implementation".into(),
+            object_kind: "object".into(),
+            cid: snap.impl_hash.clone(),
+        });
+    }
+    for (_, snap) in &minimizer_hosts {
+        evidence_refs.push(EvidenceRef {
+            role: "minimizer-implementation".into(),
+            object_kind: "object".into(),
+            cid: snap.impl_hash.clone(),
+        });
+    }
 
     let capture = CaptureManifest {
         schema_version: SCHEMA_CAPTURE.to_string(),
@@ -1326,6 +2224,9 @@ pub fn run_once(
         environment,
         court_spec: spec.clone(),
         comparator_semantics,
+        normalizer_semantics,
+        adapter_semantics,
+        minimizer_semantics,
         provenance,
         // Artifact paths are ROOT-relative pointers (stable across machines);
         // the capture's `arguments` are the verbatim argv the side received.
@@ -1615,6 +2516,7 @@ impl SideCapture {
             stdout_sha256: host::sha256_bytes(&outcome.stdout),
             stderr_sha256: host::sha256_bytes(&outcome.stderr),
             produced: None,
+            adapted: None,
             stdout_bytes: outcome.stdout.clone(),
         }
     }

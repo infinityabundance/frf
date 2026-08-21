@@ -8,6 +8,7 @@ pub mod court;
 pub mod dispose;
 pub mod receipt;
 pub mod replay;
+pub mod witness;
 
 use crate::cli::*;
 use crate::error::Result;
@@ -128,6 +129,30 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             BundleCmd::Verify { path } => crate::commands::bundle::verify(&path),
             BundleCmd::Replay { path, policy } => {
                 crate::commands::bundle::replay_bundle(&path, &policy)
+            }
+        },
+        Command::Witness { sub } => match sub {
+            WitnessCmd::Attest {
+                kind,
+                subject_id,
+                id,
+                relation,
+                relation_version,
+                program,
+                statement,
+            } => {
+                let id = witness::attest(
+                    store,
+                    &kind,
+                    &subject_id,
+                    &id,
+                    &relation,
+                    &relation_version,
+                    &program,
+                    &statement,
+                )?;
+                println!("{id}");
+                Ok(())
             }
         },
     }

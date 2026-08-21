@@ -1,0 +1,80 @@
+schema_version: frf-claim-v3
+receipt: receipt-run-cli-malformed-input-05f94cb43c477ef72b82ab2949e7226fe396a2c59db7f801b3c77166ba6e1bcd-8d92efe27df5ac60868ca2546fa540647216ed934e87f717c02e6f7a5b68c9b8
+authority: ref-cli-1.8.2
+candidate:
+  name: cand-cli
+  version_or_commit: 0.1.0-fixed
+  identity_hash: 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+court: cli-malformed-input
+fixture_family: malformed-input
+environment: x86_64-linux (d2f4094c)
+relation: eq(exit-code)
+proposition: parity(observables=[exit]; fixtures=[malformed-path.conf]; family=malformed-input; authority=[ref-cli-1.8.2]; candidate=[86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad]; environments=[d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e]; versions=[1.8.2])
+scope:
+  authority:
+  - ref-cli-1.8.2
+  candidate:
+  - 86992b0bb6073b0a0998857ee2ab41d246f46936dac0fe28cc3bfc1e3e57cdad
+  fixtures:
+  - malformed-path.conf
+  fixture_family: malformed-input
+  observables:
+  - exit
+  environments:
+  - d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e
+  versions:
+  - 1.8.2
+  temporal:
+  - run-cli-malformed-input-05f94cb43c477ef72b82ab2949e7226fe396a2c59db7f801b3c77166ba6e1bcd
+observable_scope:
+- exit
+blockers: []
+excluded_evidence:
+- cli-text-0005
+requires:
+- receipt-run-cli-malformed-input-05f94cb43c477ef72b82ab2949e7226fe396a2c59db7f801b3c77166ba6e1bcd-8d92efe27df5ac60868ca2546fa540647216ed934e87f717c02e6f7a5b68c9b8
+knowledge_snapshot:
+  schema_version: frf-claim-v3
+  cid: bfaef5c41a4a0d925e7f45edd0d250731065e1fda720aa53d6b2f9b95e80c327
+  residual_heads:
+  - id: cli-exit-0001
+    disposition: fixed
+    disposition_event_id: 6299649f792f9804a53e6d57193c04d28777b3be70090c0797b65cdde60fe22b
+  - id: cli-exit-0002
+    disposition: open
+  - id: cli-text-0001
+    disposition: intentional
+    disposition_event_id: c5903f4f6478d835d97f1b1d816727f38292b9d0203dbb90bf3513de1f3201d1
+  - id: cli-text-0002
+    disposition: intentional
+    disposition_event_id: f685c8938f03dd137b5e140c5f7b420028bb28819040bc4bd1a964cb7c4f3cc9
+  - id: cli-text-0003
+    disposition: open
+  - id: cli-text-0004
+    disposition: open
+  - id: cli-text-0005
+    disposition: open
+  receipts:
+  - receipt-run-cli-malformed-input-05f94cb43c477ef72b82ab2949e7226fe396a2c59db7f801b3c77166ba6e1bcd-8d92efe27df5ac60868ca2546fa540647216ed934e87f717c02e6f7a5b68c9b8
+  - receipt-run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9-3164a09821dd79ead92a527cc288bfab16b09a65d34a62a16caaa5cca3df94a8
+  - receipt-run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9-330f949697cf41c12a78d7b5e8ddfbe9936018aae014b297d09ee782e53f6e84
+  - receipt-run-fs-tree-build-4bf5af468c140a5b5ea39b8c42c8ea8ff1608a311423591ba920db55c5449c71-87fcf28d0dc4a7532405ed0a7f5f8ff43b0d884921793b4092fa5b4a0d253e41
+  runs:
+  - run-cli-malformed-input-05f94cb43c477ef72b82ab2949e7226fe396a2c59db7f801b3c77166ba6e1bcd
+  - run-cli-malformed-input-0f895358adbd0fa896b3d87cb806a2953ccfe9f3f0c80cb51afb9fbd06e8f30d
+  - run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9
+  - run-cli-malformed-input-6f25d65d94b9d54bd8f2c825834afb11f403a1ca9b3ff891ce61bc324cdcf7c0
+  - run-cli-normalized-7ab07d9f6b05c97c896d74a22f83ee78518513220e0f3a1c385d98dc45035f81
+  - run-fs-tree-build-4bf5af468c140a5b5ea39b8c42c8ea8ff1608a311423591ba920db55c5449c71
+  authorities:
+  - ref-cli-1.8.2
+  - ref-ws-1.0
+  - treegen-ref-1.0
+  series:
+  - 31aa36120a6e7e88ede63eada3c7f7bb71e06ce832641b65538573d580a97a71
+  reductions: []
+positive:
+- For reference ref-cli-1.8.2, fixture family malformed-input, and environment x86_64-linux (d2f4094c), candidate cand-cli 0.1.0-fixed (86992b0b) preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input.
+non_claims:
+- This receipt does not establish byte-identical stderr, full CLI compatibility, or a drop-in replacement claim.
+- In particular, it does not establish a drop-in replacement for all malformed-input behavior.

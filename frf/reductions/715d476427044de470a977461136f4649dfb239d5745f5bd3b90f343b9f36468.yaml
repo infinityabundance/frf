@@ -1,0 +1,59 @@
+schema_version: frf-reduction-v3
+id: 715d476427044de470a977461136f4649dfb239d5745f5bd3b90f343b9f36468
+residual_id: cli-exit-0001
+source_run: run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9
+axis: exit
+kind: exit
+court_semantic_identity: c26625152260680daa067e4d1727ff53204047824da55849718b4a553f84453b
+authority_artifact_sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+candidate_artifact_sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+environment_digest: d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e
+comparator_semantic_id: exit
+comparator_semantic_hash: 1199a471cf91b3972ff58b6f2cd8e0e73e4f8507bb8d468fda0fd5e13cc15f1a
+comparator_implementation_hash: d7390f8db9ed8001a66e0dc57265276b45f896e7047ad05e1cd7f24ba43482df
+argv_template:
+- --strict
+- frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+original_fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+final_fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+attempts:
+- attempt: 1
+  role: baseline
+  fixture_sha256: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21
+  outcome: preserved
+  accepted: false
+- attempt: 2
+  role: candidate
+  fixture_sha256: 1254195159ed170b00bd5cb7fc7bc0cea505d37f631bf99c49edf36f26e6de74
+  outcome: preserved
+  accepted: true
+- attempt: 3
+  role: candidate
+  fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+  outcome: preserved
+  accepted: true
+- attempt: 4
+  role: final_verification
+  fixture_sha256: e2cc650a602bdb8f97c748a04cc1c2fd0d5167a3f87f724b4b892faf15faf63e
+  outcome: preserved
+  accepted: true
+derivation:
+  strategy: ddmin-lines
+  original_lines: 4
+  final_lines: 1
+  minimality:
+    kind: one-minimal
+    granularity: line
+    proven: true
+transform:
+  kind: reduction
+  source: cli-exit-0001
+  varying_dimensions:
+  - fixture
+  invariant_dimensions:
+  - candidate
+  - authority
+  - comparator
+  - environment
+  observation_relation: eq(exit-code)
+  success_predicate: lineage-survives

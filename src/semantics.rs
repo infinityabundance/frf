@@ -33,6 +33,45 @@ pub fn hash_preimage(kind: &str, doc: &Value) -> Result<String> {
     Ok(host::sha256_bytes(format!("{kind}\n{json}").as_bytes()))
 }
 
+// ---------------------------------------------------------------------------
+// Extension-protocol specification hashes. One formula everywhere: a
+// domain-separated canonical JSON document whose SHA-256 is the semantic
+// identity of the relation — what the relation IS, never which implementation
+// ran it.
+// ---------------------------------------------------------------------------
+
+/// `FRF/NORMALIZER-SPEC/v1` over {id, relation, applies_to}.
+pub fn normalizer_specification_hash(id: &str, relation: &str, applies_to: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/NORMALIZER-SPEC/v1",
+        &json!({"id": id, "relation": relation, "applies_to": applies_to}),
+    )
+}
+
+/// `FRF/MINIMIZER-SPEC/v1` over {id, relation}.
+pub fn minimizer_specification_hash(id: &str, relation: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/MINIMIZER-SPEC/v1",
+        &json!({"id": id, "relation": relation}),
+    )
+}
+
+/// `FRF/CAPTURE-ADAPTER-SPEC/v1` over {id, relation}.
+pub fn capture_adapter_specification_hash(id: &str, relation: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/CAPTURE-ADAPTER-SPEC/v1",
+        &json!({"id": id, "relation": relation}),
+    )
+}
+
+/// `FRF/WITNESS-SPEC/v1` over {id, relation}.
+pub fn witness_specification_hash(id: &str, relation: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/WITNESS-SPEC/v1",
+        &json!({"id": id, "relation": relation}),
+    )
+}
+
 /// The court semantic identity — the resolution-comparability key. Contents:
 ///
 /// - question, falsifier
@@ -176,6 +215,11 @@ pub fn run_identity(p: &RunPreimage) -> Result<String> {
                     "sha256": f.sha256,
                     "executable": f.executable,
                 })).collect::<Vec<_>>(),
+            })),
+            "adapted": s.adapted.as_ref().map(|a| json!({
+                "format": a.format,
+                "payload_base64": a.payload_base64,
+                "content_sha256": a.content_sha256,
             })),
         })
     };
@@ -336,7 +380,21 @@ pub fn reduction_identity(
     attempts: &[ReductionAttempt],
     derivation: &ReductionDerivation,
     transform: &EvidenceTransform,
+    minimizer: Option<(&str, &str, &str, &ArtifactIdentity, &str, &str)>,
 ) -> Result<String> {
+    let minimizer_doc = match minimizer {
+        Some((id, hash, impl_hash, artifact, invocation_id, result_id)) => Some(json!({
+            "semantic_id": id,
+            "semantic_hash": hash,
+            "implementation_hash": impl_hash,
+            "implementation_artifact": serde_json::to_value(artifact).map_err(|e| {
+                FrfError::new(format!("cannot serialize the minimizer artifact: {e}"))
+            })?,
+            "invocation_id": invocation_id,
+            "result_id": result_id,
+        })),
+        None => None,
+    };
     let doc = json!({
         "residual_id": residual_id,
         "source_run": source_run,
@@ -374,8 +432,9 @@ pub fn reduction_identity(
         },
         "transform": serde_json::to_value(transform)
             .map_err(|e| FrfError::new(format!("cannot serialize the transform: {e}")))?,
+        "minimizer": minimizer_doc,
     });
-    hash_preimage("FRF/REDUCTION/v2", &doc)
+    hash_preimage("FRF/REDUCTION/v3", &doc)
 }
 
 /// The knowledge-snapshot identity: SHA-256 of `FRF/KNOWLEDGE/v1` over the
@@ -534,6 +593,174 @@ pub fn comparator_result_identity(c: &ComparatorResultContent) -> Result<String>
         "residual_observation_ids": c.residual_observation_ids,
     });
     hash_preimage("FRF/COMPARATOR-RESULT/v1", &doc)
+}
+
+/// The content-addressable inputs of one normalizer INVOCATION record.
+pub struct NormalizerInvocationContent<'a> {
+    pub normalizer_id: &'a str,
+    pub side: &'a str,
+    pub request_cid: &'a str,
+    pub normalizer_semantic_cid: &'a str,
+    pub normalizer_implementation_artifact: &'a ArtifactIdentity,
+    pub execution_provenance: &'a RunnerIdentity,
+}
+
+/// The identity of a normalizer invocation record: SHA-256 of
+/// `FRF/NORMALIZER-INVOCATION/v1` over its content.
+pub fn normalizer_invocation_identity(c: &NormalizerInvocationContent) -> Result<String> {
+    let doc = json!({
+        "normalizer_id": c.normalizer_id,
+        "side": c.side,
+        "request_cid": c.request_cid,
+        "normalizer_semantic_cid": c.normalizer_semantic_cid,
+        "normalizer_implementation_artifact":
+            serde_json::to_value(c.normalizer_implementation_artifact)
+                .map_err(|e| FrfError::new(format!("cannot serialize the normalizer implementation artifact: {e}")))?,
+        "execution_provenance":
+            serde_json::to_value(c.execution_provenance)
+                .map_err(|e| FrfError::new(format!("cannot serialize the execution provenance: {e}")))?,
+    });
+    hash_preimage("FRF/NORMALIZER-INVOCATION/v1", &doc)
+}
+
+/// The content-addressable inputs of one normalizer RESULT record.
+pub struct NormalizerResultContent<'a> {
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+    pub stdout_sha256: &'a str,
+    pub stderr_sha256: &'a str,
+}
+
+/// The identity of a normalizer result record.
+pub fn normalizer_result_identity(c: &NormalizerResultContent) -> Result<String> {
+    let doc = json!({
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+        "stdout_sha256": c.stdout_sha256,
+        "stderr_sha256": c.stderr_sha256,
+    });
+    hash_preimage("FRF/NORMALIZER-RESULT/v1", &doc)
+}
+
+/// The content-addressable inputs of one minimizer INVOCATION record.
+pub struct MinimizerInvocationContent<'a> {
+    pub minimizer_id: &'a str,
+    pub residual_id: &'a str,
+    pub request_cid: &'a str,
+    pub minimizer_semantic_cid: &'a str,
+    pub minimizer_implementation_artifact: &'a ArtifactIdentity,
+    pub execution_provenance: &'a RunnerIdentity,
+}
+
+/// The identity of a minimizer invocation record.
+pub fn minimizer_invocation_identity(c: &MinimizerInvocationContent) -> Result<String> {
+    let doc = json!({
+        "minimizer_id": c.minimizer_id,
+        "residual_id": c.residual_id,
+        "request_cid": c.request_cid,
+        "minimizer_semantic_cid": c.minimizer_semantic_cid,
+        "minimizer_implementation_artifact":
+            serde_json::to_value(c.minimizer_implementation_artifact)
+                .map_err(|e| FrfError::new(format!("cannot serialize the minimizer implementation artifact: {e}")))?,
+        "execution_provenance":
+            serde_json::to_value(c.execution_provenance)
+                .map_err(|e| FrfError::new(format!("cannot serialize the execution provenance: {e}")))?,
+    });
+    hash_preimage("FRF/MINIMIZER-INVOCATION/v1", &doc)
+}
+
+/// The content-addressable inputs of one minimizer RESULT record.
+pub struct MinimizerResultContent<'a> {
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+    pub proposed_fixture_sha256: &'a str,
+    pub court_verified: bool,
+}
+
+/// The identity of a minimizer result record.
+pub fn minimizer_result_identity(c: &MinimizerResultContent) -> Result<String> {
+    let doc = json!({
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+        "proposed_fixture_sha256": c.proposed_fixture_sha256,
+        "court_verified": c.court_verified,
+    });
+    hash_preimage("FRF/MINIMIZER-RESULT/v1", &doc)
+}
+
+/// The content-addressable inputs of one capture-adapter INVOCATION record.
+pub struct CaptureAdapterInvocationContent<'a> {
+    pub axis: &'a str,
+    pub side: &'a str,
+    pub request_cid: &'a str,
+    pub adapter_semantic_cid: &'a str,
+    pub adapter_implementation_artifact: &'a ArtifactIdentity,
+    pub execution_provenance: &'a RunnerIdentity,
+}
+
+/// The identity of a capture-adapter invocation record.
+pub fn capture_adapter_invocation_identity(c: &CaptureAdapterInvocationContent) -> Result<String> {
+    let doc = json!({
+        "axis": c.axis,
+        "side": c.side,
+        "request_cid": c.request_cid,
+        "adapter_semantic_cid": c.adapter_semantic_cid,
+        "adapter_implementation_artifact":
+            serde_json::to_value(c.adapter_implementation_artifact)
+                .map_err(|e| FrfError::new(format!("cannot serialize the adapter implementation artifact: {e}")))?,
+        "execution_provenance":
+            serde_json::to_value(c.execution_provenance)
+                .map_err(|e| FrfError::new(format!("cannot serialize the execution provenance: {e}")))?,
+    });
+    hash_preimage("FRF/CAPTURE-ADAPTER-INVOCATION/v1", &doc)
+}
+
+/// The content-addressable inputs of one capture-adapter RESULT record.
+pub struct CaptureAdapterResultContent<'a> {
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+    pub observation_sha256: &'a str,
+}
+
+/// The identity of a capture-adapter result record.
+pub fn capture_adapter_result_identity(c: &CaptureAdapterResultContent) -> Result<String> {
+    let doc = json!({
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+        "observation_sha256": c.observation_sha256,
+    });
+    hash_preimage("FRF/CAPTURE-ADAPTER-RESULT/v1", &doc)
+}
+
+/// The content-addressable inputs of one witness statement record.
+pub struct WitnessStatementContent<'a> {
+    pub subject: &'a WitnessSubject,
+    pub witness_semantic: &'a WitnessSemantic,
+    pub witness_implementation: &'a WitnessImplementation,
+    pub statement: &'a str,
+    pub attestation: &'a WitnessAttestation,
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+}
+
+/// The identity of a witness statement record: SHA-256 of
+/// `FRF/WITNESS-STATEMENT/v1` over its content. Rederivable from the record's
+/// own fields.
+pub fn witness_statement_identity(c: &WitnessStatementContent) -> Result<String> {
+    let doc = json!({
+        "subject": serde_json::to_value(c.subject)
+            .map_err(|e| FrfError::new(format!("cannot serialize the subject: {e}")))?,
+        "witness_semantic": serde_json::to_value(c.witness_semantic)
+            .map_err(|e| FrfError::new(format!("cannot serialize the witness semantic: {e}")))?,
+        "witness_implementation": serde_json::to_value(c.witness_implementation)
+            .map_err(|e| FrfError::new(format!("cannot serialize the witness implementation: {e}")))?,
+        "statement": c.statement,
+        "attestation": serde_json::to_value(c.attestation)
+            .map_err(|e| FrfError::new(format!("cannot serialize the attestation: {e}")))?,
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+    });
+    hash_preimage("FRF/WITNESS-STATEMENT/v1", &doc)
 }
 
 /// The first semantic dimension on which two captures differ, phrased for an
@@ -760,6 +987,9 @@ mod tests {
             },
             court_spec: spec,
             comparator_semantics: vec![],
+            normalizer_semantics: vec![],
+            adapter_semantics: vec![],
+            minimizer_semantics: vec![],
             provenance: ObservationProvenance {
                 schema_version: SCHEMA_PROVENANCE.into(),
                 runner: RunnerIdentity {
@@ -768,6 +998,9 @@ mod tests {
                     frf_executable_hash: "0".repeat(64),
                 },
                 comparator_implementations: vec![],
+                normalizer_implementations: vec![],
+                adapter_implementations: vec![],
+                minimizer_implementations: vec![],
             },
             authority_artifact: ArtifactIdentity {
                 path: "p".into(),
@@ -798,6 +1031,7 @@ mod tests {
                 stdout_sha256: "0".repeat(64),
                 stderr_sha256: "0".repeat(64),
                 produced: None,
+                adapted: None,
                 stdout_bytes: vec![],
             },
             candidate: SideCapture {
@@ -810,6 +1044,7 @@ mod tests {
                 stdout_sha256: "0".repeat(64),
                 stderr_sha256: "0".repeat(64),
                 produced: None,
+                adapted: None,
                 stdout_bytes: vec![],
             },
             residuals: vec![],

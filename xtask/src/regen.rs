@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_V12: &str = "frf-receipt-v12";
+const RECEIPT_V13: &str = "frf-receipt-v13";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -77,7 +77,25 @@ fn bump_semantic(c: &mut Value) {
 /// keeps its wrong hash so the corpus isolates exactly one rule per
 /// document.
 fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
-    doc["schema_version"] = json!(RECEIPT_V12);
+    doc["schema_version"] = json!(RECEIPT_V13);
+    // v13: the normalizer relations applied to the compared streams, copied
+    // from the capture (empty for a court with no normalizers), and the
+    // extension implementations in provenance (normalizer / capture-adapter /
+    // minimizer — empty when none were bound).
+    if doc.get("normalizer_semantics").is_none() {
+        doc["normalizer_semantics"] = json!([]);
+    }
+    let prov = &mut doc["provenance"];
+    prov["schema_version"] = json!("frf-provenance-v3");
+    if prov.get("normalizer_implementations").is_none() {
+        prov["normalizer_implementations"] = json!([]);
+    }
+    if prov.get("adapter_implementations").is_none() {
+        prov["adapter_implementations"] = json!([]);
+    }
+    if prov.get("minimizer_implementations").is_none() {
+        prov["minimizer_implementations"] = json!([]);
+    }
     // v12: the sign is TRAJECTORY EVIDENCE per coordinate system. Corpus
     // receipts are single-run snapshots: no trajectory evidence (drift/slew
     // honestly not-observed). A fixture carrying the old single-run shape is

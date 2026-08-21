@@ -44,7 +44,7 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// every produced file is copied under the run, hashed, and recorded in the
 /// side capture, so a court observes what its sides BUILD, not only what
 /// they print.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v9";
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v10";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -78,7 +78,7 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// snapshot the drift/slew were derived from. The body is serialized as
 /// canonical JSON (RFC 8785) and its identity is the full SHA-256 of those
 /// bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v12";
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v13";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -97,8 +97,10 @@ pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 /// effective locale, timezone, and umask (the dimensions that actually move
 /// side output), plus the recorded working directory.
 pub const SCHEMA_ENVIRONMENT: &str = "frf-environment-v2";
-/// Observation provenance block (runner + comparator implementations).
-pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v1";
+/// Observation provenance block (runner + comparator + normalizer + adapter
+/// implementations). v3 records the normalizer and capture-adapter
+/// implementations that applied to the compared streams/observations.
+pub const SCHEMA_PROVENANCE: &str = "frf-provenance-v3";
 
 /// The reference execution profile: the normative contract the reference
 /// engine executes under (`spec/execution-profile.md`). v1 (linux): direct
@@ -253,8 +255,478 @@ pub const SCHEMA_SERIES: &str = "frf-series-v2";
 /// delivers each side's produced-file manifest (paths + content hashes), so
 /// an external comparator can compare what the sides BUILT, not only what
 /// they printed.
-pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v3";
+pub const SCHEMA_COMPARATOR_REQUEST: &str = "frf-comparator-request-v4";
 pub const SCHEMA_COMPARATOR_RESPONSE: &str = "frf-comparator-response-v2";
+
+/// The normalizer extension protocol (spec/normalizer.md): a canonical JSON
+/// request a court writes to an external normalizer program's stdin (one
+/// side's raw streams, base64) and the canonical JSON response it must
+/// produce on stdout (the normalized streams). The response must
+/// cryptographically name the request it answers (`request_id`), and a
+/// normalizer declared to touch only one stream must leave the other
+/// byte-identical (fail closed). The normalized streams are what the court
+/// COMPARES; the raw streams survive as the request evidence, so an
+/// observation is never rewritten.
+pub const SCHEMA_NORMALIZER_REQUEST: &str = "frf-normalizer-request-v1";
+pub const SCHEMA_NORMALIZER_RESPONSE: &str = "frf-normalizer-response-v1";
+pub const SCHEMA_NORMALIZER_INVOCATION: &str = "frf-normalizer-invocation-v1";
+pub const SCHEMA_NORMALIZER_RESULT: &str = "frf-normalizer-result-v1";
+
+/// The minimizer extension protocol (spec/minimizer.md): a canonical JSON
+/// request to an external minimizer (the residual + the original fixture,
+/// base64) and the canonical JSON response (a proposed reduced fixture). The
+/// core COURT-VERIFIES every proposal by re-running the court and requiring
+/// the residual's lineage to survive; proposals that do not survive are
+/// recorded but never accepted.
+pub const SCHEMA_MINIMIZER_REQUEST: &str = "frf-minimizer-request-v1";
+pub const SCHEMA_MINIMIZER_RESPONSE: &str = "frf-minimizer-response-v1";
+pub const SCHEMA_MINIMIZER_INVOCATION: &str = "frf-minimizer-invocation-v1";
+pub const SCHEMA_MINIMIZER_RESULT: &str = "frf-minimizer-result-v1";
+
+/// The capture-adapter extension protocol (spec/capture-adapter.md): a
+/// canonical JSON request to an external capture-adapter (one side's raw
+/// outcome) and the canonical JSON response (the ADAPTED observation for the
+/// axis the adapter serves — e.g. the DNS wire bytes a server emitted, a
+/// database state dump, a terminal frame). The adapted observation is what
+/// the axis's external comparator receives; the raw outcome survives as the
+/// request evidence. An adapted axis MUST be served by an external
+/// comparator.
+pub const SCHEMA_CAPTURE_ADAPTER_REQUEST: &str = "frf-capture-request-v1";
+pub const SCHEMA_CAPTURE_ADAPTER_RESPONSE: &str = "frf-capture-response-v1";
+pub const SCHEMA_CAPTURE_ADAPTER_INVOCATION: &str = "frf-capture-invocation-v1";
+pub const SCHEMA_CAPTURE_ADAPTER_RESULT: &str = "frf-capture-result-v1";
+
+/// The witness extension protocol (spec/witness.md): a canonical JSON request
+/// to an external witness program (a content-addressed subject + a statement
+/// to attest) and the canonical JSON response (the attestation, or an
+/// explicit refusal). The attestation is recorded in a content-addressed
+/// [`WitnessStatement`] with the canonical request/response preserved as
+/// evidence.
+pub const SCHEMA_WITNESS_REQUEST: &str = "frf-witness-request-v1";
+pub const SCHEMA_WITNESS_RESPONSE: &str = "frf-witness-response-v1";
+pub const SCHEMA_WITNESS_STATEMENT: &str = "frf-witness-statement-v1";
+
+/// Versions of the extension RELATION lines. Bump whenever a relation's
+/// semantics change; implementation changes alone never do (the program
+/// bytes are the implementation identity).
+pub const NORMALIZER_VERSION: &str = "v1";
+pub const MINIMIZER_VERSION: &str = "v1";
+pub const CAPTURE_ADAPTER_VERSION: &str = "v1";
+pub const WITNESS_VERSION: &str = "v1";
+
+// ---------------------------------------------------------------------------
+// The normalizer extension protocol (spec/normalizer.md)
+// ---------------------------------------------------------------------------
+
+/// The semantic identity of a normalizer relation: WHAT the mapping is, not
+/// which implementation ran it. The record carries the full specification
+/// next to its hash, so the specification hash REDERIVES from the record's
+/// own fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerSemantic {
+    pub id: String,
+    pub relation_id: String,
+    /// `stdout` | `stderr` | `both`.
+    pub applies_to: String,
+    pub relation_version: String,
+    /// SHA-256 of the canonical normalizer specification document
+    /// (`FRF/NORMALIZER-SPEC/v1`).
+    pub specification_hash: String,
+}
+
+/// Which implementation of a normalizer applied to a run's streams. Always an
+/// EXTERNAL program in v0; its artifact identity is the exact snapshotted
+/// bytes + interpreter it ran under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerImplementation {
+    pub id: String,
+    pub implementation_hash: String,
+    pub runner_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIdentity>,
+}
+
+/// The normalizer REQUEST (court → normalizer, stdin, canonical JSON): ONE
+/// side's raw streams; the response returns the normalized streams.
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerRequest<'a> {
+    pub schema_version: &'static str,
+    pub normalizer: &'a NormalizerSemantic,
+    /// `reference` | `candidate`.
+    pub side: &'a str,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+    pub context: NormalizerContext<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerContext<'a> {
+    pub fixture_sha256: &'a str,
+    pub arguments: &'a [String],
+    pub environment_digest: &'a str,
+}
+
+/// The normalizer RESPONSE (normalizer → court, stdout, canonical JSON).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerResponse {
+    pub schema_version: String,
+    /// SHA-256 of the exact canonical request bytes the normalizer received.
+    pub request_id: String,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+    pub indeterminate: bool,
+    pub failure: Option<String>,
+}
+
+/// The normalizer INVOCATION evidence record: what was invoked, against
+/// which request, by which implementation, under which runner — written at
+/// court time under `captures/<run>/normalizer/<id>/<side>/invocation.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerInvocation {
+    pub schema_version: String,
+    pub invocation_id: String,
+    pub normalizer_id: String,
+    pub side: String,
+    pub request_cid: String,
+    pub normalizer_semantic_cid: String,
+    pub normalizer_implementation_artifact: ArtifactIdentity,
+    pub execution_provenance: RunnerIdentity,
+}
+
+/// The normalizer RESULT evidence record: which request the response
+/// answered, the response document's content address, and the normalized
+/// streams' hashes. Content-addressed (`FRF/NORMALIZER-RESULT/v1`): the
+/// `result_id` rederives from the record's own fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerResult {
+    pub schema_version: String,
+    /// Content address: `FRF/NORMALIZER-RESULT/v1` over the record's fields.
+    pub result_id: String,
+    pub invocation_id: String,
+    pub request_cid: String,
+    pub response_cid: String,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub outcome: String,
+}
+
+// ---------------------------------------------------------------------------
+// The minimizer extension protocol (spec/minimizer.md)
+// ---------------------------------------------------------------------------
+
+/// The semantic identity of a minimizer relation: WHAT the reduction
+/// strategy is, not which implementation ran it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerSemantic {
+    pub id: String,
+    pub relation_id: String,
+    pub relation_version: String,
+    pub specification_hash: String,
+}
+
+/// Which implementation of a minimizer reduced a residual's fixture. Always
+/// an EXTERNAL program in v0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerImplementation {
+    pub id: String,
+    pub implementation_hash: String,
+    pub runner_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIdentity>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerRequest<'a> {
+    pub schema_version: &'static str,
+    pub minimizer: &'a MinimizerSemantic,
+    pub residual: MinimizerResidual<'a>,
+    pub fixture: MinimizerFixture<'a>,
+    /// The proposal budget the core will accept (decimal string — the
+    /// canonical value domain admits strings, not numbers).
+    pub budget: String,
+    pub context: MinimizerContext<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerResidual<'a> {
+    pub id: &'a str,
+    pub axis: &'a str,
+    pub kind: &'a str,
+    pub authority: &'a str,
+    pub candidate_sha256: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerFixture<'a> {
+    pub sha256: &'a str,
+    pub raw_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerContext<'a> {
+    pub court_semantic_identity: &'a str,
+    pub environment_digest: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerResponse {
+    pub schema_version: String,
+    /// SHA-256 of the exact canonical request bytes the minimizer received.
+    pub request_id: String,
+    /// The proposed reduced fixture (base64) + its SHA-256. The core
+    /// court-verifies it before acceptance.
+    pub fixture_sha256: String,
+    pub fixture_base64: String,
+    /// Whether the minimizer claims it proved minimality within the budget.
+    pub minimal: bool,
+    /// The minimizer's own attempt log (the core records which survived
+    /// court verification).
+    pub attempts: Vec<MinimizerAttempt>,
+    pub indeterminate: bool,
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerAttempt {
+    pub attempt: u32,
+    pub fixture_sha256: String,
+    pub kept: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerInvocation {
+    pub schema_version: String,
+    pub invocation_id: String,
+    pub minimizer_id: String,
+    pub residual_id: String,
+    pub request_cid: String,
+    pub minimizer_semantic_cid: String,
+    pub minimizer_implementation_artifact: ArtifactIdentity,
+    pub execution_provenance: RunnerIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerResult {
+    pub schema_version: String,
+    /// Content address: `FRF/MINIMIZER-RESULT/v1` over the record's fields.
+    pub result_id: String,
+    pub invocation_id: String,
+    pub request_cid: String,
+    pub response_cid: String,
+    pub proposed_fixture_sha256: String,
+    /// Whether the proposed fixture survived COURT VERIFICATION.
+    pub court_verified: bool,
+    pub outcome: String,
+}
+
+// ---------------------------------------------------------------------------
+// The capture-adapter extension protocol (spec/capture-adapter.md)
+// ---------------------------------------------------------------------------
+
+/// The semantic identity of a capture adapter relation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterSemantic {
+    /// The observable axis the adapter serves.
+    pub id: String,
+    pub relation_id: String,
+    pub relation_version: String,
+    pub specification_hash: String,
+}
+
+/// Which implementation of a capture adapter observed a run. Always an
+/// EXTERNAL program in v0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterImplementation {
+    pub id: String,
+    pub implementation_hash: String,
+    pub runner_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIdentity>,
+}
+
+/// An ADAPTED observation: the capture adapter's output for one side, what
+/// the axis's external comparator receives. `content_sha256` is the byte
+/// identity of the payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdaptedObservation {
+    /// The payload's declared format (e.g. `dns-wire`, `sql-dump`, `utf-8`).
+    pub format: String,
+    pub payload_base64: String,
+    pub content_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterRequest<'a> {
+    pub schema_version: &'static str,
+    pub adapter: &'a CaptureAdapterSemantic,
+    /// `reference` | `candidate`.
+    pub side: &'a str,
+    pub outcome: CaptureAdapterOutcome<'a>,
+    pub context: NormalizerContext<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterOutcome<'a> {
+    pub exit: &'a str,
+    pub stdout_base64: String,
+    pub stderr_base64: String,
+    /// The side's produced-tree manifest, when the court declares `produce`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub produced: Option<&'a ProducedContext<'a>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterResponse {
+    pub schema_version: String,
+    /// SHA-256 of the exact canonical request bytes the adapter received.
+    pub request_id: String,
+    /// The adapted observation, or `None` when the adapter declines.
+    pub observation: Option<AdaptedObservation>,
+    pub indeterminate: bool,
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterInvocation {
+    pub schema_version: String,
+    pub invocation_id: String,
+    pub axis: String,
+    pub side: String,
+    pub request_cid: String,
+    pub adapter_semantic_cid: String,
+    pub adapter_implementation_artifact: ArtifactIdentity,
+    pub execution_provenance: RunnerIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterResult {
+    pub schema_version: String,
+    /// Content address: `FRF/CAPTURE-ADAPTER-RESULT/v1` over the record's
+    /// fields.
+    pub result_id: String,
+    pub invocation_id: String,
+    pub request_cid: String,
+    pub response_cid: String,
+    pub observation_sha256: String,
+    pub outcome: String,
+}
+
+// ---------------------------------------------------------------------------
+// The witness extension protocol (spec/witness.md)
+// ---------------------------------------------------------------------------
+
+/// The semantic identity of a witness relation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSemantic {
+    pub id: String,
+    pub relation_id: String,
+    pub relation_version: String,
+    pub specification_hash: String,
+}
+
+/// Which implementation of a witness attested. Always an EXTERNAL program in
+/// v0.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessImplementation {
+    pub id: String,
+    pub implementation_hash: String,
+    pub runner_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactIdentity>,
+}
+
+/// The subject a witness attests to: a content-addressed evidence object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSubject {
+    /// `run` | `receipt` | `residual`.
+    pub kind: String,
+    pub id: String,
+    /// The subject's content address (the run identity digest, the receipt
+    /// digest, or the residual fingerprint).
+    pub cid: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessRequest<'a> {
+    pub schema_version: &'static str,
+    pub witness: &'a WitnessSemantic,
+    pub subject: &'a WitnessSubject,
+    pub statement: &'a str,
+    pub context: WitnessContext<'a>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessContext<'a> {
+    pub evidence_root: &'a str,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessResponse {
+    pub schema_version: String,
+    pub request_id: String,
+    pub attestation: Option<WitnessAttestation>,
+    pub indeterminate: bool,
+    pub failure: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessAttestation {
+    /// The exact statement the witness attests (must equal the request's).
+    pub statement: String,
+    pub verified: bool,
+    pub detail: String,
+}
+
+/// The content-addressed [`WitnessStatement`] record: an independent
+/// attestation bound to a content-addressed subject, with the canonical
+/// request/response preserved as evidence. Identity: SHA-256 of
+/// `FRF/WITNESS-STATEMENT/v1` over the record's fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessStatement {
+    pub schema_version: String,
+    pub id: String,
+    pub subject: WitnessSubject,
+    pub witness_semantic: WitnessSemantic,
+    pub witness_implementation: WitnessImplementation,
+    pub statement: String,
+    pub attestation: WitnessAttestation,
+    pub request_cid: String,
+    pub response_cid: String,
+    pub created_by: RunnerIdentity,
+}
 
 /// The produced-artifact observation schema: one side's output tree as a
 /// canonical manifest (relative path → content hash + executable flag). The
@@ -750,6 +1222,21 @@ pub struct CourtManifest {
     /// registry serves every declared observable.
     #[serde(default)]
     pub comparators: Vec<ComparatorDeclaration>,
+    /// Optional normalizer declarations (the extension protocol): programs
+    /// applied to both sides' raw streams BEFORE comparison. The envelope's
+    /// `normalizers` list names exactly which declared normalizers are
+    /// APPLIED, in order.
+    #[serde(default)]
+    pub normalizers: Vec<NormalizerDeclaration>,
+    /// Optional minimizer declarations (the extension protocol): external
+    /// reducers serving κ routes.
+    #[serde(default)]
+    pub minimizers: Vec<MinimizerDeclaration>,
+    /// Optional capture-adapter declarations (the extension protocol):
+    /// external programs that capture the observation for an externally
+    /// served axis.
+    #[serde(default)]
+    pub capture_adapters: Vec<CaptureAdapterDeclaration>,
 }
 
 /// One external comparator declaration in a court manifest.
@@ -774,6 +1261,70 @@ pub struct ComparatorDeclaration {
     /// Working-directory-relative path to the comparator program. The court
     /// hashes its bytes BEFORE executing (snapshotted, sealed, re-hashed on
     /// use) and records the hash as the comparator's implementation identity.
+    pub program: String,
+}
+
+/// One external normalizer declaration in a court manifest (the extension
+/// protocol, spec/normalizer.md). Normalizers apply to BOTH sides' raw
+/// streams BEFORE the compared projections are extracted; the raw streams
+/// survive as the request evidence, so an observation is never rewritten.
+/// The declaration's relation/applies_to/version define the SEMANTIC
+/// identity; the program's bytes define its IMPLEMENTATION identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NormalizerDeclaration {
+    /// The normalizer id (e.g. `stderr-trailing-ws`). The envelope's
+    /// `normalizers` list names exactly the ids that are APPLIED, in order.
+    pub id: String,
+    /// The mapping family (e.g. `trim-trailing-whitespace`) — part of the
+    /// semantic identity.
+    pub relation: String,
+    /// Which streams the normalizer is declared to touch: `stdout`, `stderr`,
+    /// or `both`. The untouched stream must come back byte-identical or the
+    /// court refuses.
+    pub applies_to: String,
+    pub relation_version: String,
+    /// Working-directory-relative path to the normalizer program. Read +
+    /// hashed BEFORE execution, executed through a content-addressed
+    /// snapshot, re-hashed on every use.
+    pub program: String,
+}
+
+/// One external minimizer declaration in a court manifest (the extension
+/// protocol, spec/minimizer.md). The id is the κ route it serves
+/// (`cli-exit-minimize`, `cli-diagnostic-minimize`, or a domain route);
+/// `frf court minimize` consults the residual's capture for a declared
+/// minimizer matching the residual's route and uses it (court-verifying
+/// every proposal) instead of the built-in ddmin reducer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimizerDeclaration {
+    /// The κ route id this minimizer serves.
+    pub id: String,
+    /// The reduction strategy family (e.g. `ddmin-lines`, `argv-elimination`)
+    /// — part of the semantic identity.
+    pub relation: String,
+    pub relation_version: String,
+    /// Working-directory-relative path to the minimizer program.
+    pub program: String,
+}
+
+/// One external capture-adapter declaration in a court manifest (the
+/// extension protocol, spec/capture-adapter.md). The adapter captures the
+/// observation for one externally served axis — the side's raw outcome in,
+/// the ADAPTED observation out — so the core can observe surfaces it has no
+/// built-in capture for (dns.wire, sql.schema, terminal.frame, …).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureAdapterDeclaration {
+    /// The observable axis this adapter serves (must be declared in the
+    /// envelope AND served by an external comparator).
+    pub axis: String,
+    /// The capture relation family (e.g. `dns-wire-dump`) — part of the
+    /// semantic identity.
+    pub relation: String,
+    pub relation_version: String,
+    /// Working-directory-relative path to the adapter program.
     pub program: String,
 }
 
@@ -890,6 +1441,19 @@ pub struct CaptureManifest {
     pub court_spec: CourtSpec,
     /// The comparator relations applied (semantic identity of the question).
     pub comparator_semantics: Vec<ComparatorSemantic>,
+    /// The normalizer relations applied to the compared streams, in
+    /// application order. Empty when the court declares no normalizers.
+    #[serde(default)]
+    pub normalizer_semantics: Vec<NormalizerSemantic>,
+    /// The capture adapters applied, per adapted axis. Empty when the court
+    /// declares no adapters.
+    #[serde(default)]
+    pub adapter_semantics: Vec<CaptureAdapterSemantic>,
+    /// The minimizers declared by the court (the extension protocol): the κ
+    /// routes an external reducer serves, bound at observation time so
+    /// `frf court minimize` can resolve them without the original manifest.
+    #[serde(default)]
+    pub minimizer_semantics: Vec<MinimizerSemantic>,
     /// The runner + comparator implementations that observed the run.
     pub provenance: ObservationProvenance,
     /// The admitted reference artifact, snapshotted and executed.
@@ -1004,12 +1568,30 @@ pub struct ComparatorImplementation {
 /// Observation provenance: the runner and the comparator implementations
 /// that produced a capture. Bound at court time; a stricter reproducibility
 /// policy may require equal provenance on top of equal semantic identity.
+/// v3 adds the normalizer implementations applied to the compared streams,
+/// the capture-adapter implementations that produced adapted observations,
+/// and the minimizer implementations bound for `frf court minimize`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationProvenance {
     pub schema_version: String,
     pub runner: RunnerIdentity,
     pub comparator_implementations: Vec<ComparatorImplementation>,
+    /// The normalizer implementations applied to the compared streams, in
+    /// application order. Empty when the court declares no normalizers.
+    #[serde(default)]
+    pub normalizer_implementations: Vec<NormalizerImplementation>,
+    /// The capture-adapter implementations that produced adapted
+    /// observations, per adapted axis. Empty when the court declares no
+    /// adapters.
+    #[serde(default)]
+    pub adapter_implementations: Vec<CaptureAdapterImplementation>,
+    /// The minimizer implementations the court bound for `court minimize`
+    /// (one per declared κ route), snapshotted at observation time so the
+    /// exact reducer is re-invokable without the original manifest. Empty
+    /// when the court declares no minimizers.
+    #[serde(default)]
+    pub minimizer_implementations: Vec<MinimizerImplementation>,
 }
 
 /// The environment an observation happened in, captured at court time. The
@@ -1119,6 +1701,12 @@ pub struct SideCapture {
     /// are copied under the run directory and rehashed by verification.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub produced: Option<ProducedSide>,
+    /// The ADAPTED observation (capture-adapter protocol): the adapter's
+    /// output for this side, when an adapter serves the axis. The raw
+    /// streams remain the request evidence; the adapted payload is what the
+    /// comparator compares.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub adapted: Option<AdaptedObservation>,
     /// The raw stdout bytes, retained IN MEMORY ONLY (never serialized — the
     /// raw stream already lives as a capture file; the domain comparators
     /// that parse it need the bytes, not just the hash). Excluded from
@@ -1143,6 +1731,7 @@ impl PartialEq for SideCapture {
             && self.stdout_sha256 == other.stdout_sha256
             && self.stderr_sha256 == other.stderr_sha256
             && self.produced == other.produced
+            && self.adapted == other.adapted
     }
 }
 
@@ -1657,7 +2246,7 @@ pub struct TrajectoryRecord {
 /// transform declaration: what the reduction permitted to move (the fixture)
 /// and what it required to stay (candidate, authority, comparator,
 /// environment — each bound by identity, not label).
-pub const SCHEMA_REDUCTION: &str = "frf-reduction-v2";
+pub const SCHEMA_REDUCTION: &str = "frf-reduction-v3";
 
 /// The general evidence-transform description — one frame for all six
 /// evidence operations (observation, resolution, replay, trajectory,
@@ -1883,16 +2472,19 @@ pub struct ReductionDerivation {
 
 /// A minimization experiment: the record of reducing one residual's fixture
 /// until the divergence lineage stops surviving. Content-addressed
-/// (`FRF/REDUCTION/v2`); the final reproducer is court-verified and carries
+/// (`FRF/REDUCTION/v3`); the final reproducer is court-verified and carries
 /// the full transform declaration — the fixed dimensions bound by identity
 /// (authority artifact, candidate artifact, environment digest, comparator
 /// semantic + implementation), so the record itself proves the reduction
-/// held what it claims to have held.
+/// held what it claims to have held. v3 binds the external minimizer that
+/// performed the reduction when the residual's κ route was served by a
+/// declared minimizer (the built-in ddmin reducer leaves the minimizer
+/// binding empty).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionRecord {
     pub schema_version: String,
-    /// Content address: `FRF/REDUCTION/v2` over the record's own fields.
+    /// Content address: `FRF/REDUCTION/v3` over the record's own fields.
     pub id: String,
     /// The residual being minimized.
     pub residual_id: String,
@@ -1928,6 +2520,26 @@ pub struct ReductionRecord {
     /// The transform declaration: fixture varies; candidate, authority,
     /// comparator, and environment must stay.
     pub transform: EvidenceTransform,
+    // -- the external minimizer binding (the extension protocol) -----------
+    /// The minimizer SEMANTIC identity that served this residual's κ route,
+    /// when an external minimizer performed the reduction. Absent = the
+    /// built-in ddmin reducer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_semantic_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_semantic_hash: Option<String>,
+    /// The minimizer IMPLEMENTATION identity (the exact snapshotted program
+    /// bytes) that proposed the reduction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_implementation_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_implementation_artifact: Option<ArtifactIdentity>,
+    /// The content-addressed invocation + result records of the external
+    /// minimizer (written under `reductions/<id>/minimizer/`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_invocation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimizer_result_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2002,6 +2614,12 @@ pub struct ComparatorObservation<'a> {
     pub exit: &'a str,
     pub stdout_base64: String,
     pub stderr_base64: String,
+    /// The ADAPTED observation for this side (capture-adapter protocol):
+    /// present when a capture adapter serves this axis — the raw streams are
+    /// still carried (they are the request evidence), and the comparator
+    /// compares the adapted payloads. Absent = compare the streams.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapted: Option<&'a AdaptedObservation>,
 }
 
 /// The execution context a comparator may need (the question's inputs).
@@ -2170,6 +2788,10 @@ pub struct Receipt {
     pub provenance: ObservationProvenance,
     /// The comparator relations applied, copied from the capture.
     pub comparator_semantics: Vec<ComparatorSemantic>,
+    /// The normalizer relations applied to the compared streams, copied from
+    /// the capture.
+    #[serde(default)]
+    pub normalizer_semantics: Vec<NormalizerSemantic>,
     /// The execution profile the observation was made under, and the capture
     /// bounds that applied (copied from the capture — a receipt never
     /// guesses what the harness enforced).

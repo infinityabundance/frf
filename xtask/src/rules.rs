@@ -26,6 +26,7 @@ const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "court",
     "provenance",
     "comparator_semantics",
+    "normalizer_semantics",
     "execution_profile",
     "capture_bounds",
     "authority",
@@ -73,9 +74,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v12" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v13" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v12",
+            "schema_version is {:?}, expected frf-receipt-v13",
             doc["schema_version"]
         ));
     }
@@ -151,6 +152,59 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
                 v.push(format!(
                     "comparator_semantics[{i}].specification_hash must be 64 hex"
                 ));
+            }
+        }
+    }
+    if let Some(sems) = doc["normalizer_semantics"].as_array() {
+        for (i, c) in sems.iter().enumerate() {
+            for k in unknown_keys(c, NORMALIZER_SEMANTIC_KEYS) {
+                v.push(format!(
+                    "unknown property {k:?} on normalizer_semantics[{i}]"
+                ));
+            }
+            if !hex64(as_str(&c["specification_hash"])) {
+                v.push(format!(
+                    "normalizer_semantics[{i}].specification_hash must be 64 hex"
+                ));
+            }
+            if !matches!(as_str(&c["applies_to"]), "stdout" | "stderr" | "both") {
+                v.push(format!(
+                    "normalizer_semantics[{i}].applies_to must be stdout, stderr, or both"
+                ));
+            }
+        }
+    }
+    for (what, impls) in [
+        (
+            "normalizer_implementations",
+            doc["provenance"]["normalizer_implementations"].as_array(),
+        ),
+        (
+            "adapter_implementations",
+            doc["provenance"]["adapter_implementations"].as_array(),
+        ),
+        (
+            "minimizer_implementations",
+            doc["provenance"]["minimizer_implementations"].as_array(),
+        ),
+    ] {
+        if let Some(impls) = impls {
+            for (i, c) in impls.iter().enumerate() {
+                for k in unknown_keys(c, EXTENSION_IMPL_KEYS) {
+                    v.push(format!("unknown property {k:?} on provenance.{what}[{i}]"));
+                }
+                if let Some(artifact) = c.get("artifact") {
+                    for k in unknown_keys(artifact, ARTIFACT_KEYS) {
+                        v.push(format!(
+                            "unknown property {k:?} on provenance.{what}[{i}].artifact"
+                        ));
+                    }
+                    if !hex64(as_str(&artifact["sha256"])) {
+                        v.push(format!(
+                            "provenance.{what}[{i}].artifact.sha256 must be 64 hex"
+                        ));
+                    }
+                }
             }
         }
     }
@@ -259,10 +313,25 @@ const ENVELOPE_KEYS: &[&str] = &[
     "normalizers",
     "replay_scope",
 ];
-const PROVENANCE_KEYS: &[&str] = &["schema_version", "runner", "comparator_implementations"];
+const PROVENANCE_KEYS: &[&str] = &[
+    "schema_version",
+    "runner",
+    "comparator_implementations",
+    "normalizer_implementations",
+    "adapter_implementations",
+    "minimizer_implementations",
+];
 const RUNNER_KEYS: &[&str] = &["schema_version", "frf_version", "frf_executable_hash"];
 const COMPARATOR_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash", "artifact"];
+const EXTENSION_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash", "artifact"];
 const ARTIFACT_KEYS: &[&str] = &["path", "sha256", "interpreter"];
+const NORMALIZER_SEMANTIC_KEYS: &[&str] = &[
+    "id",
+    "relation_id",
+    "applies_to",
+    "relation_version",
+    "specification_hash",
+];
 const COMPARATOR_SEMANTIC_KEYS: &[&str] = &[
     "id",
     "relation_id",
@@ -342,9 +411,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v12" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v13" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v12",
+            "schema_version is {:?}, expected frf-receipt-v13",
             rec["schema_version"]
         ));
     }

@@ -149,6 +149,11 @@ fn side(doc: &Value) -> Value {
                 "executable": f["executable"].as_bool().unwrap_or(false),
             })).collect::<Vec<_>>()).unwrap_or_default(),
         })),
+        "adapted": doc.get("adapted").map(|a| json!({
+            "format": s(&a["format"]),
+            "payload_base64": s(&a["payload_base64"]),
+            "content_sha256": s(&a["content_sha256"]),
+        })),
     })
 }
 
@@ -302,10 +307,11 @@ pub fn series_identity(
     preimage("FRF/SERIES/v2", &doc)
 }
 
-/// FRF/REDUCTION/v2 over the minimization record's own fields — every bound
+/// FRF/REDUCTION/v3 over the minimization record's own fields — every bound
 /// identity (candidate artifact, authority artifact, environment,
 /// comparator semantic + implementation) plus the attempts, the derivation,
-/// and the transform declaration.
+/// the transform declaration, and the external-minimizer binding when an
+/// external minimizer performed the reduction.
 #[allow(clippy::too_many_arguments)]
 pub fn reduction_identity(
     residual_id: &str,
@@ -325,6 +331,7 @@ pub fn reduction_identity(
     attempts: &Value,
     derivation: &Value,
     transform: &Value,
+    minimizer: &Value,
 ) -> String {
     let doc = json!({
         "residual_id": residual_id,
@@ -363,8 +370,16 @@ pub fn reduction_identity(
             },
         },
         "transform": transform,
+        "minimizer": minimizer.as_object().map(|m| json!({
+            "semantic_id": s(&m["semantic_id"]),
+            "semantic_hash": s(&m["semantic_hash"]),
+            "implementation_hash": s(&m["implementation_hash"]),
+            "implementation_artifact": &m["implementation_artifact"],
+            "invocation_id": s(&m["invocation_id"]),
+            "result_id": s(&m["result_id"]),
+        })),
     });
-    preimage("FRF/REDUCTION/v2", &doc)
+    preimage("FRF/REDUCTION/v3", &doc)
 }
 
 /// FRF/KNOWLEDGE/v1 over the claim's committed evidence universe: the

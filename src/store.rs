@@ -54,6 +54,33 @@ pub fn validate_id(what: &str, id: &str) -> Result<()> {
     }
 }
 
+/// The reduction record's external-minimizer binding, when an external
+/// minimizer performed the reduction: (semantic id, semantic hash,
+/// implementation hash, implementation artifact, invocation id, result id).
+/// `None` for a built-in ddmin reduction.
+pub fn minimizer_binding(
+    record: &ReductionRecord,
+) -> Option<(
+    &String,
+    &String,
+    &String,
+    &ArtifactIdentity,
+    &String,
+    &String,
+)> {
+    match (
+        &record.minimizer_semantic_id,
+        &record.minimizer_semantic_hash,
+        &record.minimizer_implementation_hash,
+        &record.minimizer_implementation_artifact,
+        &record.minimizer_invocation_id,
+        &record.minimizer_result_id,
+    ) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) => Some((a, b, c, d, e, f)),
+        _ => None,
+    }
+}
+
 pub struct Store {
     pub root: PathBuf,
 }
@@ -77,6 +104,7 @@ impl Store {
             "reductions",
             "receipts",
             "claims",
+            "witnesses",
         ] {
             fs::create_dir_all(self.root.join(dir)).map_err(|e| {
                 FrfError::new(format!(
@@ -264,6 +292,294 @@ impl Store {
         Ok(crate::model::ComparatorEvidence { invocation, result })
     }
 
+    /// `captures/<run>/normalizer/<id>/<side>/` — the invocation evidence
+    /// directory for one normalizer applied to one side (request.json,
+    /// response.json, invocation.json, result.json). The id and side are
+    /// validated again for defense in depth: they become path components.
+    pub fn normalizer_dir(&self, run: &str, id: &str, side: &str) -> Result<PathBuf> {
+        validate_id("normalizer", id)?;
+        if !matches!(side, "reference" | "candidate") {
+            return Err(FrfError::new(format!(
+                "invalid side {side:?}: a normalizer applies to reference or candidate"
+            )));
+        }
+        Ok(self.run_dir(run)?.join("normalizer").join(id).join(side))
+    }
+
+    /// `captures/<run>/capture-adapter/<axis>/<side>/` — the invocation
+    /// evidence directory for one capture adapter applied to one side.
+    pub fn adapter_dir(&self, run: &str, axis: &str, side: &str) -> Result<PathBuf> {
+        crate::model::ObservableId::parse(axis)?;
+        if !matches!(side, "reference" | "candidate") {
+            return Err(FrfError::new(format!(
+                "invalid side {side:?}: a capture adapter applies to reference or candidate"
+            )));
+        }
+        Ok(self
+            .run_dir(run)?
+            .join("capture-adapter")
+            .join(axis)
+            .join(side))
+    }
+
+    /// Load + verify a normalizer INVOCATION record: its identity rederives
+    /// from its own fields, and the preserved request document hashes to the
+    /// recorded `request_cid`. A hand-edited or corrupt record is refused,
+    /// never silently consumed.
+    pub fn load_normalizer_invocation(
+        &self,
+        run: &str,
+        id: &str,
+        side: &str,
+    ) -> Result<crate::model::NormalizerInvocation> {
+        let dir = self.normalizer_dir(run, id, side)?;
+        let path = dir.join("invocation.json");
+        if !path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: no normalizer invocation evidence for normalizer {id} on the {side} side (missing {})",
+                path.display()
+            )));
+        }
+        let inv: crate::model::NormalizerInvocation = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        if inv.normalizer_id != id || inv.side != side {
+            return Err(FrfError::new(format!(
+                "run {run}: normalizer invocation under {id}/{side} names normalizer {} on side {} — the name is a claim",
+                inv.normalizer_id, inv.side
+            )));
+        }
+        let rederived = crate::semantics::normalizer_invocation_identity(
+            &crate::semantics::NormalizerInvocationContent {
+                normalizer_id: &inv.normalizer_id,
+                side: &inv.side,
+                request_cid: &inv.request_cid,
+                normalizer_semantic_cid: &inv.normalizer_semantic_cid,
+                normalizer_implementation_artifact: &inv.normalizer_implementation_artifact,
+                execution_provenance: &inv.execution_provenance,
+            },
+        )?;
+        if rederived != inv.invocation_id {
+            return Err(FrfError::new(format!(
+                "run {run}: normalizer invocation {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+                &rederived[..16]
+            )));
+        }
+        let request_path = dir.join("request.json");
+        let request_bytes = fs::read(&request_path).map_err(|e| {
+            FrfError::new(format!(
+                "cannot read the preserved normalizer request {}: {e}",
+                request_path.display()
+            ))
+        })?;
+        if crate::host::sha256_bytes(&request_bytes) != inv.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: the preserved normalizer request for {id}/{side} does not hash to its recorded request_cid"
+            )));
+        }
+        Ok(inv)
+    }
+
+    /// Load + verify a normalizer RESULT record: its identity rederives from
+    /// its own fields, and the preserved response document hashes to the
+    /// recorded `response_cid`.
+    pub fn load_normalizer_result(
+        &self,
+        run: &str,
+        id: &str,
+        side: &str,
+    ) -> Result<crate::model::NormalizerResult> {
+        let dir = self.normalizer_dir(run, id, side)?;
+        let path = dir.join("result.json");
+        if !path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: no normalizer result evidence for normalizer {id} on the {side} side (missing {})",
+                path.display()
+            )));
+        }
+        let res: crate::model::NormalizerResult = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let rederived = crate::semantics::normalizer_result_identity(
+            &crate::semantics::NormalizerResultContent {
+                request_cid: &res.request_cid,
+                response_cid: &res.response_cid,
+                stdout_sha256: &res.stdout_sha256,
+                stderr_sha256: &res.stderr_sha256,
+            },
+        )?;
+        if rederived != res.result_id {
+            return Err(FrfError::new(format!(
+                "run {run}: normalizer result {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+                &rederived[..16]
+            )));
+        }
+        let response_path = dir.join("response.json");
+        let response_bytes = fs::read(&response_path).map_err(|e| {
+            FrfError::new(format!(
+                "cannot read the preserved normalizer response {}: {e}",
+                response_path.display()
+            ))
+        })?;
+        if crate::host::sha256_bytes(&response_bytes) != res.response_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: the preserved normalizer response for {id}/{side} does not hash to its recorded response_cid"
+            )));
+        }
+        Ok(res)
+    }
+
+    /// Load + cross-verify a normalizer's invocation AND result evidence:
+    /// the result must answer the invocation's exact request (same
+    /// `request_cid`), and the response must cryptographically name that
+    /// request (`request_id`).
+    pub fn load_normalizer_evidence(
+        &self,
+        run: &str,
+        id: &str,
+        side: &str,
+    ) -> Result<(
+        crate::model::NormalizerInvocation,
+        crate::model::NormalizerResult,
+    )> {
+        let invocation = self.load_normalizer_invocation(run, id, side)?;
+        let result = self.load_normalizer_result(run, id, side)?;
+        if result.request_cid != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: normalizer result for {id}/{side} answers a different request than its invocation"
+            )));
+        }
+        let dir = self.normalizer_dir(run, id, side)?;
+        let response: crate::model::NormalizerResponse =
+            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "cannot parse {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?;
+        if response.request_id != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: normalizer response for {id}/{side} does not name the request it answers"
+            )));
+        }
+        Ok((invocation, result))
+    }
+
+    /// Load + cross-verify a capture adapter's invocation AND result
+    /// evidence for one side.
+    pub fn load_adapter_evidence(
+        &self,
+        run: &str,
+        axis: &str,
+        side: &str,
+    ) -> Result<(
+        crate::model::CaptureAdapterInvocation,
+        crate::model::CaptureAdapterResult,
+    )> {
+        let dir = self.adapter_dir(run, axis, side)?;
+        let inv_path = dir.join("invocation.json");
+        let res_path = dir.join("result.json");
+        if !inv_path.is_file() || !res_path.is_file() {
+            return Err(FrfError::new(format!(
+                "run {run}: no capture-adapter evidence for axis {axis} on the {side} side (missing {} or {})",
+                inv_path.display(),
+                res_path.display()
+            )));
+        }
+        let inv: crate::model::CaptureAdapterInvocation = serde_json::from_slice(
+            &fs::read(&inv_path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", inv_path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", inv_path.display())))?;
+        let res: crate::model::CaptureAdapterResult = serde_json::from_slice(
+            &fs::read(&res_path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", res_path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", res_path.display())))?;
+        if inv.axis != axis || inv.side != side {
+            return Err(FrfError::new(format!(
+                "run {run}: capture-adapter invocation under {axis}/{side} names axis {} on side {} — the name is a claim",
+                inv.axis, inv.side
+            )));
+        }
+        let rederived = crate::semantics::capture_adapter_invocation_identity(
+            &crate::semantics::CaptureAdapterInvocationContent {
+                axis: &inv.axis,
+                side: &inv.side,
+                request_cid: &inv.request_cid,
+                adapter_semantic_cid: &inv.adapter_semantic_cid,
+                adapter_implementation_artifact: &inv.adapter_implementation_artifact,
+                execution_provenance: &inv.execution_provenance,
+            },
+        )?;
+        if rederived != inv.invocation_id {
+            return Err(FrfError::new(format!(
+                "run {run}: capture-adapter invocation for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+                &rederived[..16]
+            )));
+        }
+        let rederived_result = crate::semantics::capture_adapter_result_identity(
+            &crate::semantics::CaptureAdapterResultContent {
+                request_cid: &res.request_cid,
+                response_cid: &res.response_cid,
+                observation_sha256: &res.observation_sha256,
+            },
+        )?;
+        if rederived_result != res.result_id {
+            return Err(FrfError::new(format!(
+                "run {run}: capture-adapter result for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+                &rederived_result[..16]
+            )));
+        }
+        if res.request_cid != inv.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: capture-adapter result for {axis}/{side} answers a different request than its invocation"
+            )));
+        }
+        let response_path = dir.join("response.json");
+        let response: crate::model::CaptureAdapterResponse =
+            serde_json::from_slice(&fs::read(&response_path).map_err(|e| {
+                FrfError::new(format!("cannot read {}: {e}", response_path.display()))
+            })?)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", response_path.display())))?;
+        if response.request_id != inv.request_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: capture-adapter response for {axis}/{side} does not name the request it answers"
+            )));
+        }
+        let response_bytes = fs::read(&response_path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", response_path.display())))?;
+        if crate::host::sha256_bytes(&response_bytes) != res.response_cid {
+            return Err(FrfError::new(format!(
+                "run {run}: the preserved capture-adapter response for {axis}/{side} does not hash to its recorded response_cid"
+            )));
+        }
+        Ok((inv, res))
+    }
+
+    /// `reductions/<id>/minimizer/` — the invocation evidence directory of
+    /// the external minimizer that proposed a reduction (request.json,
+    /// response.json, invocation.json, result.json). The reduction RECORD
+    /// itself lives at `reductions/<id>.yaml`.
+    pub fn minimizer_dir(&self, reduction_id: &str) -> Result<PathBuf> {
+        validate_id("reduction", reduction_id)?;
+        Ok(self
+            .root
+            .join("reductions")
+            .join(reduction_id)
+            .join("minimizer"))
+    }
+
     pub fn residual_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
         Ok(self.root.join("residuals").join(format!("{id}.yaml")))
@@ -385,6 +701,137 @@ impl Store {
         Ok(self.root.join("challenges").join(format!("{id}.yaml")))
     }
 
+    /// `witnesses/<id>.json` — the content-addressed witness statement
+    /// (canonical JSON, like receipts: the protocol representation).
+    pub fn witness_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("witness statement", id)?;
+        Ok(self.root.join("witnesses").join(format!("{id}.json")))
+    }
+
+    /// `witnesses/<id>/` — the preserved canonical request + response of the
+    /// attestation (the statement's own evidence).
+    pub fn witness_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_id("witness statement", id)?;
+        Ok(self.root.join("witnesses").join(id))
+    }
+
+    /// Write a witness statement: content-addressed (the id rederives from
+    /// the record's own fields), canonical JSON, write-once. The preserved
+    /// request/response documents are the caller's to write under
+    /// [`Store::witness_dir`]; the loader cross-verifies them.
+    pub fn write_witness_statement(&self, stmt: &WitnessStatement) -> Result<()> {
+        let expected = crate::semantics::witness_statement_identity(
+            &crate::semantics::WitnessStatementContent {
+                subject: &stmt.subject,
+                witness_semantic: &stmt.witness_semantic,
+                witness_implementation: &stmt.witness_implementation,
+                statement: &stmt.statement,
+                attestation: &stmt.attestation,
+                request_cid: &stmt.request_cid,
+                response_cid: &stmt.response_cid,
+            },
+        )?;
+        if expected != stmt.id {
+            return Err(FrfError::new(format!(
+                "witness statement id mismatch: record says {} but its fields hash to {expected}",
+                stmt.id
+            )));
+        }
+        let path = self.witness_path(&stmt.id)?;
+        if path.exists() {
+            return Ok(());
+        }
+        let json = crate::canon::canonical(stmt)?;
+        self.write_once(&path, &json)
+    }
+
+    /// Load + verify a witness statement: its identity rederives from its own
+    /// fields, the preserved request document hashes to the recorded
+    /// `request_cid`, the preserved response document hashes to the recorded
+    /// `response_cid`, the response cryptographically names its request, and
+    /// the attestation names exactly the statement recorded.
+    pub fn load_witness_statement(&self, id: &str) -> Result<WitnessStatement> {
+        let path = self.witness_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no witness statement {id} (missing {})",
+                path.display()
+            )));
+        }
+        let stmt: WitnessStatement = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?,
+        )
+        .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        if stmt.id != id {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the id inside the record is {} — the name is a claim",
+                stmt.id
+            )));
+        }
+        let expected = crate::semantics::witness_statement_identity(
+            &crate::semantics::WitnessStatementContent {
+                subject: &stmt.subject,
+                witness_semantic: &stmt.witness_semantic,
+                witness_implementation: &stmt.witness_implementation,
+                statement: &stmt.statement,
+                attestation: &stmt.attestation,
+                request_cid: &stmt.request_cid,
+                response_cid: &stmt.response_cid,
+            },
+        )?;
+        if expected != id {
+            return Err(FrfError::new(format!(
+                "witness statement {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited statement"
+            )));
+        }
+        let dir = self.witness_dir(id)?;
+        let request_path = dir.join("request.json");
+        let response_path = dir.join("response.json");
+        if !request_path.is_file() || !response_path.is_file() {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the preserved request/response evidence is missing under {}",
+                dir.display()
+            )));
+        }
+        let request_bytes = fs::read(&request_path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", request_path.display())))?;
+        if crate::host::sha256_bytes(&request_bytes) != stmt.request_cid {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the preserved request does not hash to its recorded request_cid"
+            )));
+        }
+        let response_bytes = fs::read(&response_path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", response_path.display())))?;
+        if crate::host::sha256_bytes(&response_bytes) != stmt.response_cid {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the preserved response does not hash to its recorded response_cid"
+            )));
+        }
+        let response: WitnessResponse = serde_json::from_slice(&response_bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", response_path.display())))?;
+        if response.request_id != stmt.request_cid {
+            return Err(FrfError::new(format!(
+                "witness statement {id}: the preserved response does not name the request it answers"
+            )));
+        }
+        match &response.attestation {
+            Some(att) => {
+                if att.statement != stmt.statement {
+                    return Err(FrfError::new(format!(
+                        "witness statement {id}: the attestation names a different statement than the record"
+                    )));
+                }
+            }
+            None => {
+                return Err(FrfError::new(format!(
+                    "witness statement {id}: the preserved response carries no attestation"
+                )))
+            }
+        }
+        Ok(stmt)
+    }
+
     /// Load a challenge record by its content address: the id must rederive
     /// from the record's own fields (the name is a claim until recomputed).
     pub fn load_challenge(&self, id: &str) -> Result<CourtChallenge> {
@@ -477,6 +924,16 @@ impl Store {
             &record.attempts,
             &record.derivation,
             &record.transform,
+            crate::store::minimizer_binding(&record).as_ref().map(|b| {
+                (
+                    b.0.as_str(),
+                    b.1.as_str(),
+                    b.2.as_str(),
+                    b.3,
+                    b.4.as_str(),
+                    b.5.as_str(),
+                )
+            }),
         )?;
         if expected != id {
             return Err(FrfError::new(format!(
@@ -506,6 +963,16 @@ impl Store {
             &record.attempts,
             &record.derivation,
             &record.transform,
+            crate::store::minimizer_binding(record).as_ref().map(|b| {
+                (
+                    b.0.as_str(),
+                    b.1.as_str(),
+                    b.2.as_str(),
+                    b.3,
+                    b.4.as_str(),
+                    b.5.as_str(),
+                )
+            }),
         )?;
         if id != record.id {
             return Err(FrfError::new(format!(
@@ -1209,6 +1676,7 @@ impl Store {
                 produced: reference.produced.as_ref().zip(candidate.produced.as_ref()),
                 cwd: std::path::Path::new("."),
                 raw: None,
+                compared: None,
             };
             let evaluation =
                 crate::comparators::evaluate(self, &plan, &reference, &candidate, &context)?;

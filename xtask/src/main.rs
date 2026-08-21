@@ -243,6 +243,74 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                 }
             }
         }
+        // Normalizer invocation evidence (the comparison-surface instruments):
+        // `captures/<run>/normalizer/<id>/<side>/` — four files per side.
+        let norm_dir = bundle.join(format!("captures/{run}/normalizer"));
+        if norm_dir.is_dir() {
+            let mut ids: Vec<String> = std::fs::read_dir(&norm_dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            ids.sort();
+            for id in ids {
+                let side_dir = norm_dir.join(&id);
+                let mut sides: Vec<String> = std::fs::read_dir(&side_dir)
+                    .unwrap()
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                sides.sort();
+                for side in sides {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let p = norm_dir.join(&id).join(&side).join(f);
+                        if p.is_file() {
+                            needed.insert(format!("captures/{run}/normalizer/{id}/{side}/{f}"));
+                        }
+                    }
+                }
+            }
+        }
+        // Capture-adapter invocation evidence (the adapted-observation
+        // instruments): `captures/<run>/capture-adapter/<axis>/<side>/`.
+        let adapter_dir = bundle.join(format!("captures/{run}/capture-adapter"));
+        if adapter_dir.is_dir() {
+            let mut axes: Vec<String> = std::fs::read_dir(&adapter_dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            axes.sort();
+            for axis in axes {
+                let side_dir = adapter_dir.join(&axis);
+                let mut sides: Vec<String> = std::fs::read_dir(&side_dir)
+                    .unwrap()
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                sides.sort();
+                for side in sides {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let p = adapter_dir.join(&axis).join(&side).join(f);
+                        if p.is_file() {
+                            needed.insert(format!(
+                                "captures/{run}/capture-adapter/{axis}/{side}/{f}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         for id in cap["residuals"].as_array().cloned().unwrap_or_default() {
             let id = as_str(&id).to_string();
             if !seen_residuals.insert(id.clone()) {
@@ -332,6 +400,25 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
         if let Some(reductions) = claim["knowledge_snapshot"]["reductions"].as_array() {
             for rid in reductions {
                 needed.insert(format!("reductions/{}.yaml", as_str(rid)));
+                // An external minimizer's invocation evidence lives under
+                // `reductions/<id>/minimizer/`; the record binds it.
+                let reduction = load_yaml(&safe_rel(
+                    bundle,
+                    &format!("reductions/{}.yaml", as_str(rid)),
+                ));
+                if reduction["minimizer_semantic_id"].is_string() {
+                    for f in [
+                        "request.json",
+                        "response.json",
+                        "invocation.json",
+                        "result.json",
+                    ] {
+                        let p = bundle.join(format!("reductions/{}/minimizer/{f}", as_str(rid)));
+                        if p.is_file() {
+                            needed.insert(format!("reductions/{}/minimizer/{f}", as_str(rid)));
+                        }
+                    }
+                }
             }
         }
     }
@@ -535,6 +622,166 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     ] {
         if sha256_bytes(&read(&safe_rel(bundle, &format!("objects/sha256/{h}")))) != h {
             panic!("object {h} is corrupt (or missing)");
+        }
+    }
+
+    // 3b. The extension instruments' objects (normalizer / capture-adapter /
+    //     minimizer implementations) are content-addressed — the exact
+    //     program bytes that built the comparison surface are in the closure.
+    for impls in [
+        &cap["provenance"]["normalizer_implementations"],
+        &cap["provenance"]["adapter_implementations"],
+        &cap["provenance"]["minimizer_implementations"],
+    ] {
+        for impl_ in impls.as_array().cloned().unwrap_or_default() {
+            if let Some(artifact) = impl_.get("artifact") {
+                let h = as_str(&artifact["sha256"]);
+                if sha256_bytes(&read(&safe_rel(bundle, &format!("objects/sha256/{h}")))) != h {
+                    panic!("object {h} is corrupt (or missing)");
+                }
+            }
+        }
+    }
+
+    // 3c. The normalizer chain: the COMPARED streams recorded in the capture
+    //     derive from the recorded normalizer evidence. Each preserved
+    //     request carries the streams the normalizer received; its result
+    //     records the hashes it returned; the next request must carry exactly
+    //     those; the last result's hashes ARE the capture's compared hashes.
+    //     No execution — the raw streams survive inside the first request
+    //     document, and the chain is rehashed end to end.
+    let b64dec = |s: &str| -> Vec<u8> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(s)
+            .unwrap_or_else(|e| panic!("cannot decode base64: {e}"))
+    };
+    for side in ["reference", "candidate"] {
+        let cap_side = &cap[side];
+        let mut incoming: Option<(String, String)> = None;
+        for semantic in cap["normalizer_semantics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
+            let id = as_str(&semantic["id"]);
+            let base = format!("captures/{run}/normalizer/{id}/{side}");
+            let inv = load_json(&safe_rel(bundle, &format!("{base}/invocation.json")));
+            if as_str(&inv["normalizer_semantic_cid"]) != as_str(&semantic["specification_hash"]) {
+                panic!(
+                    "capture {run}: normalizer {id} invocation does not bind the recorded semantic identity"
+                );
+            }
+            let req = load_json(&safe_rel(bundle, &format!("{base}/request.json")));
+            let carried = (
+                sha256_bytes(&b64dec(as_str(&req["stdout_base64"]))),
+                sha256_bytes(&b64dec(as_str(&req["stderr_base64"]))),
+            );
+            if let Some((prev_stdout, prev_stderr)) = &incoming {
+                if carried.0 != *prev_stdout || carried.1 != *prev_stderr {
+                    panic!(
+                        "capture {run}: the normalizer chain is broken — normalizer {id} on the {side} side received streams that are not the previous result's output"
+                    );
+                }
+            }
+            let res = load_json(&safe_rel(bundle, &format!("{base}/result.json")));
+            incoming = Some((
+                as_str(&res["stdout_sha256"]).to_string(),
+                as_str(&res["stderr_sha256"]).to_string(),
+            ));
+        }
+        if let Some((stdout_sha256, stderr_sha256)) = &incoming {
+            if stdout_sha256 != as_str(&cap_side["stdout_sha256"])
+                || stderr_sha256 != as_str(&cap_side["stderr_sha256"])
+            {
+                panic!(
+                    "capture {run}: the {side} side's recorded compared streams do not derive from the recorded normalizer chain"
+                );
+            }
+        }
+    }
+
+    // 3d. The capture adapters: the capture's adapted observations ARE the
+    //     adapters' recorded outputs (payloads decode to the recorded content
+    //     hashes), each invocation binds the recorded semantic identity, and
+    //     each adapter request carried the truly raw outcome — the side files
+    //     when no normalizers applied, else the first normalizer's request.
+    for impl_ in cap["provenance"]["adapter_implementations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        let axis = as_str(&impl_["id"]);
+        let semantic = cap["adapter_semantics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| as_str(&s["id"]) == axis)
+            .unwrap_or_else(|| panic!("capture {run}: capture adapter {axis} has no semantic"));
+        for side in ["reference", "candidate"] {
+            let cap_side = &cap[side];
+            let base = format!("captures/{run}/capture-adapter/{axis}/{side}");
+            let inv = load_json(&safe_rel(bundle, &format!("{base}/invocation.json")));
+            if as_str(&inv["adapter_semantic_cid"]) != as_str(&semantic["specification_hash"]) {
+                panic!(
+                    "capture {run}: capture adapter {axis} invocation does not bind the recorded semantic identity"
+                );
+            }
+            let res = load_json(&safe_rel(bundle, &format!("{base}/result.json")));
+            let recorded = cap_side.get("adapted").unwrap_or_else(|| {
+                panic!(
+                    "capture {run}: the {side} side carries no adapted observation for adapted axis {axis}"
+                )
+            });
+            if as_str(&recorded["content_sha256"]) != as_str(&res["observation_sha256"]) {
+                panic!(
+                    "capture {run}: the {side} side's adapted observation for axis {axis} does not match the adapter's recorded result"
+                );
+            }
+            if sha256_bytes(&b64dec(as_str(&recorded["payload_base64"])))
+                != as_str(&recorded["content_sha256"])
+            {
+                panic!(
+                    "capture {run}: the {side} side's adapted payload for axis {axis} does not decode to its recorded content hash"
+                );
+            }
+            let req = load_json(&safe_rel(bundle, &format!("{base}/request.json")));
+            let carried = (
+                sha256_bytes(&b64dec(as_str(&req["outcome"]["stdout_base64"]))),
+                sha256_bytes(&b64dec(as_str(&req["outcome"]["stderr_base64"]))),
+            );
+            let raw: (String, String) = if cap["normalizer_semantics"]
+                .as_array()
+                .map(|a| a.is_empty())
+                .unwrap_or(true)
+            {
+                (
+                    sha256_bytes(&read(&safe_rel(
+                        bundle,
+                        &format!("captures/{run}/{side}.stdout"),
+                    ))),
+                    sha256_bytes(&read(&safe_rel(
+                        bundle,
+                        &format!("captures/{run}/{side}.stderr"),
+                    ))),
+                )
+            } else {
+                let first = as_str(&cap["normalizer_semantics"][0]["id"]);
+                let first_req = load_json(&safe_rel(
+                    bundle,
+                    &format!("captures/{run}/normalizer/{first}/{side}/request.json"),
+                ));
+                (
+                    sha256_bytes(&b64dec(as_str(&first_req["stdout_base64"]))),
+                    sha256_bytes(&b64dec(as_str(&first_req["stderr_base64"]))),
+                )
+            };
+            if carried.0 != raw.0 || carried.1 != raw.1 {
+                panic!(
+                    "capture {run}: the capture adapter for axis {axis} on the {side} side did not receive the truly raw outcome"
+                );
+            }
         }
     }
 
@@ -838,6 +1085,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     &reduction["attempts"],
                     &reduction["derivation"],
                     &reduction["transform"],
+                    &reduction["minimizer"],
                 );
                 if expected != rid {
                     panic!("claim {receipt_id}: reduction {rid} is not content-addressed");

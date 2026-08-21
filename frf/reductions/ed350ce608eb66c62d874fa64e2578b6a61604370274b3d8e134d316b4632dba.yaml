@@ -1,0 +1,70 @@
+schema_version: frf-reduction-v3
+id: ed350ce608eb66c62d874fa64e2578b6a61604370274b3d8e134d316b4632dba
+residual_id: cli-exit-0003
+source_run: run-cli-external-minimizer-cfb0e02b8477cc17eab9cb0810402692e9a51ab6a3cb98460836710ae7185f6e
+axis: exit
+kind: exit
+court_semantic_identity: cab3c77080bcbe834dd6153eede90d845bac93644cca2f260799b70b84856e25
+authority_artifact_sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
+candidate_artifact_sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+environment_digest: d2f4094cecf4c121f4618ce6ed4dcdbad3847c1483ccedbbdff6b462c0453c9e
+comparator_semantic_id: exit
+comparator_semantic_hash: 1199a471cf91b3972ff58b6f2cd8e0e73e4f8507bb8d468fda0fd5e13cc15f1a
+comparator_implementation_hash: d7390f8db9ed8001a66e0dc57265276b45f896e7047ad05e1cd7f24ba43482df
+argv_template:
+- --strict
+- frf/objects/sha256/7622b7be207ba8c38caf34c7296e51c2f55549956db844f8e53c9b272c506b4a
+original_fixture_sha256: 7622b7be207ba8c38caf34c7296e51c2f55549956db844f8e53c9b272c506b4a
+final_fixture_sha256: 1254195159ed170b00bd5cb7fc7bc0cea505d37f631bf99c49edf36f26e6de74
+attempts:
+- attempt: 1
+  role: baseline
+  fixture_sha256: 7622b7be207ba8c38caf34c7296e51c2f55549956db844f8e53c9b272c506b4a
+  outcome: preserved
+  accepted: false
+- attempt: 2
+  role: final_verification
+  fixture_sha256: 1254195159ed170b00bd5cb7fc7bc0cea505d37f631bf99c49edf36f26e6de74
+  outcome: preserved
+  accepted: true
+derivation:
+  strategy: external:drop-comment-blank-lines
+  original_lines: 7
+  final_lines: 2
+  minimality:
+    kind: one-minimal
+    granularity: line
+    proven: true
+transform:
+  kind: reduction
+  source: cli-exit-0003
+  varying_dimensions:
+  - fixture
+  invariant_dimensions:
+  - candidate
+  - authority
+  - comparator
+  - environment
+  observation_relation: eq(exit-code)
+  success_predicate: lineage-survives
+minimizer_semantic_id: cli-exit-minimize
+minimizer_semantic_hash: 5c25d61a41ebece4b6d7f91bd2e82dc8992e85d69f5b362715875f191ee5e3c6
+minimizer_implementation_hash: 853b90816cb2710ab05ede05cde4842bd0bea58d834cdc18eb185d0ac95b08ed
+minimizer_implementation_artifact:
+  path: objects/sha256/853b90816cb2710ab05ede05cde4842bd0bea58d834cdc18eb185d0ac95b08ed
+  sha256: 853b90816cb2710ab05ede05cde4842bd0bea58d834cdc18eb185d0ac95b08ed
+  interpreter:
+    kernel_interpreter:
+      path: /usr/bin/env
+      sha256: e949d77a3f3c9086e898318bcfbf256af598238f61c2d75a3e1dc74c84c4d986
+    shebang_argument_bytes: python3
+    resolver:
+      kind: env
+      path: /usr/bin/env
+      sha256: e949d77a3f3c9086e898318bcfbf256af598238f61c2d75a3e1dc74c84c4d986
+      path_digest: 10dcb4d6b506d2c0dc1aa4ade1920fc15489c99e2dba92319bfb0cf1ee345bcf
+    downstream_interpreter:
+      path: /usr/bin/python3.14
+      sha256: e9db67955243120e49352dc87977cdfb96a1dc130b58cfac7a0ab5f4f74731af
+minimizer_invocation_id: 52db01ba4d18b5085774a65836c674569cc5af7e52664cce4b2ce1a64b99682a
+minimizer_result_id: 9fdfc4ad558e00468263a92f1cb4ca1a99fee61448d886cf4619dcc9ba49d811

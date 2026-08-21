@@ -51,6 +51,44 @@ pub struct CaptureVerified {
     pub capture: CaptureManifest,
 }
 
+impl CaptureVerified {
+    /// The run identity DIGEST (the hash component of the run id), recomputed
+    /// from the capture's own recorded fields — the same function the court
+    /// uses. The name is a claim until recomputed.
+    pub fn digest(&self, residuals: &[ResidualRecord]) -> Result<String> {
+        capture_digest(&self.capture, residuals)
+    }
+}
+
+/// Recompute the run identity digest of a capture from its own recorded
+/// fields (the ONE identity function, shared with the court and replay).
+pub fn capture_digest(capture: &CaptureManifest, residuals: &[ResidualRecord]) -> Result<String> {
+    let pre = RunPreimage {
+        court: &capture.court,
+        authority: &capture.authority,
+        authority_interpreter: capture
+            .authority_artifact
+            .interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
+        candidate_sha256: &capture.candidate_artifact.sha256,
+        candidate_interpreter: capture
+            .candidate_artifact
+            .interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
+        fixture_sha256: &capture.fixture_sha256,
+        arguments: &capture.arguments,
+        environment_digest: &capture.environment.digest,
+        runner_hash: &capture.provenance.runner.frf_executable_hash,
+        court_semantic_identity: &capture.court_semantic_identity,
+        reference: &capture.reference,
+        candidate: &capture.candidate,
+        residuals,
+    };
+    crate::semantics::run_identity(&pre)
+}
+
 fn read_bytes(path: &Path, what: &str) -> Result<Vec<u8>> {
     fs::read(path).map_err(|e| FrfError::new(format!("cannot read {what} {}: {e}", path.display())))
 }
@@ -99,30 +137,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     }
 
     // 3. The run identity rederives from the capture's recorded fields.
-    let pre = RunPreimage {
-        court: &capture.court,
-        authority: &capture.authority,
-        authority_interpreter: capture
-            .authority_artifact
-            .interpreter
-            .as_ref()
-            .map(|i| i.downstream_interpreter.sha256.as_str()),
-        candidate_sha256: &capture.candidate_artifact.sha256,
-        candidate_interpreter: capture
-            .candidate_artifact
-            .interpreter
-            .as_ref()
-            .map(|i| i.downstream_interpreter.sha256.as_str()),
-        fixture_sha256: &capture.fixture_sha256,
-        arguments: &capture.arguments,
-        environment_digest: &capture.environment.digest,
-        runner_hash: &capture.provenance.runner.frf_executable_hash,
-        court_semantic_identity: &capture.court_semantic_identity,
-        reference: &capture.reference,
-        candidate: &capture.candidate,
-        residuals: &residuals,
-    };
-    let rederived = crate::semantics::run_identity(&pre)?;
+    let rederived = capture_digest(&capture, &residuals)?;
     // The run id is `run-{court}-{hash}`; the rederived hash must be its
     // digest component — the name is a claim until recomputed.
     let expected = format!("run-{}-{}", capture.court, rederived);
@@ -200,6 +215,190 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     store.verified_object_bytes(&capture.authority_artifact.sha256)?;
     store.verified_object_bytes(&capture.candidate_artifact.sha256)?;
     store.verified_object_bytes(&capture.fixture_sha256)?;
+
+    // 5b. The extension instrument snapshots exist and are intact: every
+    //     normalizer, capture adapter, and minimizer implementation the
+    //     capture bound at observation time is a content-addressed object.
+    for impl_ in &capture.provenance.normalizer_implementations {
+        if let Some(artifact) = &impl_.artifact {
+            store.verified_object_bytes(&artifact.sha256)?;
+        }
+    }
+    for impl_ in &capture.provenance.adapter_implementations {
+        if let Some(artifact) = &impl_.artifact {
+            store.verified_object_bytes(&artifact.sha256)?;
+        }
+    }
+    for impl_ in &capture.provenance.minimizer_implementations {
+        if let Some(artifact) = &impl_.artifact {
+            store.verified_object_bytes(&artifact.sha256)?;
+        }
+    }
+
+    // 5c. The normalizer chain: the COMPARED streams recorded in the capture
+    //     derive from the recorded normalizer evidence. Each normalizer's
+    //     preserved request carries the streams it received (base64); its
+    //     result records the hashes of the streams it returned; the next
+    //     normalizer's request must carry exactly those, and the last
+    //     result's hashes must BE the capture's compared hashes. Verification
+    //     never executes — the raw streams survive inside the first request
+    //     document, and the chain is rehashed end to end.
+    for side in ["reference", "candidate"] {
+        let capture_side = if side == "reference" {
+            &capture.reference
+        } else {
+            &capture.candidate
+        };
+        let mut incoming: Option<(String, String)> = None;
+        for semantic in &capture.normalizer_semantics {
+            let (inv, res) = store.load_normalizer_evidence(run, &semantic.id, side)?;
+            if inv.normalizer_semantic_cid != semantic.specification_hash {
+                return Err(FrfError::new(format!(
+                    "capture {run}: normalizer {} invocation does not bind the recorded semantic identity",
+                    semantic.id
+                )));
+            }
+            let request_path = store
+                .normalizer_dir(run, &semantic.id, side)?
+                .join("request.json");
+            let request_value = crate::canon::parse_strict(&read_bytes(&request_path, "request")?)?;
+            let carried = (
+                host::sha256_bytes(&crate::ext::unb64(
+                    request_value["stdout_base64"].as_str().unwrap_or_default(),
+                    "normalizer request stdout",
+                )?),
+                host::sha256_bytes(&crate::ext::unb64(
+                    request_value["stderr_base64"].as_str().unwrap_or_default(),
+                    "normalizer request stderr",
+                )?),
+            );
+            if let Some((prev_stdout, prev_stderr)) = &incoming {
+                if &carried.0 != prev_stdout || &carried.1 != prev_stderr {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: the normalizer chain is broken — normalizer {} on the {side} side received streams that are not the previous result's output",
+                        semantic.id
+                    )));
+                }
+            }
+            incoming = Some((res.stdout_sha256.clone(), res.stderr_sha256.clone()));
+        }
+        if let Some((stdout_sha256, stderr_sha256)) = &incoming {
+            if stdout_sha256 != &capture_side.stdout_sha256
+                || stderr_sha256 != &capture_side.stderr_sha256
+            {
+                return Err(FrfError::new(format!(
+                    "capture {run}: the {side} side's recorded compared streams do not derive from the recorded normalizer chain"
+                )));
+            }
+        }
+    }
+
+    // 5d. The capture-adapter evidence: for every adapted axis, the capture's
+    //     adapted observation must BE the adapter's recorded output (its
+    //     payload decodes to the recorded content hash), the adapter's
+    //     request must have carried the truly raw outcome, and the invocation
+    //     must bind the recorded semantic identity.
+    for impl_ in &capture.provenance.adapter_implementations {
+        let Some(_artifact) = &impl_.artifact else {
+            continue;
+        };
+        let semantic = capture
+            .adapter_semantics
+            .iter()
+            .find(|s| s.id == impl_.id)
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "capture {run}: capture adapter {} has no semantic in the capture",
+                    impl_.id
+                ))
+            })?;
+        for side in ["reference", "candidate"] {
+            let (inv, res) = store.load_adapter_evidence(run, &impl_.id, side)?;
+            if inv.adapter_semantic_cid != semantic.specification_hash {
+                return Err(FrfError::new(format!(
+                    "capture {run}: capture adapter {} invocation does not bind the recorded semantic identity",
+                    impl_.id
+                )));
+            }
+            let capture_side = if side == "reference" {
+                &capture.reference
+            } else {
+                &capture.candidate
+            };
+            let recorded = capture_side.adapted.as_ref().ok_or_else(|| {
+                FrfError::new(format!(
+                    "capture {run}: the {side} side carries no adapted observation for adapted axis {}",
+                    impl_.id
+                ))
+            })?;
+            if recorded.content_sha256 != res.observation_sha256 {
+                return Err(FrfError::new(format!(
+                    "capture {run}: the {side} side's adapted observation for axis {} does not match the adapter's recorded result",
+                    impl_.id
+                )));
+            }
+            if host::sha256_bytes(&crate::ext::unb64(
+                &recorded.payload_base64,
+                "adapted observation payload",
+            )?) != recorded.content_sha256
+            {
+                return Err(FrfError::new(format!(
+                    "capture {run}: the {side} side's adapted payload for axis {} does not decode to its recorded content hash",
+                    impl_.id
+                )));
+            }
+            // The adapter was fed the truly raw outcome: its request's
+            // carried streams must match the raw record — the side files when
+            // no normalizers applied, else the first normalizer's request.
+            let request_path = store
+                .adapter_dir(run, &impl_.id, side)?
+                .join("request.json");
+            let request_value = crate::canon::parse_strict(&read_bytes(&request_path, "request")?)?;
+            let carried = (
+                host::sha256_bytes(&crate::ext::unb64(
+                    request_value["outcome"]["stdout_base64"]
+                        .as_str()
+                        .unwrap_or_default(),
+                    "adapter request stdout",
+                )?),
+                host::sha256_bytes(&crate::ext::unb64(
+                    request_value["outcome"]["stderr_base64"]
+                        .as_str()
+                        .unwrap_or_default(),
+                    "adapter request stderr",
+                )?),
+            );
+            let raw: (String, String) = if capture.normalizer_semantics.is_empty() {
+                let dir = store.run_dir(run)?;
+                let stdout = read_bytes(&dir.join(format!("{side}.stdout")), "side file")?;
+                let stderr = read_bytes(&dir.join(format!("{side}.stderr")), "side file")?;
+                (host::sha256_bytes(&stdout), host::sha256_bytes(&stderr))
+            } else {
+                let first = &capture.normalizer_semantics[0];
+                let first_request_path = store
+                    .normalizer_dir(run, &first.id, side)?
+                    .join("request.json");
+                let first_request =
+                    crate::canon::parse_strict(&read_bytes(&first_request_path, "request")?)?;
+                (
+                    host::sha256_bytes(&crate::ext::unb64(
+                        first_request["stdout_base64"].as_str().unwrap_or_default(),
+                        "first normalizer request stdout",
+                    )?),
+                    host::sha256_bytes(&crate::ext::unb64(
+                        first_request["stderr_base64"].as_str().unwrap_or_default(),
+                        "first normalizer request stderr",
+                    )?),
+                )
+            };
+            if carried.0 != raw.0 || carried.1 != raw.1 {
+                return Err(FrfError::new(format!(
+                    "capture {run}: the capture adapter for axis {} on the {side} side did not receive the truly raw outcome",
+                    impl_.id
+                )));
+            }
+        }
+    }
 
     // 6. External comparator evidence: every externally served axis must have
     //    a verified invocation + result record bound to this run (identity
@@ -786,7 +985,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
 
 impl Receipt {
     /// OpenReceipt SEMANTIC conformance: the cross-field, cross-object
-    /// invariants of `frf-receipt-v12`, checked on the document ALONE so any
+    /// invariants of `frf-receipt-v13`, checked on the document ALONE so any
     /// independent implementation can run the same algorithm (normative
     /// description in `spec/openreceipt.md`, corpus in
     /// `conformance/invalid-semantic/`). This is deliberately separate from
@@ -1564,8 +1763,12 @@ mod tests {
                     &"d".repeat(64),
                 )
                 .remove(0)],
+                normalizer_implementations: vec![],
+                adapter_implementations: vec![],
+                minimizer_implementations: vec![],
             },
             comparator_semantics: vec![comparator],
+            normalizer_semantics: vec![],
             execution_profile: crate::model::EXECUTION_PROFILE_LINUX.into(),
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),

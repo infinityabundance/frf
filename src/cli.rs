@@ -68,6 +68,14 @@ pub enum Command {
         #[command(subcommand)]
         sub: BundleCmd,
     },
+    /// Attest a content-addressed evidence subject with an external witness
+    /// program (the witness extension protocol, spec/witness.md): the
+    /// statement is recorded as a content-addressed WitnessStatement with the
+    /// canonical request/response preserved as evidence
+    Witness {
+        #[command(subcommand)]
+        sub: WitnessCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -186,6 +194,36 @@ pub enum ClaimCmd {
         /// one renderer of the IR)
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WitnessCmd {
+    /// Attest a subject (a run, receipt, or residual id) with a declared
+    /// witness program; prints the content-addressed statement id
+    Attest {
+        /// The subject kind: `run`, `receipt`, or `residual`
+        #[arg(value_name = "run|receipt|residual")]
+        kind: String,
+        /// The subject id (printed by `frf court run` / `frf receipt emit`, or
+        /// a residual id)
+        subject_id: String,
+        /// The witness semantic id (the attestation relation's name)
+        #[arg(long, value_name = "ID")]
+        id: String,
+        /// The attestation relation family (part of the semantic identity)
+        #[arg(long, value_name = "RELATION")]
+        relation: String,
+        /// The relation version (part of the semantic identity)
+        #[arg(long, value_name = "VERSION", default_value = "v1")]
+        relation_version: String,
+        /// Working-directory-relative path to the witness program (read +
+        /// hashed + sealed BEFORE it runs)
+        #[arg(long, value_name = "PATH")]
+        program: String,
+        /// The exact statement the witness attests
+        #[arg(long, value_name = "TEXT")]
+        statement: String,
     },
 }
 

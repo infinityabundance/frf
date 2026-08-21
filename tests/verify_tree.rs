@@ -1086,6 +1086,72 @@ fn series_are_self_consistent() {
 }
 
 // ---------------------------------------------------------------------------
+// witnesses/ — independent attestations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn witness_statements_are_self_consistent() {
+    let store = store();
+    let dir = store.root.join("witnesses");
+    let mut found = 0;
+    if !dir.is_dir() {
+        return;
+    }
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        // The preserved request/response evidence lives under
+        // `witnesses/<id>/` (a directory); the STATEMENT is the `<id>.json`
+        // file (canonical JSON, like receipts).
+        if path.is_dir() {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !name.ends_with(".json") {
+            continue;
+        }
+        let id = name.trim_end_matches(".json").to_string();
+        // The verified loader rehashes everything: the identity rederives,
+        // the preserved request/response hash to their cids, the response
+        // names its request, and the attestation names the statement.
+        let stmt = store.load_witness_statement(&id).unwrap();
+        assert_eq!(stmt.id, id, "the filename must be the content address");
+        assert!(
+            matches!(stmt.subject.kind.as_str(), "run" | "receipt" | "residual"),
+            "witness subject kind"
+        );
+        // The subject content address rederives from the evidence object.
+        match stmt.subject.kind.as_str() {
+            "residual" => {
+                let record = store.load_residual(&stmt.subject.id).unwrap();
+                assert_eq!(
+                    stmt.subject.cid,
+                    frf::semantics::residual_fingerprint(&record).unwrap()
+                );
+            }
+            "run" => {
+                let verified =
+                    frf::verify::load_capture_verified(&store, &stmt.subject.id).unwrap();
+                let residuals: Vec<ResidualRecord> = verified
+                    .capture
+                    .residuals
+                    .iter()
+                    .map(|rid| store.load_residual(rid).unwrap())
+                    .collect();
+                assert_eq!(stmt.subject.cid, verified.digest(&residuals).unwrap());
+            }
+            _ => {}
+        }
+        assert!(stmt.attestation.verified);
+        assert_eq!(stmt.attestation.statement, stmt.statement);
+        found += 1;
+    }
+    assert!(
+        found >= 1,
+        "the golden path must leave at least one witness"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // reductions/ — minimization experiments
 // ---------------------------------------------------------------------------
 
@@ -1095,6 +1161,12 @@ fn reductions_are_self_consistent() {
     let mut found = 0;
     for entry in fs::read_dir(store.root.join("reductions")).unwrap() {
         let path = entry.unwrap().path();
+        // The external minimizer's invocation evidence lives under
+        // `reductions/<id>/minimizer/` (a directory); the RECORD is the
+        // `<id>.yaml` file.
+        if path.is_dir() {
+            continue;
+        }
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let id = name.trim_end_matches(".yaml").to_string();
         let r: ReductionRecord = load(&path);
@@ -1119,7 +1191,17 @@ fn reductions_are_self_consistent() {
                 &r.final_fixture_sha256,
                 &r.attempts,
                 &r.derivation,
-                &r.transform
+                &r.transform,
+                frf::store::minimizer_binding(&r).as_ref().map(|b| {
+                    (
+                        b.0.as_str(),
+                        b.1.as_str(),
+                        b.2.as_str(),
+                        b.3,
+                        b.4.as_str(),
+                        b.5.as_str(),
+                    )
+                }),
             )
             .unwrap(),
             r.id

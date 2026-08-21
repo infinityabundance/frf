@@ -219,6 +219,54 @@ fn provenance_drift(store: &Store, capture: &CaptureManifest) -> Result<Vec<Stri
             )),
         }
     }
+    // The normalizer, capture-adapter, and minimizer instruments' interpreters
+    // too: replay re-invokes the exact snapshotted normalizers and adapters
+    // (the minimizer runs only under `court minimize`, whose reduction record
+    // binds the artifact it ran under).
+    for implementation in &capture.provenance.normalizer_implementations {
+        let Some(artifact) = &implementation.artifact else {
+            continue;
+        };
+        let bytes = store.verified_object_bytes(&artifact.sha256)?;
+        let now = host::interpreter_identity(&bytes)?;
+        match (&artifact.interpreter, now) {
+            (Some(recorded), Some(now)) => {
+                if let Some(line) =
+                    interpreter_drift(&format!("normalizer {}", implementation.id), recorded, &now)
+                {
+                    drift.push(line);
+                }
+            }
+            (None, None) => {}
+            _ => drift.push(format!(
+                "normalizer {} interpreter presence changed",
+                implementation.id
+            )),
+        }
+    }
+    for implementation in &capture.provenance.adapter_implementations {
+        let Some(artifact) = &implementation.artifact else {
+            continue;
+        };
+        let bytes = store.verified_object_bytes(&artifact.sha256)?;
+        let now = host::interpreter_identity(&bytes)?;
+        match (&artifact.interpreter, now) {
+            (Some(recorded), Some(now)) => {
+                if let Some(line) = interpreter_drift(
+                    &format!("capture adapter {}", implementation.id),
+                    recorded,
+                    &now,
+                ) {
+                    drift.push(line);
+                }
+            }
+            (None, None) => {}
+            _ => drift.push(format!(
+                "capture adapter {} interpreter presence changed",
+                implementation.id
+            )),
+        }
+    }
 
     Ok(drift)
 }
@@ -331,19 +379,153 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let reference_out = host::run_process_in(&authority_snapshot, &capture.arguments, side_cwd)?;
-    let mut reference = SideCapture::from_outcome(&reference_out);
-    if let Some(prod) = &produce_path {
+    let raw_reference_out =
+        host::run_process_in(&authority_snapshot, &capture.arguments, side_cwd)?;
+    let reference_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
-        reference.produced = Some(crate::produced::produced_side(files)?);
         clear_produce(prod)?;
-    }
-    let candidate_out = host::run_process_in(&candidate_snapshot, &capture.arguments, side_cwd)?;
-    let mut candidate = SideCapture::from_outcome(&candidate_out);
-    if let Some(prod) = &produce_path {
+        Some(crate::produced::produced_side(files)?)
+    } else {
+        None
+    };
+    let raw_candidate_out =
+        host::run_process_in(&candidate_snapshot, &capture.arguments, side_cwd)?;
+    let candidate_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
-        candidate.produced = Some(crate::produced::produced_side(files)?);
         clear_produce(prod)?;
+        Some(crate::produced::produced_side(files)?)
+    } else {
+        None
+    };
+
+    // -- the comparison surface: re-apply the declared normalizers -----------
+    // A normalizer maps one side's raw streams to the streams the court
+    // COMPARED. Replay re-invokes the EXACT snapshotted implementations (the
+    // artifact identities the capture bound at observation time), in
+    // application order. Under exact replay each rebuilt request must
+    // rederive to the recorded request_cid — the raw streams the instrument
+    // saw reproduced byte-for-byte; under semantic replay raw-stream drift
+    // the normalizer absorbs is admitted, and the normalized surface must
+    // still reproduce.
+    let normalize_side = |side: &str,
+                          raw_outcome: &host::ProcessOutcome|
+     -> Result<host::ProcessOutcome> {
+        let recorded: Option<Vec<String>> = if policy == ReplayPolicy::Exact {
+            let mut cids = Vec::new();
+            for semantic in &capture.normalizer_semantics {
+                let (invocation, _) = store.load_normalizer_evidence(&run, &semantic.id, side)?;
+                cids.push(invocation.request_cid);
+            }
+            Some(cids)
+        } else {
+            None
+        };
+        crate::normalizers::apply_capture_normalizers(
+            store,
+            &capture,
+            side,
+            raw_outcome,
+            recorded.as_deref(),
+            side_cwd,
+        )
+    };
+    let reference_compared = normalize_side("reference", &raw_reference_out)?;
+    let candidate_compared = normalize_side("candidate", &raw_candidate_out)?;
+    let mut reference = SideCapture::from_outcome(&reference_compared);
+    reference.produced = reference_produced;
+    let mut candidate = SideCapture::from_outcome(&candidate_compared);
+    candidate.produced = candidate_produced;
+
+    // -- the adapted observations: re-invoke the capture adapters ------------
+    // An adapter captured one side's ADAPTED observation for its axis from
+    // the RAW outcome. Replay re-invokes the exact snapshotted adapter; the
+    // adapted payload is attached to the compared side capture, so the
+    // observation equality below covers it, and the axis's external
+    // comparator request carries it (the raw streams travel alongside as the
+    // request evidence).
+    for semantic in &capture.adapter_semantics {
+        let implementation = capture
+            .provenance
+            .adapter_implementations
+            .iter()
+            .find(|i| i.id == semantic.id)
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "replay of {run}: the capture carries no implementation for capture adapter {}",
+                    semantic.id
+                ))
+            })?;
+        let artifact = implementation.artifact.as_ref().ok_or_else(|| {
+            FrfError::new(format!(
+                "replay of {run}: capture adapter {} has no snapshotted implementation artifact",
+                semantic.id
+            ))
+        })?;
+        let snapshot = crate::comparators::materialize_implementation(store, artifact)?;
+        for (side, raw_outcome, compared_side) in [
+            ("reference", &raw_reference_out, &mut reference),
+            ("candidate", &raw_candidate_out, &mut candidate),
+        ] {
+            let request = crate::model::CaptureAdapterRequest {
+                schema_version: crate::model::SCHEMA_CAPTURE_ADAPTER_REQUEST,
+                adapter: semantic,
+                side,
+                outcome: crate::model::CaptureAdapterOutcome {
+                    exit: &raw_outcome.exit,
+                    stdout_base64: crate::ext::b64(&raw_outcome.stdout),
+                    stderr_base64: crate::ext::b64(&raw_outcome.stderr),
+                    produced: None,
+                },
+                context: crate::model::NormalizerContext {
+                    fixture_sha256: &capture.fixture_sha256,
+                    arguments: &capture.arguments,
+                    environment_digest: &capture.environment.digest,
+                },
+            };
+            let request_bytes = crate::canon::canonical(&request)?.into_bytes();
+            let request_cid = crate::ext::request_cid(&request_bytes);
+            let (recorded_invocation, _recorded_result) =
+                store.load_adapter_evidence(&run, &semantic.id, side)?;
+            if policy == ReplayPolicy::Exact && request_cid != recorded_invocation.request_cid {
+                return Err(FrfError::new(format!(
+                    "replay of {run} FAILED: the capture adapter {} request for the {side} side no longer rederives to the recorded request_cid — the raw outcome differs from what the instrument saw",
+                    semantic.id
+                )));
+            }
+            let response_bytes = crate::ext::run_program(&snapshot, &request_bytes, side_cwd)?;
+            let response: crate::model::CaptureAdapterResponse =
+                serde_json::from_slice(&response_bytes).map_err(|e| {
+                    FrfError::new(format!(
+                        "capture adapter for axis {} produced an unparseable response: {e}",
+                        semantic.id
+                    ))
+                })?;
+            if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
+                return Err(FrfError::new(format!(
+                    "capture adapter response has unsupported schema version {:?}",
+                    response.schema_version
+                )));
+            }
+            if response.request_id != request_cid {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} does not name the request it answers",
+                    semantic.id
+                )));
+            }
+            if response.indeterminate {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} returned indeterminate; refusing to record inconclusive evidence",
+                    semantic.id
+                )));
+            }
+            if let Some(f) = &response.failure {
+                return Err(FrfError::new(format!(
+                    "capture adapter for axis {} reported failure: {f}",
+                    semantic.id
+                )));
+            }
+            compared_side.adapted = response.observation;
+        }
     }
 
     // -- the observation must reproduce byte-for-byte ------------------------
@@ -408,11 +590,25 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 // Re-invoke the exact snapshotted comparator on the
                 // reproduced sides: replay is a re-observation with the same
                 // instrument, not a re-derivation using the built-in logic.
+                // The request is built from the same streams the instrument
+                // saw — the COMPARED (normalized) streams for a non-adapted
+                // axis, the truly raw streams (plus the adapted payloads)
+                // for an adapted axis — so its identity must rederive to the
+                // recorded request_cid (exact; semantic admits raw-stream
+                // drift the normalizer/adapter absorbs and reproduces the
+                // surface anyway).
+                let (request_ref, request_cand) = if reference.adapted.is_some() {
+                    (&raw_reference_out, &raw_candidate_out)
+                } else {
+                    (&reference_compared, &candidate_compared)
+                };
                 let request = crate::comparators::build_request(
                     axis.as_str(),
                     semantic,
-                    &reference_out,
-                    &candidate_out,
+                    request_ref,
+                    request_cand,
+                    reference.adapted.as_ref(),
+                    candidate.adapted.as_ref(),
                     &capture.fixture_sha256,
                     &capture.arguments,
                     &capture.environment.digest,
@@ -420,7 +616,9 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 );
                 let (request_bytes, request_cid) = crate::comparators::canonical_request(&request)?;
                 let evidence = store.load_comparator_evidence(&run, axis.as_str())?;
-                if request_cid != evidence.invocation.request_cid {
+                if (policy == ReplayPolicy::Exact || reference.adapted.is_none())
+                    && request_cid != evidence.invocation.request_cid
+                {
                     return Err(FrfError::new(format!(
                         "replay of {run} FAILED: the comparator request for the {} axis no longer rederives to the recorded request_cid — the reproduced sides differ from what the instrument saw",
                         axis.as_str()

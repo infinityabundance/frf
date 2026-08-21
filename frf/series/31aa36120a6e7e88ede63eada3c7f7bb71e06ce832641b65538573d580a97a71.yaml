@@ -1,0 +1,15 @@
+schema_version: frf-series-v2
+id: 31aa36120a6e7e88ede63eada3c7f7bb71e06ce832641b65538573d580a97a71
+experiment_id: cli-malformed-input-repeat_index
+court: cli-malformed-input
+coordinate_system: repeat_index
+points:
+- point_index: 1
+  coordinate: '1'
+  run: run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9
+- point_index: 2
+  coordinate: '2'
+  run: run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9
+- point_index: 3
+  coordinate: '3'
+  run: run-cli-malformed-input-5d9254319b06814b0eac9642a723420893881bcd528f5031a53013bc519fb6f9

@@ -228,12 +228,34 @@ fn envelope_declarations_are_fail_closed() {
     work.copy_canonical_tree();
     admit_reference(&work);
 
-    // Declared normalizers are never applied -> refused.
+    // A normalizer the envelope applies but the manifest never declares ->
+    // refused (the executor would run unverifiable code).
     let m = manifest_variant(&work, "normalizers: []", "normalizers: [strip-ansi]");
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("normalizers are not supported"),
+        stderr(&out).contains("the envelope applies normalizer \"strip-ansi\" but no normalizer with that id is declared"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // A declared normalizer the envelope never applies -> refused (the
+    // declaration would be a lie). The variant adds a top-level declaration
+    // while leaving the envelope's `normalizers` list empty.
+    let path = work.path("frf/courts/cli-malformed-input/manifest.yaml");
+    let text = fs::read_to_string(&path).unwrap();
+    let variant = format!(
+        "{text}\nnormalizers:\n  - id: strip-ansi\n    relation: strip-ansi-sequences\n    applies_to: stderr\n    relation_version: \"v1\"\n    program: golden/normalizers/strip-ansi.py\n"
+    );
+    let variant_path = work.path("frf/courts/variant.yaml");
+    fs::write(&variant_path, variant).unwrap();
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", "frf/courts/variant.yaml"],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("is declared but the envelope does not apply it"),
         "stderr: {}",
         stderr(&out)
     );
@@ -1416,7 +1438,7 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
         &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.yaml"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v2");
+    assert_eq!(rec["schema_version"], "frf-reduction-v3");
     assert_eq!(rec["residual_id"], "cli-exit-0001");
     assert_eq!(rec["axis"], "exit");
     assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");
