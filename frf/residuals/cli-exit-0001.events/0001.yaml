@@ -1,10 +1,10 @@
 schema_version: frf-disposition-v2
-event_id: 10cb5b95b82be9c67e2be4ab033219a0125cfabc1523395c60e0f779edbdd9f0
+event_id: 6d0504880426009c9daacad4050538af3dc6cffde9efa491bd1a5bec436b39ff
 residual_id: cli-exit-0001
 parent_event_id: null
 disposition: fixed
 reason: candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)
-resolution_run_id: run-cli-malformed-input-4929c46f17102c958d739c55e072d01cb9b60e00eac2510c947cca66c90e8ff0
+resolution_run_id: run-cli-malformed-input-713dab9cc759f9899fd1be8bc924dd970d73d2447eca03186b1ae090b4607273
 closure_predicate: 'fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality'
 evidence_refs:
-- run-cli-malformed-input-4929c46f17102c958d739c55e072d01cb9b60e00eac2510c947cca66c90e8ff0
+- run-cli-malformed-input-713dab9cc759f9899fd1be8bc924dd970d73d2447eca03186b1ae090b4607273

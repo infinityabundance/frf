@@ -236,32 +236,99 @@ fn fail(violations: &mut Vec<String>, msg: impl Into<String>) {
     violations.push(msg.into());
 }
 
-/// The sign a receipt entry MUST carry for a residual record of `capture`:
-/// single-run courts honestly record `not-observed` drift/slew; repeated-run
-/// courts derive them from the residual's trajectory (missing trajectory is
-/// an error — the repeated court wrote it before any receipt could exist).
-/// One function, shared by receipt emission and verification.
-pub(crate) fn sign_for(
+/// The sign a receipt entry MUST carry for a residual record: single-run
+/// courts honestly record `not-observed` drift/slew (one run cannot observe
+/// drift or slew); a residual whose run belongs to an [`ExecutionSeries`]
+/// derives its sign from the series' trajectory for the residual's LINEAGE
+/// and PINs the series snapshot it derived from. One function, shared by
+/// receipt emission and the verification suite; the receipt verifier uses
+/// [`verify_sign`], which replays the pinned series.
+pub fn sign_for(
     store: &Store,
-    capture: &CaptureManifest,
+    _capture: &CaptureManifest,
     record: &ResidualRecord,
 ) -> Result<ResidualSign> {
-    match (capture.repeat_index, capture.repeat_count) {
-        (Some(_), Some(_)) => {
-            let fp = crate::semantics::residual_fingerprint(record)?;
-            let t = store.load_trajectory(&fp)?;
-            Ok(ResidualSign {
-                norm: "repeated-run".to_string(),
-                drift: t.derivation.drift.as_str().to_string(),
-                slew: t.derivation.slew.as_str().to_string(),
-            })
+    let series = store.series_containing_run(&record.run)?;
+    let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
+    for s in &series {
+        // Deterministic: series sorted by id. The trajectory exists iff the
+        // lineage was observed in the series.
+        let path = store.trajectory_path(&lineage, &s.coordinate_system, &s.id)?;
+        if !path.is_file() {
+            continue;
         }
-        _ => Ok(ResidualSign {
-            norm: "single-run".to_string(),
-            drift: "not-observed".to_string(),
-            slew: "not-observed".to_string(),
-        }),
+        let t: TrajectoryRecord = store.parse_yaml(&path)?;
+        return Ok(ResidualSign {
+            norm: "repeated-run".to_string(),
+            drift: t.derivation.drift.as_str().to_string(),
+            slew: t.derivation.slew.as_str().to_string(),
+            series: Some(s.id.clone()),
+        });
     }
+    Ok(ResidualSign {
+        norm: "single-run".to_string(),
+        drift: "not-observed".to_string(),
+        slew: "not-observed".to_string(),
+        series: None,
+    })
+}
+
+/// Verify a receipt entry's sign against the evidence it PINNED. The sign's
+/// `series` names the exact ExecutionSeries snapshot the drift/slew were
+/// derived from; the verifier replays THAT series (it must exist, contain
+/// the run, and its trajectory for the residual's lineage must yield the
+/// recorded drift/slew). A `single-run` sign pins nothing: the absence of a
+/// series at emit time is not reconstructible, so the snapshot is accepted
+/// as-is — a later experiment referencing the same run does not rewrite an
+/// emitted receipt.
+pub fn verify_sign(store: &Store, record: &ResidualRecord, sign: &ResidualSign) -> Result<()> {
+    let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
+    match sign.norm.as_str() {
+        "single-run" => {
+            if sign.drift != "not-observed" || sign.slew != "not-observed" {
+                return Err(FrfError::new(format!(
+                    "residual {}: single-run sign must carry not-observed drift/slew",
+                    record.id
+                )));
+            }
+            if sign.series.is_some() {
+                return Err(FrfError::new(format!(
+                    "residual {}: single-run sign carries a series pin",
+                    record.id
+                )));
+            }
+        }
+        "repeated-run" => {
+            let sid = sign.series.as_deref().ok_or_else(|| {
+                FrfError::new(format!(
+                    "residual {}: repeated-run sign without a pinned series",
+                    record.id
+                ))
+            })?;
+            let series = store.load_series(sid)?;
+            if !series.points.iter().any(|p| p.run == record.run) {
+                return Err(FrfError::new(format!(
+                    "residual {}: the pinned series {sid} does not contain run {}",
+                    record.id, record.run
+                )));
+            }
+            let t = store.load_trajectory(&lineage, &series.coordinate_system, sid)?;
+            if sign.drift != t.derivation.drift.as_str() || sign.slew != t.derivation.slew.as_str()
+            {
+                return Err(FrfError::new(format!(
+                    "residual {}: drift/slew do not match the pinned series' trajectory",
+                    record.id
+                )));
+            }
+        }
+        other => {
+            return Err(FrfError::new(format!(
+                "residual {}: invalid sign norm {other:?}",
+                record.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The disposition a receipt entry claims, rebuilt from its fields after the
@@ -454,16 +521,14 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                 res.id
             )));
         }
-        // The sign rederives: single-run stays not-observed; repeated-run
-        // must match the residual's trajectory derivation (missing trajectory
-        // is a refusal, not a fallback).
-        let expected_sign = sign_for(store, cap, &record)?;
-        if res.sign != expected_sign {
-            return Err(FrfError::new(format!(
-                "receipt {id}: residual {} sign does not rederive (recorded {:?}, expected {:?})",
-                res.id, res.sign, expected_sign
-            )));
-        }
+        // The sign verifies against the evidence it PINNED: a repeated-run
+        // sign names the exact ExecutionSeries snapshot it was derived from
+        // and the verifier replays it (the series must exist, contain the
+        // run, and its trajectory for the lineage must yield the recorded
+        // drift/slew); a single-run sign is a snapshot of emit time and is
+        // accepted as such — a later experiment referencing the same
+        // content-addressed run does not rewrite an emitted receipt.
+        verify_sign(store, &record, &res.sign)?;
         // Dispositions must be bound to the EXACT immutable event that
         // supplied them. `open` is the projection of no events — a receipt
         // snapshot may predate later events, so it needs no event, and it
@@ -1280,6 +1345,7 @@ mod tests {
                     norm: "single-run".into(),
                     drift: "not-observed".into(),
                     slew: "not-observed".into(),
+                    series: None,
                 },
                 grammar_state: "violation".into(),
                 raw_reference_hash: "e".repeat(64),

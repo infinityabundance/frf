@@ -199,22 +199,48 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     runs.push(resolution_run_id.clone());
                 }
             }
-            // A repeated-run court: the receipt's sign derives from the
-            // residual's trajectory, so the closure must carry it.
-            if cap.repeat_index.is_some() {
-                let record = store.load_residual(id)?;
-                let fp = crate::semantics::residual_fingerprint(&record)?;
-                let t_path = store.trajectory_path(&fp)?;
-                let bytes = read(&t_path, "trajectory")?;
-                let rel = format!("trajectories/{fp}.yaml");
+            // The series experiments this run belongs to, and the derived
+            // trajectories the receipt's signs read from: a run never knows
+            // its experiments, so the closure walks the series records that
+            // reference it and carries each series snapshot + its trajectories
+            // for the run's residual lineages.
+            let series = store.series_containing_run(&run)?;
+            let mut seen_series: std::collections::BTreeSet<String> = Default::default();
+            for s in &series {
+                if !seen_series.insert(s.id.clone()) {
+                    continue;
+                }
+                let s_path = store.series_path(&s.id)?;
+                let bytes = read(&s_path, "series")?;
+                let rel = format!("series/{}.yaml", s.id);
                 entries.insert(
                     rel.clone(),
                     ClosureEntry {
                         rel,
                         sha256: host::sha256_bytes(&bytes),
-                        kind: "trajectory",
+                        kind: "series",
                     },
                 );
+                // Trajectories for the lineages this run's residuals belong
+                // to, within this series.
+                let record = store.load_residual(id)?;
+                let lineage = crate::semantics::residual_lineage_of_record(store, &record)?;
+                let t_path = store.trajectory_path(&lineage, &s.coordinate_system, &s.id)?;
+                if t_path.is_file() {
+                    let bytes = read(&t_path, "trajectory")?;
+                    let rel = format!(
+                        "trajectories/{}.{}.{}.yaml",
+                        lineage, s.coordinate_system, s.id
+                    );
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: "trajectory",
+                        },
+                    );
+                }
             }
         }
     }

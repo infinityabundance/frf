@@ -130,12 +130,35 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                     needed.insert(format!("residuals/{id}.events/{n}"));
                 }
             }
-            if cap.get("repeat_index").is_some() {
-                let record = load_yaml(&safe_rel(bundle, &format!("residuals/{id}.yaml")));
-                needed.insert(format!(
-                    "trajectories/{}.yaml",
-                    residual_fingerprint(&record)
-                ));
+            // The series experiments this run belongs to, and their derived
+            // trajectories for this residual's lineage (a run never knows its
+            // experiments; the closure walks the series records that
+            // reference it).
+            let record = load_yaml(&safe_rel(bundle, &format!("residuals/{id}.yaml")));
+            let lineage = residual_lineage_of(bundle, &record, &cap);
+            let series_dir = bundle.join("series");
+            if series_dir.is_dir() {
+                let mut names: Vec<String> = std::fs::read_dir(&series_dir)
+                    .unwrap()
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .filter(|n| n.ends_with(".yaml"))
+                    .collect();
+                names.sort();
+                for n in names {
+                    let sid = n.trim_end_matches(".yaml").to_string();
+                    let s = load_yaml(&safe_rel(bundle, &format!("series/{sid}.yaml")));
+                    let contains = s["points"]
+                        .as_array()
+                        .map(|ps| ps.iter().any(|p| as_str(&p["run"]) == run.as_str()))
+                        .unwrap_or(false);
+                    if !contains {
+                        continue;
+                    }
+                    needed.insert(format!("series/{sid}.yaml"));
+                    let coord = as_str(&s["coordinate_system"]);
+                    needed.insert(format!("trajectories/{lineage}.{coord}.{sid}.yaml"));
+                }
             }
         }
     }
@@ -150,6 +173,27 @@ fn axis_agrees(reference: &Value, candidate: &Value, axis: &str) -> bool {
         }
         _ => as_str(&reference["stdout_first_line"]) == as_str(&candidate["stdout_first_line"]),
     }
+}
+
+/// The residual lineage of a bundle residual: kind/axis/surface from the
+/// record, fixture/family from its run's capture, authority NAME from the
+/// admitted authority record (the lineage spans authority versions).
+fn residual_lineage_of(bundle: &Path, record: &Value, cap: &Value) -> String {
+    let authority_id = as_str(&record["authority"]);
+    let authority = load_yaml(&safe_rel(
+        bundle,
+        &format!("authorities/{authority_id}.yaml"),
+    ));
+    let env = &cap["court_spec"]["admissibility_envelope"];
+    let surface = record.get("surface").and_then(|s| s.as_str());
+    rederive::residual_lineage(
+        as_str(&record["kind"]),
+        as_str(&record["axis"]),
+        surface,
+        as_str(&env["fixture_family"]),
+        as_str(&authority["name"]),
+        as_str(&cap["fixture"]),
+    )
 }
 
 /// Verify a bundle against itself. Panics (exit 1) on the first violation;
@@ -398,23 +442,60 @@ fn verify_bundle(bundle: &Path) -> rules::ClaimIr {
 
         let sign = &r["sign"];
         if as_str(&sign["norm"]) == "single-run" {
-            if as_str(&sign["drift"]) != "not-observed" || as_str(&sign["slew"]) != "not-observed" {
-                panic!("single-run residual {rid} must carry not-observed drift/slew");
+            if as_str(&sign["drift"]) != "not-observed"
+                || as_str(&sign["slew"]) != "not-observed"
+                || sign.get("series").and_then(|v| v.as_str()).is_some()
+            {
+                panic!("single-run residual {rid} must carry not-observed drift/slew and no series pin");
             }
-        } else {
-            let fp = residual_fingerprint(record);
-            let t = load_yaml(&safe_rel(bundle, &format!("trajectories/{fp}.yaml")));
+        } else if as_str(&sign["norm"]) == "repeated-run" {
+            // The sign PINs the exact ExecutionSeries snapshot it was derived
+            // from; the verifier replays that series (later experiments that
+            // reference the same run can never change what a receipt means).
+            let sid = as_str(&sign["series"]);
+            if sid.is_empty() {
+                panic!("repeated-run residual {rid} without a pinned series");
+            }
+            let series = load_yaml(&safe_rel(bundle, &format!("series/{sid}.yaml")));
+            if as_str(&series["id"]) != sid {
+                panic!("series {sid} is not content-addressed");
+            }
+            if rederive::series_identity(
+                as_str(&series["court"]),
+                as_str(&series["coordinate_system"]),
+                &series["points"],
+            ) != sid
+            {
+                panic!("series {sid}: the recorded fields do not hash to the id");
+            }
+            if !series["points"]
+                .as_array()
+                .map(|ps| {
+                    ps.iter()
+                        .any(|p| as_str(&p["run"]) == as_str(&record["run"]))
+                })
+                .unwrap_or(false)
+            {
+                panic!("residual {rid}: the pinned series {sid} does not contain its run");
+            }
+            let coord = as_str(&series["coordinate_system"]);
+            let lineage = residual_lineage_of(bundle, record, &cap);
+            let t = load_yaml(&safe_rel(
+                bundle,
+                &format!("trajectories/{lineage}.{coord}.{sid}.yaml"),
+            ));
+            if as_str(&t["subject"]) != lineage {
+                panic!("trajectory of {rid} is not keyed by its lineage");
+            }
             // The classification REDERIVES from the observations (sorted by
-            // repetition), it is not read from the file's derivation: the
-            // trajectory derivation AND the receipt sign must both match the
-            // deterministic table.
+            // point), it is not read from the file's derivation.
             let mut obs: Vec<(u64, bool)> = t["observations"]
                 .as_array()
                 .map(|a| {
                     a.iter()
                         .map(|o| {
                             (
-                                o["repetition"].as_u64().unwrap_or(0),
+                                o["point_index"].as_u64().unwrap_or(0),
                                 o["observed"].as_bool().unwrap_or(false),
                             )
                         })
@@ -423,15 +504,25 @@ fn verify_bundle(bundle: &Path) -> rules::ClaimIr {
                 .unwrap_or_default();
             obs.sort_by_key(|(rep, _)| *rep);
             let flags: Vec<bool> = obs.iter().map(|(_, o)| *o).collect();
-            let (drift, slew) = classify_repeat(&flags);
+            let (drift, slew, localization, bands) = classify(&flags);
             if drift != as_str(&t["derivation"]["drift"])
                 || slew != as_str(&t["derivation"]["slew"])
+                || localization != as_str(&t["derivation"]["localization"])
+                || bands != t["derivation"]["bands"].as_u64().unwrap_or(0) as u32
             {
                 panic!("residual {rid} trajectory derivation does not rederive");
             }
             if drift != as_str(&sign["drift"]) || slew != as_str(&sign["slew"]) {
-                panic!("residual {rid} sign does not match its trajectory");
+                panic!("residual {rid} sign does not match its pinned trajectory");
             }
+            // The trajectory observations must match the series points.
+            if t["observations"].as_array().map(|a| a.len()).unwrap_or(0)
+                != series["points"].as_array().map(|a| a.len()).unwrap_or(0)
+            {
+                panic!("residual {rid} trajectory does not mirror its series");
+            }
+        } else {
+            panic!("residual {rid} has invalid sign norm {:?}", sign["norm"]);
         }
 
         let family = as_str(&cap["court_spec"]["admissibility_envelope"]["fixture_family"]);

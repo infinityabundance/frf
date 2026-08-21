@@ -23,6 +23,7 @@ use crate::canon;
 use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
+use crate::store::Store;
 use serde_json::{json, Value};
 
 /// The one identity primitive: SHA-256 of `FRF/<kind>` + newline + the
@@ -225,6 +226,78 @@ pub fn fingerprint_from_projections(
         "candidate_sha256": host::sha256_bytes(raw_candidate.as_bytes()),
     });
     hash_preimage("FRF/RESIDUAL-FINGERPRINT/v1", &doc)
+}
+
+/// The residual LINEAGE identity: the stable comparison question, surface,
+/// and feature — deliberately NOT the exact observed bytes. The lineage
+/// spans candidate revisions, authority versions, environments, and time
+/// (candidate hash, raw projections, environment, and version are all
+/// absent), so a trajectory over those axes records the MOVEMENT of a
+/// divergence: the same lineage at commit 1, commit 2, and commit 3 has
+/// different fingerprints but one trajectory.
+///
+/// Contents: kind, axis, surface, fixture, fixture family, authority NAME.
+/// (The authority name, not the versioned id — the lineage must span
+/// authority versions; the fixture is part of the comparison question, and
+/// minimization will introduce its own preservation predicate rather than
+/// silently changing the lineage.)
+pub fn residual_lineage(
+    kind: ResidualKind,
+    axis: Axis,
+    surface: Option<&str>,
+    fixture_family: &str,
+    authority_name: &str,
+    fixture: &str,
+) -> Result<String> {
+    let doc = json!({
+        "kind": kind.as_str(),
+        "axis": axis.as_str(),
+        "surface": surface,
+        "fixture_family": fixture_family,
+        "authority_name": authority_name,
+        "fixture": fixture,
+    });
+    hash_preimage("FRF/RESIDUAL-LINEAGE/v1", &doc)
+}
+
+/// The lineage of a stored residual record (loads the authority name from
+/// the record's authority id via the store's authority record).
+pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Result<String> {
+    let authority = store.load_authority(&record.authority)?;
+    residual_lineage(
+        record.kind,
+        record.axis,
+        record.surface.as_deref(),
+        &record.scope,
+        &authority.name,
+        &store.load_capture(&record.run)?.fixture,
+    )
+}
+
+/// The ExecutionSeries identity: content-addressed over the experiment
+/// (court, coordinate system, and the ordered points). Every append produces
+/// a NEW series record — the growth of a series is itself an immutable
+/// history; trajectories reference the series snapshot they derive from.
+/// The point index enters the preimage as its string form (the canonical
+/// value domain is strings/arrays/booleans/null — numbers are refused).
+pub fn series_identity(
+    court: &str,
+    coordinate_system: &str,
+    points: &[SeriesPoint],
+) -> Result<String> {
+    let doc = json!({
+        "court": court,
+        "coordinate_system": coordinate_system,
+        "points": points
+            .iter()
+            .map(|p| json!({
+                "point_index": p.point_index.to_string(),
+                "coordinate": p.coordinate,
+                "run": p.run,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    hash_preimage("FRF/SERIES/v1", &doc)
 }
 
 /// The content-addressable inputs of one disposition event: everything the
@@ -529,8 +602,6 @@ mod tests {
                 stderr_sha256: "0".repeat(64),
             },
             residuals: vec![],
-            repeat_index: None,
-            repeat_count: None,
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

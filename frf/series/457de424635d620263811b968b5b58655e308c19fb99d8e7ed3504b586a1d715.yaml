@@ -1,0 +1,8 @@
+schema_version: frf-series-v1
+id: 457de424635d620263811b968b5b58655e308c19fb99d8e7ed3504b586a1d715
+court: cli-malformed-input
+coordinate_system: environment
+points:
+- point_index: 1
+  coordinate: golden-machine
+  run: run-cli-malformed-input-d0e82237d41d050b570b6453c49902eeadd0ca9c34d7b6b2dab66d12402ec9a2

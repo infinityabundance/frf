@@ -1,5 +1,5 @@
 schema_version: frf-claim-v2
-receipt: receipt-run-cli-malformed-input-4929c46f17102c958d739c55e072d01cb9b60e00eac2510c947cca66c90e8ff0-e829bc1acecf5fa47d83f13e24a8648718139037b730e9a7a8b62e0f4b6beba9
+receipt: receipt-run-cli-malformed-input-713dab9cc759f9899fd1be8bc924dd970d73d2447eca03186b1ae090b4607273-f0527035f839ad387f73fc9eb95bdf09810875cdba5d947cd8212a04eadca11b
 authority: ref-cli-1.8.2
 candidate:
   name: cand-cli
@@ -25,14 +25,14 @@ scope:
   versions:
   - 1.8.2
   temporal:
-  - run-cli-malformed-input-4929c46f17102c958d739c55e072d01cb9b60e00eac2510c947cca66c90e8ff0
+  - run-cli-malformed-input-713dab9cc759f9899fd1be8bc924dd970d73d2447eca03186b1ae090b4607273
 observable_scope:
 - exit
 blockers: []
 excluded_evidence:
 - cli-text-0002
 requires:
-- receipt-run-cli-malformed-input-4929c46f17102c958d739c55e072d01cb9b60e00eac2510c947cca66c90e8ff0-e829bc1acecf5fa47d83f13e24a8648718139037b730e9a7a8b62e0f4b6beba9
+- receipt-run-cli-malformed-input-713dab9cc759f9899fd1be8bc924dd970d73d2447eca03186b1ae090b4607273-f0527035f839ad387f73fc9eb95bdf09810875cdba5d947cd8212a04eadca11b
 positive:
 - For reference ref-cli-1.8.2, fixture family malformed-input, and environment x86_64-linux (02a5c097), candidate cand-cli 0.1.0-fixed (86992b0b) preserves malformed-input exit class for the malformed-input cases in court cli-malformed-input.
 non_claims:

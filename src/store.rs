@@ -72,6 +72,7 @@ impl Store {
             "captures",
             "objects",
             "residuals",
+            "series",
             "trajectories",
             "receipts",
             "claims",
@@ -122,27 +123,128 @@ impl Store {
         Ok(self.root.join("claims").join(format!("{receipt_id}.yaml")))
     }
 
-    /// `trajectories/<fingerprint>.yaml` — the residual trajectory protocol
-    /// object, keyed by the stable fingerprint of the divergence.
-    pub fn trajectory_path(&self, fingerprint: &str) -> Result<PathBuf> {
-        validate_id("trajectory", fingerprint)?;
+    /// `trajectories/<lineage>.<coordinate-system>.<series>.yaml` — the
+    /// residual trajectory protocol object, keyed by the residual LINEAGE
+    /// (stable across candidate revisions, authority versions, environments,
+    /// time), the coordinate system it is ordered over, and the
+    /// [`ExecutionSeries`] snapshot it is derived from. Each series snapshot
+    /// has its own derived trajectories; the receipt derives its sign from
+    /// the series its run belongs to.
+    pub fn trajectory_path(
+        &self,
+        lineage: &str,
+        coordinate_system: &str,
+        series: &str,
+    ) -> Result<PathBuf> {
+        validate_id("trajectory", lineage)?;
+        validate_id("coordinate system", coordinate_system)?;
+        validate_id("series", series)?;
         Ok(self
             .root
             .join("trajectories")
-            .join(format!("{fingerprint}.yaml")))
+            .join(format!("{lineage}.{coordinate_system}.{series}.yaml")))
     }
 
-    /// Load a residual trajectory by its subject fingerprint.
-    pub fn load_trajectory(&self, fingerprint: &str) -> Result<TrajectoryRecord> {
-        let path = self.trajectory_path(fingerprint)?;
+    /// Load a residual trajectory by lineage + coordinate system + series.
+    pub fn load_trajectory(
+        &self,
+        lineage: &str,
+        coordinate_system: &str,
+        series: &str,
+    ) -> Result<TrajectoryRecord> {
+        let path = self.trajectory_path(lineage, coordinate_system, series)?;
         if !path.exists() {
             return Err(FrfError::new(format!(
-                "no trajectory for fingerprint {} (missing {})",
-                &fingerprint[..16],
+                "no trajectory for lineage {} on {} in series {} (missing {})",
+                &lineage[..16],
+                coordinate_system,
+                &series[..16],
                 path.display()
             )));
         }
         self.parse_yaml(&path)
+    }
+
+    /// `series/<id>.yaml` — the content-addressed ExecutionSeries record.
+    pub fn series_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("series", id)?;
+        Ok(self.root.join("series").join(format!("{id}.yaml")))
+    }
+
+    /// Load an ExecutionSeries by its content address.
+    pub fn load_series(&self, id: &str) -> Result<ExecutionSeries> {
+        let path = self.series_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no series {id} (missing {})",
+                path.display()
+            )));
+        }
+        let series: ExecutionSeries = self.parse_yaml(&path)?;
+        if series.id != id {
+            return Err(FrfError::new(format!(
+                "series {id}: the id inside the record is {} — the name is a claim; refusing to consume",
+                series.id
+            )));
+        }
+        let expected = crate::semantics::series_identity(
+            &series.court,
+            &series.coordinate_system,
+            &series.points,
+        )?;
+        if expected != id {
+            return Err(FrfError::new(format!(
+                "series {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited series"
+            )));
+        }
+        Ok(series)
+    }
+
+    /// Write an ExecutionSeries (content-addressed, write-once).
+    pub fn write_series(&self, series: &ExecutionSeries) -> Result<()> {
+        let id = crate::semantics::series_identity(
+            &series.court,
+            &series.coordinate_system,
+            &series.points,
+        )?;
+        if id != series.id {
+            return Err(FrfError::new(format!(
+                "series id mismatch: record says {} but its fields hash to {id}",
+                series.id
+            )));
+        }
+        let path = self.series_path(&id)?;
+        if path.exists() {
+            return Ok(()); // identical series already recorded — no-op
+        }
+        let yaml = self.to_yaml(series)?;
+        self.write_once(&path, &yaml)
+    }
+
+    /// Every series record that references `run` (the runs an experiment
+    /// references; the run itself never knows its experiments).
+    pub fn series_containing_run(&self, run: &str) -> Result<Vec<ExecutionSeries>> {
+        let mut out = Vec::new();
+        let dir = self.root.join("series");
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        for entry in fs::read_dir(&dir)
+            .map_err(|e| FrfError::new(format!("cannot read series directory: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("series directory: {e}")))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".yaml") {
+                continue;
+            }
+            let id = name.trim_end_matches(".yaml").to_string();
+            let series = self.load_series(&id)?;
+            if series.points.iter().any(|p| p.run == run) {
+                out.push(series);
+            }
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
     }
 
     /// `objects/sha256/<H>` — the content-addressed execution snapshot for a

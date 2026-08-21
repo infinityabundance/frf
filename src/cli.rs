@@ -86,10 +86,27 @@ pub enum CourtCmd {
         /// Path to the court manifest (working-directory-relative)
         manifest: PathBuf,
         /// Execute the court this many times (fresh processes each time) and
-        /// write a residual trajectory per observed divergence fingerprint;
-        /// identical repetitions reuse the content-addressed run
-        #[arg(long, default_value_t = 1, value_name = "N")]
-        repeat: u32,
+        /// write the repeat_index ExecutionSeries + one residual trajectory
+        /// per observed lineage; identical repetitions reuse the
+        /// content-addressed run
+        #[arg(long, value_name = "N")]
+        repeat: Option<u32>,
+        /// The candidate_revision axis: one run per candidate path
+        /// (comma-separated), each point a new revision of the candidate
+        #[arg(long, value_name = "P1,P2,...")]
+        candidate_revisions: Option<String>,
+        /// The authority_version axis: one run per admitted authority version
+        /// (comma-separated, under the manifest's authority name)
+        #[arg(long, value_name = "V1,V2,...")]
+        authority_versions: Option<String>,
+        /// The environment axis: this run is one point of the environment
+        /// experiment at the given coordinate label (the series accumulates)
+        #[arg(long, value_name = "LABEL")]
+        environment_point: Option<String>,
+        /// The time axis: this run is one point of the time experiment at
+        /// the given coordinate label (the series accumulates)
+        #[arg(long, value_name = "LABEL")]
+        time_point: Option<String>,
     },
 }
 

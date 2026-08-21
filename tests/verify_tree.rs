@@ -718,9 +718,14 @@ fn receipts_are_self_consistent() {
             // A residual reproduces by replaying the run that observed it.
             assert_eq!(res.reproducer, rec.run);
             assert!(res.invariant.is_empty(), "v0 has no invariants");
-            // The sign is re-derived by the verified loader; assert the
-            // vocabulary here: single-run stays not-observed, repeated-run
-            // carries a trajectory-derived classification.
+            // The sign verifies against the evidence it PINNED: a
+            // repeated-run sign names the exact ExecutionSeries snapshot it
+            // was derived from (replayed by the verifier); a single-run sign
+            // is a snapshot of emit time and is accepted as such — a later
+            // experiment referencing the same run does not rewrite a receipt.
+            let record = store.load_residual(&res.id).unwrap();
+            frf::verify::verify_sign(&store, &record, &res.sign)
+                .unwrap_or_else(|e| panic!("sign of {} fails pinned verification: {e}", res.id));
             match res.sign.norm.as_str() {
                 "single-run" => {
                     assert_eq!(res.sign.drift, "not-observed");
@@ -739,12 +744,6 @@ fn receipts_are_self_consistent() {
                         res.sign.slew,
                         res.id
                     );
-                    // The sign must match the residual's trajectory.
-                    let record = store.load_residual(&res.id).unwrap();
-                    let fp = frf::semantics::residual_fingerprint(&record).unwrap();
-                    let t = store.load_trajectory(&fp).unwrap();
-                    assert_eq!(res.sign.drift, t.derivation.drift.as_str());
-                    assert_eq!(res.sign.slew, t.derivation.slew.as_str());
                 }
                 other => panic!("invalid sign norm {other:?} on {}", res.id),
             }
@@ -839,7 +838,7 @@ fn receipts_are_self_consistent() {
 }
 
 // ---------------------------------------------------------------------------
-// trajectories/ — residual trajectories over the repeat axis
+// trajectories/ — residual trajectories over a coordinate system
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -851,31 +850,38 @@ fn trajectories_are_self_consistent() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let t: TrajectoryRecord = load(&path);
         assert_eq!(t.schema_version, SCHEMA_TRAJECTORY, "trajectory {name}");
+        // The filename is {lineage}.{coordinate_system}.{series}.yaml and
+        // MUST match the record.
         assert_eq!(
             name,
-            format!("{}.yaml", t.subject),
-            "the filename must be the subject fingerprint"
+            format!("{}.{}.{}.yaml", t.subject, t.coordinate_system, t.series),
+            "the filename must be lineage.coordinate-system.series"
         );
-        assert_eq!(t.subject.len(), 64);
-        assert_eq!(
-            t.coordinate_system, "repeat_index",
-            "v0.1.17 executes the repeat axis only"
-        );
+        assert_eq!(t.subject.len(), 64, "subject must be a lineage digest");
+        assert!([
+            "repeat_index",
+            "candidate_revision",
+            "authority_version",
+            "environment",
+            "time"
+        ]
+        .contains(&t.coordinate_system.as_str()));
         assert!(matches!(t.axis.as_str(), "exit" | "stderr" | "stdout"));
-        assert!(t.repeat_count >= 2, "a trajectory implies a repeated court");
-        assert_eq!(t.observations.len() as u32, t.repeat_count);
 
-        let observed: Vec<bool> = t.observations.iter().map(|o| o.observed).collect();
-        assert!(
-            observed.iter().any(|o| *o),
-            "a trajectory only exists for an observed divergence"
-        );
+        // The series snapshot it derives from exists, matches the experiment,
+        // and contains every observation's run.
+        let series = store.load_series(&t.series).unwrap();
+        assert_eq!(series.court, "cli-malformed-input");
+        assert_eq!(series.coordinate_system, t.coordinate_system);
+        assert_eq!(series.points.len(), t.observations.len());
         for (i, o) in t.observations.iter().enumerate() {
-            assert_eq!(o.repetition, (i + 1) as u32, "dense repetition series");
+            assert_eq!(o.point_index, series.points[i].point_index);
+            assert_eq!(o.coordinate, series.points[i].coordinate);
+            assert_eq!(o.run, series.points[i].run);
             assert!(
                 store.run_dir(&o.run).unwrap().is_dir(),
                 "observation {} run {} missing",
-                o.repetition,
+                o.point_index,
                 o.run
             );
             if o.observed {
@@ -888,21 +894,34 @@ fn trajectories_are_self_consistent() {
                     rec.run, o.run,
                     "observation residual must belong to its run"
                 );
+                let lineage = frf::semantics::residual_lineage_of_record(&store, &rec).unwrap();
+                assert_eq!(
+                    lineage, t.subject,
+                    "observation residual must carry the subject lineage"
+                );
                 assert_eq!(
                     frf::semantics::residual_fingerprint(&rec).unwrap(),
-                    t.subject,
-                    "observation residual must carry the subject fingerprint"
+                    o.fingerprint
+                        .as_deref()
+                        .expect("observed entry has a fingerprint"),
+                    "observation fingerprint must match the residual"
                 );
                 assert_eq!(rec.axis.as_str(), t.axis);
             } else {
                 assert!(
-                    o.residual.is_none(),
+                    o.residual.is_none() && o.fingerprint.is_none(),
                     "an unobserved entry names no residual"
                 );
             }
         }
-        // The derivation is the deterministic classification of the pattern.
-        let expected = frf::trajectory::classify_repeat(&observed).unwrap();
+        let observed: Vec<bool> = t.observations.iter().map(|o| o.observed).collect();
+        assert!(
+            observed.iter().any(|o| *o),
+            "a trajectory only exists for an observed divergence"
+        );
+        // The derivation is the deterministic classification of the pattern,
+        // localization and bands included.
+        let expected = frf::trajectory::classify(&observed).unwrap();
         assert_eq!(t.derivation, expected, "derivation must rederive");
         found += 1;
     }
@@ -910,6 +929,54 @@ fn trajectories_are_self_consistent() {
         found >= 1,
         "the golden path must leave at least one trajectory"
     );
+}
+
+#[test]
+fn series_are_self_consistent() {
+    let store = store();
+    let mut found = 0;
+    for entry in fs::read_dir(store.root.join("series")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.ends_with(".yaml"), "series file name: {name}");
+        let id = name.trim_end_matches(".yaml").to_string();
+        let series: ExecutionSeries = load(&path);
+        assert_eq!(series.schema_version, SCHEMA_SERIES, "series {name}");
+        assert_eq!(
+            series.id, id,
+            "the filename must be the series content address"
+        );
+        // The content address rederives.
+        assert_eq!(
+            frf::semantics::series_identity(
+                &series.court,
+                &series.coordinate_system,
+                &series.points
+            )
+            .unwrap(),
+            series.id
+        );
+        assert!([
+            "repeat_index",
+            "candidate_revision",
+            "authority_version",
+            "environment",
+            "time"
+        ]
+        .contains(&series.coordinate_system.as_str()));
+        // Points are dense, ordered, and reference existing runs.
+        for (i, p) in series.points.iter().enumerate() {
+            assert_eq!(p.point_index, (i + 1) as u32, "dense point series");
+            assert!(
+                store.run_dir(&p.run).unwrap().is_dir(),
+                "series point {} run {} missing",
+                p.point_index,
+                p.run
+            );
+        }
+        found += 1;
+    }
+    assert!(found >= 1, "the golden path must leave at least one series");
 }
 
 // ---------------------------------------------------------------------------

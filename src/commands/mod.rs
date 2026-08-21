@@ -28,8 +28,36 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
             }
         },
         Command::Court { sub } => match sub {
-            CourtCmd::Run { manifest, repeat } => {
-                let run = court::run(store, &manifest, repeat)?;
+            CourtCmd::Run {
+                manifest,
+                repeat,
+                candidate_revisions,
+                authority_versions,
+                environment_point,
+                time_point,
+            } => {
+                let opts = court::SeriesOptions {
+                    repeat,
+                    candidate_revisions: candidate_revisions
+                        .map(|s| {
+                            s.split(',')
+                                .map(|p| p.trim().to_string())
+                                .filter(|p| !p.is_empty())
+                                .collect()
+                        })
+                        .filter(|v: &Vec<String>| !v.is_empty()),
+                    authority_versions: authority_versions
+                        .map(|s| {
+                            s.split(',')
+                                .map(|v| v.trim().to_string())
+                                .filter(|v| !v.is_empty())
+                                .collect()
+                        })
+                        .filter(|v: &Vec<String>| !v.is_empty()),
+                    environment_point,
+                    time_point,
+                };
+                let run = court::run(store, &manifest, &opts)?;
                 println!("{run}");
                 Ok(())
             }
