@@ -13,3 +13,8 @@
 /golden/work/drift-refusal.txt
 /xtask/target
 /golden/work/drift-refusal.txt
+
+# The empirical program (Phase 9) regenerates its corpus and report each
+# run; CI asserts on a fresh report, so neither is tracked.
+/golden/work/experiment/
+/golden/work/experiment.json

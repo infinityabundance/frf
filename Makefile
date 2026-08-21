@@ -26,6 +26,14 @@ independent:
 	cargo xtask verify corpus conformance
 	cargo xtask verify bundle golden/work/portable.frf
 
+# The empirical program (Phase 9): seeded mutations over the cross-domain
+# corpus, measured against conventional suites; exits non-zero if any
+# measurement violates the standards (undetected defect, false positive,
+# claim inflation, failed replay). Needs the release binary.
+experiment:
+	cargo build --release
+	cargo xtask experiment golden/work/experiment.json
+
 # Deterministic in-repo fuzz harness (no nightly needed); scale with
 # FRF_FUZZ_ITERS, e.g. make fuzz-iters FRF_FUZZ_ITERS=200000
 fuzz-iters:

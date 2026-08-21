@@ -1,5 +1,5 @@
 schema_version: frf-capture-v9
-run: run-cli-malformed-input-3f0c51491dcddc0401be5d443a22fd6d39c703c4dcce3546b02a91bbb932c2f0
+run: run-cli-malformed-input-6db7b32ad1ad6fd9a4d2140f750818105e9fb7eca8d3f0d9cd6fba0bda0a009f
 court: cli-malformed-input
 authority: ref-cli-1.8.2
 manifest: frf/courts/cli-malformed-input/manifest.yaml
@@ -27,7 +27,7 @@ court_spec:
     name: cand-cli
     version_or_commit: 0.1.0
     build_profile: debug
-    path: frf/challenges/.mutant-exit-class-2818141-1787290914188502928.sh
+    path: golden/candidate.sh
   fixture:
     id: malformed-path.conf
     path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
@@ -60,15 +60,15 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.27
-    frf_executable_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    frf_version: 0.1.28
+    frf_executable_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
   comparator_implementations:
   - id: exit
-    implementation_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
-    runner_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    implementation_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+    runner_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
   - id: stderr
-    implementation_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
-    runner_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    implementation_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+    runner_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
 authority_artifact:
   path: objects/sha256/50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
   sha256: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
@@ -81,8 +81,8 @@ authority_artifact:
       path: /usr/bin/bash
       sha256: 07a2331ac400749cc7740fac9999e36cf104c743b612c307ef155fc5dca7fe2e
 candidate_artifact:
-  path: objects/sha256/bdc08f16f2587b9a1775e549f54e3624c8805181fe1beb37e5f3d2e69e242464
-  sha256: bdc08f16f2587b9a1775e549f54e3624c8805181fe1beb37e5f3d2e69e242464
+  path: objects/sha256/94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
+  sha256: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
   interpreter:
     kernel_interpreter:
       path: /usr/bin/bash
@@ -109,23 +109,24 @@ reference:
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
   stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
 candidate:
-  exit: '3'
-  exit_sha256: 4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce
-  stderr_first_line: 'tool: frf/objects/sha256/aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21:4: unknown directive ''servre'''
-  stderr_first_line_sha256: 3427a3b361b3110471c09cfbbcad867ed1356fc11d74ee638b558b452fc9f1b0
+  exit: '1'
+  exit_sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b
+  stderr_first_line: 'error: unknown directive servre at line 4'
+  stderr_first_line_sha256: eb4f0129018bd4c0a54ff2f3d61529ae128bd8253d356e7de14ab48d2e504f0f
   stdout_first_line: 'ok: server 192.168.1.1'
   stdout_first_line_sha256: 4c6238d905a659577e74bbac482b8a21ebbd7ea049aaeec2bd0e7a0ffa989c70
   stdout_sha256: 0d2ba12deca89f88da4183d49b82ce1c958a6861991c192723d7289b5e142de0
-  stderr_sha256: 8b632d2ffbbc7d27818d0acc0351b7d3b881a3f3d91811ef2871fa7de6183aeb
+  stderr_sha256: ee8bcc603017deafa72e8702594478bb9747916e3ca1adecfd251525a2b317f2
 residuals:
-- cli-exit-0002
+- cli-exit-0001
+- cli-text-0001
 evidence_refs:
 - role: authority-artifact
   object_kind: object
   cid: 50375b041b8c1245346392043846963898d6c6cd27e50b430fda36729f2fba17
 - role: candidate-artifact
   object_kind: object
-  cid: bdc08f16f2587b9a1775e549f54e3624c8805181fe1beb37e5f3d2e69e242464
+  cid: 94a4bdfb1e7e95b92414a2e8c85f0d6ecb20052d14b580e2bd6f7adededd90fb
 - role: fixture-object
   object_kind: object
   cid: aa3177702459ba68e19775f05219c4c668039f3cec0f449e6244c9b1599e9b21

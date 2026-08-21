@@ -84,6 +84,9 @@ jobs:
           cargo xtask verify bundle golden/work/portable.frf
           cargo xtask verify bundle golden/work/portable-single.frf
           cargo xtask verify corpus conformance
+      - name: The empirical program — seeded mutations over the cross-domain corpus
+        run: |
+          cargo xtask experiment golden/work/experiment.json
 
   fuzz:
     name: libFuzzer smoke

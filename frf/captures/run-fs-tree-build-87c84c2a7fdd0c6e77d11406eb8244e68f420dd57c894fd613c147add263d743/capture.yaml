@@ -1,5 +1,5 @@
 schema_version: frf-capture-v9
-run: run-fs-tree-build-e384a19d47e8607e7657eee3a73073ee533ba0efc7c37e5850fb39bf8638f8d0
+run: run-fs-tree-build-87c84c2a7fdd0c6e77d11406eb8244e68f420dd57c894fd613c147add263d743
 court: fs-tree-build
 authority: treegen-ref-1.0
 manifest: frf/courts/fs-tree-build/manifest.yaml
@@ -59,12 +59,12 @@ provenance:
   schema_version: frf-provenance-v1
   runner:
     schema_version: frf-runner-v1
-    frf_version: 0.1.27
-    frf_executable_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    frf_version: 0.1.28
+    frf_executable_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
   comparator_implementations:
   - id: filesystem.tree
-    implementation_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
-    runner_hash: eb2727d6b4af77ea9eac106b125e7c0f68483e63abdeb9cbb4fdb517a987dd7a
+    implementation_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
+    runner_hash: 4ee4c9ffe2b943f8718f5af385285fd927c3cc7f069a43978878c225f3be8ce9
 authority_artifact:
   path: objects/sha256/f8482212c168049e9a025acc55236e98513dc19b497dc7a490e6f480faa920c7
   sha256: f8482212c168049e9a025acc55236e98513dc19b497dc7a490e6f480faa920c7
