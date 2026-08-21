@@ -341,6 +341,34 @@ pub fn reduction_identity(
     hash_preimage("FRF/REDUCTION/v1", &doc)
 }
 
+/// The court-challenge identity: `FRF/CHALLENGE/v1` over the DECLARED
+/// evidence — the court, the mutation operator, the targeted axis, the
+/// admitted reference artifact, the mutant candidate artifact, and the
+/// mutant run. The verdicts (`saw_defect`, `specificity_clean`, the
+/// observed residual ids) are deliberately NOT in the identity: they are
+/// DERIVED from the run's residuals and recomputed by verification, so a
+/// hand-edited verdict breaks the derived check rather than the address.
+#[allow(clippy::too_many_arguments)] // one argument per declared-evidence dimension
+pub fn challenge_identity(
+    court: &str,
+    operator: &str,
+    target_axis: &str,
+    reference_sha256: &str,
+    mutant_candidate_sha256: &str,
+    run: &str,
+) -> Result<String> {
+    let doc = json!({
+        "schema_version": SCHEMA_CHALLENGE,
+        "court": court,
+        "operator": operator,
+        "target_axis": target_axis,
+        "reference_sha256": reference_sha256,
+        "mutant_candidate_sha256": mutant_candidate_sha256,
+        "run": run,
+    });
+    hash_preimage("FRF/CHALLENGE/v1", &doc)
+}
+
 /// The content-addressable inputs of one disposition event: everything the
 /// event's identity is computed over (the event_id itself is excluded — an
 /// object cannot contain its own address). The parent link makes the event

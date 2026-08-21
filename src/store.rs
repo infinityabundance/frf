@@ -292,6 +292,72 @@ impl Store {
         Ok(self.root.join("reductions").join(format!("{id}.yaml")))
     }
 
+    /// `challenges/<id>.yaml` — the content-addressed court-challenge record
+    /// (the negative-control evidence: the court run against a mutant
+    /// candidate).
+    pub fn challenge_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("challenge", id)?;
+        Ok(self.root.join("challenges").join(format!("{id}.yaml")))
+    }
+
+    /// Load a challenge record by its content address: the id must rederive
+    /// from the record's own fields (the name is a claim until recomputed).
+    pub fn load_challenge(&self, id: &str) -> Result<CourtChallenge> {
+        let path = self.challenge_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no challenge {id} (missing {})",
+                path.display()
+            )));
+        }
+        let record: CourtChallenge = self.parse_yaml(&path)?;
+        if record.id != id {
+            return Err(FrfError::new(format!(
+                "challenge {id}: the id inside the record is {} — the name is a claim",
+                record.id
+            )));
+        }
+        let expected = crate::semantics::challenge_identity(
+            &record.court,
+            &record.operator,
+            &record.target_axis,
+            &record.reference_sha256,
+            &record.mutant_candidate_sha256,
+            &record.run,
+        )?;
+        if expected != id {
+            return Err(FrfError::new(format!(
+                "challenge {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited challenge"
+            )));
+        }
+        Ok(record)
+    }
+
+    /// Write a challenge record (content-addressed, write-once; re-running
+    /// the identical challenge is a no-op).
+    pub fn write_challenge(&self, record: &CourtChallenge) -> Result<()> {
+        let id = crate::semantics::challenge_identity(
+            &record.court,
+            &record.operator,
+            &record.target_axis,
+            &record.reference_sha256,
+            &record.mutant_candidate_sha256,
+            &record.run,
+        )?;
+        if id != record.id {
+            return Err(FrfError::new(format!(
+                "challenge id mismatch: record says {} but its fields hash to {id}",
+                record.id
+            )));
+        }
+        let path = self.challenge_path(&id)?;
+        if path.exists() {
+            return Ok(());
+        }
+        let yaml = self.to_yaml(record)?;
+        self.write_once(&path, &yaml)
+    }
+
     /// Load a reduction record by its content address.
     pub fn load_reduction(&self, id: &str) -> Result<ReductionRecord> {
         let path = self.reduction_path(id)?;

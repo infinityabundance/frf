@@ -28,8 +28,8 @@ fi
 ROOT=frf
 
 # Regenerate the evidence tree (courts/ is source and is kept).
-rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
-mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims
+rm -rf "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges "$ROOT"/reductions
+mkdir -p "$ROOT"/authorities "$ROOT"/captures "$ROOT"/residuals "$ROOT"/series "$ROOT"/trajectories "$ROOT"/receipts "$ROOT"/claims "$ROOT"/challenges
 rm -rf golden/work
 mkdir -p golden/work
 
@@ -42,6 +42,17 @@ step "2. run the court (authority vs candidate on the malformed fixture, 3 repet
 RUN_ID=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest.yaml --repeat 3)
 echo "run: $RUN_ID"
 echo "-- the deterministic divergence is re-observed every repetition: drift/slew become evidence (see trajectories/)"
+
+step "2b. the negative controls — the court must prove it can see"
+# A passing court proves nothing unless it can SEE the defect classes it
+# declares: the challenge runs the court against a MUTANT candidate per
+# declared observable (a deterministic wrapper of the reference that alters
+# exactly that one dimension — exit class, or the first stderr line — and
+# preserves everything else byte-for-byte) and requires a divergence on the
+# targeted axis and only on it. A court that is blind to a seeded defect, or
+# conflates it with another axis, is refused.
+echo "-- exit-class mutant and stderr-first-line mutant: the court must see each seeded defect and nothing else"
+"$FRF_BIN" --root "$ROOT" court challenge frf/courts/cli-malformed-input/manifest.yaml
 
 step "3. try to compile a claim while both residuals are open (must be refused)"
 RECEIPT_OPEN=$("$FRF_BIN" --root "$ROOT" receipt emit "$RUN_ID")

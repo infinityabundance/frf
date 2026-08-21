@@ -1,0 +1,11 @@
+schema_version: frf-series-v1
+id: fce9047e3b1c56ab73495fd76f92a4243afca445b9e90953259d0a8a23af0df4
+court: cli-malformed-input
+coordinate_system: candidate_revision
+points:
+- point_index: 1
+  coordinate: golden/candidate.sh
+  run: run-cli-malformed-input-55e28543abd9a2d1af68f86724b1ea2d2769137ce30dd4624c4d8732fb445c3b
+- point_index: 2
+  coordinate: golden/work/candidate-fixed.sh
+  run: run-cli-malformed-input-38a67e859f23f2cee30d65dcbc06f1d21fe3acf57de08a741e0aa7d74e3a90cf

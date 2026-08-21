@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2021"
 description = "The independent FRF verifier — a deliberately small SECOND implementation of the FRF protocol, with no dependency on the frf reference engine."
 license = "MIT OR Apache-2.0"

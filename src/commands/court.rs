@@ -16,6 +16,7 @@ use crate::host;
 use crate::model::*;
 use crate::store::Store;
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 
@@ -1185,6 +1186,242 @@ pub fn run_once(
         run_dir.display()
     );
     Ok(run)
+}
+
+/// `frf court challenge MANIFEST [--operators ...]`: the negative controls.
+/// A court that yields a pass proves nothing unless it has demonstrated it
+/// can SEE the defect classes it declares. For every applicable mutation
+/// operator (each built-in operator whose targeted axis the court declares;
+/// by default all of them), the challenge:
+///
+/// 1. generates the deterministic MUTANT candidate — a wrapper of the
+///    admitted reference artifact that alters exactly the targeted observable
+///    dimension and preserves every other byte-for-byte (`src/mutation.rs`);
+/// 2. runs the court against the mutant (a normal, content-addressed run —
+///    same question, same envelope, same fixture, mutant candidate);
+/// 3. records a content-addressed `CourtChallenge` (`challenges/<id>.yaml`)
+///    with the DERIVED verdicts: `saw_defect` (a divergence appeared on the
+///    targeted axis — the court can see the seeded defect) and
+///    `specificity_clean` (no divergence appeared on the unaffected axes —
+///    the mutant moved only the targeted dimension and the court did not
+///    conflate it with others).
+///
+/// A court that is BLIND to a declared defect class (no residual on the
+/// targeted axis) or conflates axes (residuals on unaffected axes) is
+/// refused: the challenge records remain as evidence, but the command exits
+/// non-zero.
+pub fn challenge(
+    store: &Store,
+    manifest_path: &Path,
+    operators_arg: Option<&str>,
+) -> Result<Vec<String>> {
+    let manifest: CourtManifest = store.parse_yaml(manifest_path)?;
+    let spec = &manifest.court;
+    crate::store::validate_id("court", &spec.id)?;
+
+    // The declared observables must be served comparators (the run itself
+    // re-validates); the challenge needs them to scope the operators and the
+    // unaffected axes.
+    let observables: Vec<String> = spec
+        .admissibility_envelope
+        .observables
+        .iter()
+        .map(|o| ObservableId::parse(o).map(|id| id.as_str().to_string()))
+        .collect::<Result<_>>()?;
+    if observables.is_empty() {
+        return Err(FrfError::new(
+            "the court declares no observables; there is no defect class to challenge — a court that cannot be challenged cannot prove it can see",
+        ));
+    }
+
+    // The operator set: explicitly requested, or every built-in operator
+    // whose targeted axis the court declares.
+    let operators: Vec<crate::mutation::MutationOperator> = match operators_arg {
+        Some(list) => {
+            let mut ops = Vec::new();
+            for raw in list.split(',') {
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    continue;
+                }
+                let op = crate::mutation::MutationOperator::parse(raw)?;
+                if !observables.iter().any(|o| o == op.target_axis()) {
+                    return Err(FrfError::new(format!(
+                        "operator {} targets axis '{}' which the court does not declare; the seeded defect would be unobservable",
+                        op.as_str(),
+                        op.target_axis()
+                    )));
+                }
+                ops.push(op);
+            }
+            if ops.is_empty() {
+                return Err(FrfError::new(
+                    "no mutation operators requested; pass --operators exit-class,stderr-first-line,...",
+                ));
+            }
+            ops
+        }
+        None => {
+            let mut ops = Vec::new();
+            let mut external = Vec::new();
+            for o in &observables {
+                match crate::mutation::MutationOperator::from_axis(o) {
+                    Some(op) => ops.push(op),
+                    None => external.push(o.clone()),
+                }
+            }
+            if ops.is_empty() {
+                return Err(FrfError::new(format!(
+                    "no built-in mutation operator applies to this court's observables {:?}; externally served axes ({}) have no built-in mutation surface yet — a court that cannot be challenged cannot prove it can see",
+                    observables,
+                    external.join(", ")
+                )));
+            }
+            if !external.is_empty() {
+                eprintln!(
+                    "court challenge: skipping externally served axes without a built-in mutation operator: {}",
+                    external.join(", ")
+                );
+            }
+            ops
+        }
+    };
+
+    // The reference the mutants wrap: the admitted authority artifact. The
+    // wrapper resolves it relative to itself (both live in the same
+    // objects/sha256/ directory), so the mutant bytes depend only on the
+    // operator and the reference hash — root-independent and rederivable.
+    let authority = store.load_authority(&spec.authority)?;
+    let reference_sha256 = authority.executable_sha256.clone();
+    let created_by = RunnerIdentity {
+        schema_version: SCHEMA_RUNNER.to_string(),
+        frf_version: env!("CARGO_PKG_VERSION").to_string(),
+        frf_executable_hash: host::current_exe_hash()?,
+    };
+
+    // Transient mutant wrappers live under the store's challenges/ dir.
+    fs::create_dir_all(store.root.join("challenges")).map_err(|e| {
+        FrfError::new(format!(
+            "cannot create {}: {e}",
+            store.root.join("challenges").display()
+        ))
+    })?;
+
+    let mut ids: Vec<String> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for op in &operators {
+        let operator = *op;
+        let target_axis = operator.target_axis().to_string();
+        let wrapper = operator.wrapper(&reference_sha256);
+        let mutant_sha256 = host::sha256_bytes(wrapper.as_bytes());
+
+        // Write the wrapper to a unique transient path, run the court with it
+        // as the candidate override, then remove it: the EVIDENCE is the
+        // content-addressed mutant object + the run, not the transient file.
+        let wrapper_rel = format!(
+            "{}/challenges/.mutant-{}-{}-{}.sh",
+            store.root.display(),
+            operator.as_str(),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let wrapper_path = Path::new(&wrapper_rel);
+        fs::write(wrapper_path, wrapper.as_bytes())
+            .map_err(|e| FrfError::new(format!("cannot write {}: {e}", wrapper_path.display())))?;
+
+        let run_result = run_once(store, manifest_path, Some(&wrapper_rel), None, false);
+        let _ = fs::remove_file(wrapper_path);
+        let run = match run_result {
+            Ok(run) => run,
+            Err(e) => {
+                failures.push(format!(
+                    "operator {}: the mutant run failed: {}",
+                    operator.as_str(),
+                    e.0
+                ));
+                continue;
+            }
+        };
+
+        // The derived verdicts, from the run's own residuals.
+        let capture = store.load_capture(&run)?;
+        let mut observed: Vec<String> = Vec::new();
+        let mut on_target = false;
+        let mut on_unaffected: Vec<String> = Vec::new();
+        for rid in &capture.residuals {
+            let record = store.load_residual(rid)?;
+            if record.axis.as_str() == target_axis {
+                on_target = true;
+            } else {
+                on_unaffected.push(record.axis.as_str().to_string());
+            }
+            observed.push(rid.clone());
+        }
+        let unaffected_axes: Vec<String> = observables
+            .iter()
+            .filter(|o| *o != &target_axis)
+            .cloned()
+            .collect();
+        let saw_defect = on_target;
+        let specificity_clean = on_unaffected.is_empty();
+
+        let id = crate::semantics::challenge_identity(
+            &spec.id,
+            operator.as_str(),
+            &target_axis,
+            &reference_sha256,
+            &mutant_sha256,
+            &run,
+        )?;
+        store.write_challenge(&CourtChallenge {
+            schema_version: SCHEMA_CHALLENGE.to_string(),
+            id: id.clone(),
+            court: spec.id.clone(),
+            operator: operator.as_str().to_string(),
+            target_axis: target_axis.clone(),
+            reference_sha256: reference_sha256.clone(),
+            mutant_candidate_sha256: mutant_sha256,
+            run: run.clone(),
+            observed_residuals: observed,
+            unaffected_axes,
+            saw_defect,
+            specificity_clean,
+            created_by: created_by.clone(),
+        })?;
+        ids.push(id.clone());
+
+        if saw_defect && specificity_clean {
+            eprintln!(
+                "court challenge {id}: operator {} saw the seeded {} defect on {target_axis} and nothing else — the court can see this defect class",
+                operator.as_str(),
+                operator.as_str()
+            );
+        } else {
+            let mut why = format!("operator {}", operator.as_str());
+            if !saw_defect {
+                why.push_str(" — the court observed NO divergence on the targeted axis (blind to the seeded defect)");
+            }
+            if !specificity_clean {
+                why.push_str(&format!(
+                    " — the court also observed divergences on unaffected axes: {}",
+                    on_unaffected.join(", ")
+                ));
+            }
+            failures.push(why);
+        }
+    }
+
+    if !failures.is_empty() {
+        return Err(FrfError::new(format!(
+            "court challenge of {} FAILED: the court did not prove it can see every defect class it declares (the challenge records remain as evidence):\n  {}",
+            spec.id,
+            failures.join("\n  ")
+        )));
+    }
+    Ok(ids)
 }
 
 impl SideCapture {

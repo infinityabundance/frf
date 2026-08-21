@@ -125,6 +125,21 @@ pub enum CourtCmd {
         /// Residual id (e.g. cli-exit-0001)
         residual: String,
     },
+    /// Challenge the court: the negative controls. For every applicable
+    /// mutation operator the court runs against a MUTANT candidate — a
+    /// deterministic wrapper of the admitted reference that alters exactly
+    /// one observable dimension — and must observe a divergence on the
+    /// targeted axis and only on it. A court that is blind to a declared
+    /// defect class, or conflates it with other axes, is refused
+    Challenge {
+        /// Court declaration (the same manifest `court run` takes)
+        manifest: PathBuf,
+        /// Mutation operators to apply (default: every built-in operator for
+        /// the court's declared observables): exit-class, stderr-first-line,
+        /// stdout-first-line
+        #[arg(long, value_name = "exit-class,stderr-first-line")]
+        operators: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
