@@ -83,9 +83,11 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// compared streams. v14: the receipt also carries the capture-ADAPTER
 /// relations applied (the axis-keyed observation semantics — part of the
 /// court semantic identity, so a receipt can rederive the question it
-/// binds). The body is serialized as canonical JSON (RFC 8785) and its
-/// identity is the full SHA-256 of those bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v14";
+/// The OpenReceipt protocol version this implementation speaks.
+/// v15: the execution profile adds the per-side process-count limit
+/// (`rlimit_nproc`, RLIMIT_NPROC) — the capture bounds record the complete
+/// resource contract the observation was made under.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v15";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -213,6 +215,10 @@ pub struct CaptureBounds {
     pub rlimit_cpu_s: String,
     /// Open-file limit of each side (RLIMIT_NOFILE).
     pub rlimit_nofile: String,
+    /// Process-count limit of each side (RLIMIT_NPROC, v15): a side cannot
+    /// fork a process bomb that exhausts the user's process table while the
+    /// harness waits for its own timeout.
+    pub rlimit_nproc: String,
 }
 
 /// The protocol's maxima for the capture bounds — a receipt can never claim
@@ -222,6 +228,7 @@ pub const CAPTURE_BOUND_MAX_STREAM_BYTES: u64 = 1 << 30; // 1 GiB
 pub const CAPTURE_BOUND_MAX_RLIMIT_AS_MB: u64 = 65_536; // 64 GiB
 pub const CAPTURE_BOUND_MAX_RLIMIT_CPU_S: u64 = 86_400; // 1 day
 pub const CAPTURE_BOUND_MAX_RLIMIT_NOFILE: u64 = 1_048_576;
+pub const CAPTURE_BOUND_MAX_RLIMIT_NPROC: u64 = 65_536;
 
 /// Validate capture bounds: positive integers within the protocol's maxima.
 pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
@@ -246,6 +253,11 @@ pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
             "rlimit_nofile",
             &b.rlimit_nofile,
             CAPTURE_BOUND_MAX_RLIMIT_NOFILE,
+        ),
+        (
+            "rlimit_nproc",
+            &b.rlimit_nproc,
+            CAPTURE_BOUND_MAX_RLIMIT_NPROC,
         ),
     ] {
         let n: u64 = v.parse().map_err(|_| {

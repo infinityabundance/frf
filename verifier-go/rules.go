@@ -111,7 +111,7 @@ var tokenKeys = []string{"residual_id", "token", "next_court", "blocks_claims"}
 var endoductionKeys = []string{"schema_version", "tokens"}
 var claimKeys = []string{"positive", "non_claims", "blocked_by_open_residuals"}
 var replayKeys = []string{"program", "evidence_root", "argv", "expected_run_identity"}
-var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile"}
+var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc"}
 var dispositeions = []string{"open", "fixed", "intentional", "environmental", "oracle_version", "harness", "unknown"}
 var closurePredicate = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality"
 
@@ -125,8 +125,8 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v14" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v14", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v15" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v15", str(o, "schema_version")))
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
@@ -322,8 +322,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v14" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v14", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v15" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v15", str(o, "schema_version")))
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -598,7 +598,7 @@ func semanticViolations(rec jcs.Value) []string {
 		push(&v, fmt.Sprintf("invalid execution_profile identifier %v", str(o, "execution_profile")))
 	}
 	bounds := objKeys(o, "capture_bounds")
-	for _, what := range []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile"} {
+	for _, what := range []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc"} {
 		s := str(bounds, what)
 		if s == "" {
 			push(&v, fmt.Sprintf("capture bound %s missing", what))

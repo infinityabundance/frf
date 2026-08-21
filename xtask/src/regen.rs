@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_V14: &str = "frf-receipt-v14";
+const RECEIPT_SCHEMA: &str = "frf-receipt-v15";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -81,7 +81,7 @@ fn bump_semantic(c: &mut Value) {
 /// keeps its wrong hash so the corpus isolates exactly one rule per
 /// document.
 fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
-    doc["schema_version"] = json!(RECEIPT_V14);
+    doc["schema_version"] = json!(RECEIPT_SCHEMA);
     // v13: the normalizer relations applied to the compared streams, copied
     // from the capture (empty for a court with no normalizers), and the
     // extension implementations in provenance (normalizer / capture-adapter /
@@ -129,7 +129,8 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
             bump_semantic(c);
         }
     }
-    // The execution profile + applied capture bounds (v11).
+    // The execution profile + applied capture bounds (v11; the process
+    // limit is v15).
     doc["execution_profile"] = json!(CORPUS_PROFILE);
     doc["capture_bounds"] = json!({
         "timeout_ms": "60000",
@@ -137,6 +138,7 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
         "rlimit_as_mb": "2048",
         "rlimit_cpu_s": "30",
         "rlimit_nofile": "1024",
+        "rlimit_nproc": "512",
     });
     // The expanded environment strata; recompute the digest from them unless
     // the fixture's violation IS the digest.

@@ -1204,7 +1204,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
 
 impl Receipt {
     /// OpenReceipt SEMANTIC conformance: the cross-field, cross-object
-    /// invariants of `frf-receipt-v14`, checked on the document ALONE so any
+    /// invariants of `frf-receipt-v15`, checked on the document ALONE so any
     /// independent implementation can run the same algorithm (normative
     /// description in `spec/openreceipt.md`, corpus in
     /// `conformance/invalid-semantic/`). This is deliberately separate from
@@ -2102,6 +2102,7 @@ mod tests {
                 rlimit_as_mb: "2048".into(),
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
+                rlimit_nproc: "512".into(),
             },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),

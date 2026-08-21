@@ -53,6 +53,10 @@ pub const EXEC_RLIMIT_AS_MB: u64 = 2048;
 pub const EXEC_RLIMIT_CPU_S: u64 = 30;
 /// Child open-file limit (RLIMIT_NOFILE).
 pub const EXEC_RLIMIT_NOFILE: u64 = 1024;
+/// Child process-count limit (RLIMIT_NPROC): a hostile side cannot fork a
+/// process bomb that exhausts the user's process table while the harness
+/// waits for its own timeout.
+pub const EXEC_RLIMIT_NPROC: u64 = 4096;
 
 /// Total budget for `ETXTBSY` spawn retries. Exec'ing a file another process
 /// just finished writing (or is still writing) transiently fails with
@@ -107,6 +111,14 @@ pub fn rlimit_nofile() -> u64 {
         .unwrap_or(EXEC_RLIMIT_NOFILE)
 }
 
+/// Effective process-count limit, `FRF_EXEC_RLIMIT_NPROC` override.
+pub fn rlimit_nproc() -> u64 {
+    std::env::var("FRF_EXEC_RLIMIT_NPROC")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_RLIMIT_NPROC)
+}
+
 /// The capture bounds that applied, as the profile records them (strings —
 /// the OpenReceipt canonical value domain has no numbers). Bound at
 /// observation time and copied into receipts, so an observation is always
@@ -118,6 +130,7 @@ pub fn capture_bounds() -> CaptureBounds {
         rlimit_as_mb: rlimit_as_mb().to_string(),
         rlimit_cpu_s: rlimit_cpu_s().to_string(),
         rlimit_nofile: rlimit_nofile().to_string(),
+        rlimit_nproc: rlimit_nproc().to_string(),
     }
 }
 
@@ -232,13 +245,16 @@ fn run_impl(
     {
         use std::os::unix::process::CommandExt;
         // The execution profile's resource bounds, applied inside the child
-        // before exec: a hostile side is bounded in memory, CPU time, and
-        // file descriptors. A side that hits a limit dies by the profile's
+        // before exec: a hostile side is bounded in memory, CPU time, file
+        // descriptors, and process count (a side cannot fork a process bomb
+        // that exhausts the user's process table while the harness waits for
+        // its own timeout). A side that hits a limit dies by the profile's
         // deterministic signal outcome (declared in
         // spec/execution-profile.md); the capture records the signal.
         let as_bytes = rlimit_as_mb().saturating_mul(1024 * 1024);
         let cpu_s = rlimit_cpu_s();
         let nofile = rlimit_nofile();
+        let nproc = rlimit_nproc();
         // SAFETY: `pre_exec` runs after fork(2), before execve(2), in the
         // single-threaded child; setrlimit(2) is async-signal-safe.
         unsafe {
@@ -246,6 +262,7 @@ fn run_impl(
                 set_rlimit(libc::RLIMIT_AS, as_bytes)
                     .and_then(|_| set_rlimit(libc::RLIMIT_CPU, cpu_s))
                     .and_then(|_| set_rlimit(libc::RLIMIT_NOFILE, nofile))
+                    .and_then(|_| set_rlimit(libc::RLIMIT_NPROC, nproc))
             });
         }
     }
@@ -293,6 +310,10 @@ fn run_impl(
     let mut stderr = Vec::new();
     let timeout = exec_timeout();
     let max_bytes = max_stream_bytes();
+    // The process group id is the direct child's pid, captured BEFORE the
+    // wait loop: after the child is reaped its pid can be reused, and the
+    // group kill must target the ORIGINAL group, never whatever process got
+    // the recycled pid.
     let group = child.id();
     let start = Instant::now();
     let overflow = Arc::new(AtomicBool::new(false));
@@ -337,9 +358,11 @@ fn run_impl(
         // The direct process is gone (exited, or killed and reaped by the
         // timeout path). Terminate whatever else remains in its group so the
         // capture streams reach EOF and the drains can join: a descendant
-        // holding the pipes must never block the harness.
+        // holding the pipes must never block the harness. The group id was
+        // captured before the wait loop (the reaped pid must not be reused
+        // by a different process that would then be signaled).
         #[cfg(unix)]
-        terminate_process_group(child.id());
+        terminate_process_group(group);
         result
         // `scope` joins all threads here (stdin writer + both drains), so the
         // buffers are complete before the caller sees them.
@@ -844,15 +867,21 @@ mod tests {
         std::fs::write(&script, "#!/bin/sh\nsleep 3 &\necho child-done\nexit 0\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let start = Instant::now();
-        let out = with_default_hooks(|| run_process(&script, &[]).unwrap());
-        assert_eq!(out.exit, "0");
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
-        assert!(
-            start.elapsed() < Duration::from_millis(1500),
-            "harness must not wait for a descendant to release the pipes (took {:?})",
-            start.elapsed()
-        );
+        // The timer starts AFTER the hook lock: in the parallel suite another
+        // test may hold the env-override lock, and the elapsed must measure
+        // the RUN, not the lock wait.
+        let _ = with_default_hooks(|| {
+            let start = Instant::now();
+            let out = run_process(&script, &[]).unwrap();
+            assert_eq!(out.exit, "0");
+            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
+            assert!(
+                start.elapsed() < Duration::from_millis(1500),
+                "harness must not wait for a descendant to release the pipes (took {:?})",
+                start.elapsed()
+            );
+            out
+        });
         let _ = std::fs::remove_file(&script);
     }
 
@@ -919,6 +948,65 @@ mod tests {
                 assert!(
                     start.elapsed() < Duration::from_secs(15),
                     "the CPU limit must bite before the wall-clock timeout (took {:?})",
+                    start.elapsed()
+                );
+                let _ = std::fs::remove_file(&script);
+            },
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_process_limit_is_applied_in_the_child() {
+        // The profile's RLIMIT_NPROC is applied before exec: the side sees
+        // its own declared process-count cap (a hostile side cannot fork a
+        // process bomb that exhausts the user's process table while the
+        // harness waits for its own timeout). `ulimit -u` reads the child's
+        // own limit — deterministic and instant.
+        with_env(&[("FRF_EXEC_RLIMIT_NPROC", "42")], || {
+            let script = temp_script("nproc-cap");
+            std::fs::write(&script, "#!/bin/sh\nulimit -u\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let out = run_process(&script, &[]).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout).trim(),
+                "42",
+                "the child must run under its declared process-count cap"
+            );
+            let _ = std::fs::remove_file(&script);
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_fork_bomb_cannot_outlive_the_wall_clock_bound() {
+        // A side that forks without bound hits the process-count limit: its
+        // forks fail (the shell may retry), it cannot create an unbounded
+        // number of processes, and the harness's wall-clock deadline + group
+        // kill terminate it — a fork bomb never hangs the court past the
+        // profile's bound. The short timeout keeps the test fast.
+        with_env(
+            &[
+                ("FRF_EXEC_RLIMIT_NPROC", "32"),
+                ("FRF_EXEC_TIMEOUT_MS", "3000"),
+            ],
+            || {
+                let script = temp_script("fork-bomb");
+                std::fs::write(
+                    &script,
+                    "#!/bin/sh\ni=0\nwhile [ $i -lt 2000 ]; do sh -c 'sleep 1' & i=$((i+1)); done\nwait\n",
+                )
+                .unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let start = Instant::now();
+                // The side is bounded (its forks fail) and the harness returns
+                // at the wall-clock deadline at the latest.
+                let _ = run_process(&script, &[]);
+                assert!(
+                    start.elapsed() < Duration::from_secs(8),
+                    "a fork bomb must not outlive the profile's wall-clock bound (took {:?})",
                     start.elapsed()
                 );
                 let _ = std::fs::remove_file(&script);

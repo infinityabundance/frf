@@ -1,6 +1,6 @@
 # OpenReceipt — the Forensic Residual Framework receipt protocol
 
-*Version: `frf-receipt-v14` (this document).*
+*Version: `frf-receipt-v15` (this document).*
 
 An OpenReceipt binds a court run's evidence: the court question, the runner
 and comparator identities that observed it, the exact artifacts that

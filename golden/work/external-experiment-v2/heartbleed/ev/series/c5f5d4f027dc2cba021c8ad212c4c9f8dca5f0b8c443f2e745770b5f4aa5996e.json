@@ -1,0 +1,1 @@
+{"coordinate_system":"environment","court":"heartbeat-responder","experiment_id":"heartbeat-responder-environment","id":"c5f5d4f027dc2cba021c8ad212c4c9f8dca5f0b8c443f2e745770b5f4aa5996e","points":[{"coordinate":"utc","point_index":"1","run":"run-heartbeat-responder-d4de112da7ef1d413200a8d4a32234fc5892b59fd6fc9c9162dbedc906fcf6b2"}],"schema_version":"frf-series-v3"}

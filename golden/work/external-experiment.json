@@ -14,9 +14,9 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-ssl-handshake-check-43c90e8f57f3fc62468b0d2db2cb6e1ed8fc4b162e66d31b0faf75e6bf66357d",
+      "defect_run": "run-ssl-handshake-check-6915e72666d99ac0f18bac7997a7b308c77643c08e51eb545cd489552f5fa237",
       "domain": "cli",
-      "evidence_bytes": 7443,
+      "evidence_bytes": 7465,
       "id": "goto-fail",
       "minimization": {
         "attempts": 4,
@@ -27,7 +27,7 @@
           "proven": true
         },
         "original_lines": "2",
-        "reduction": "3511dca0cb2053773a4d5f190302c65c62379d0885027a2d987668677f7f9ed2",
+        "reduction": "8548e6bfc50c791aaae6062d589d15e5cd9d61759f4ba542fbed3d43edbe5a1d",
         "residual": "cli-exit-0001"
       },
       "name": "Apple Secure Transport 'goto fail'",
@@ -57,9 +57,9 @@
         ]
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-env-import-check-ff6f38a871c99c8c81cd560d83d2128b726e550e6c28393a4505fbfaa27ed82d",
+      "defect_run": "run-env-import-check-c5882f20e26e1c3091cc30e7b2a0b7ee4e88af21fb55d9b05bd99f78b777e006",
       "domain": "cli",
-      "evidence_bytes": 6303,
+      "evidence_bytes": 6325,
       "id": "shellshock",
       "minimization": {
         "attempts": 3,
@@ -70,7 +70,7 @@
           "proven": true
         },
         "original_lines": "2",
-        "reduction": "b4400d10c27333b5666e2f0b56dc22ed5274597a58b46231e8557b45b9010a79",
+        "reduction": "1b6e77202a0883d363dc3573dc5ddab2f93f382b0ed2480cd160660e5d5f76fc",
         "residual": "cli-text-0001"
       },
       "name": "bash 'Shellshock'",
@@ -95,9 +95,9 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-heartbeat-responder-35fc927cbad567317ca7f928b7fc046031e7fd66a54f1d56f6cc66d5ed9f2690",
+      "defect_run": "run-heartbeat-responder-a4d2834b0403a7c60c4715faea778fe31cde0a9d043c4032de6b46b988d0beeb",
       "domain": "wire",
-      "evidence_bytes": 6181,
+      "evidence_bytes": 6203,
       "id": "heartbleed",
       "minimization": null,
       "name": "OpenSSL 'Heartbleed'",
@@ -122,9 +122,9 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-lookup-resolver-71504c45c043f9b9d052462f42ea21dd637dc72a4df8a548b15240d7c0dd0ee4",
+      "defect_run": "run-lookup-resolver-b7c5c1bd0d4a1e7eee39aea4d246f2569cbbc232cd05f94f5102dc265c33a0ba",
       "domain": "state",
-      "evidence_bytes": 6130,
+      "evidence_bytes": 6152,
       "id": "log4shell",
       "minimization": null,
       "name": "Log4j 'Log4Shell'",
@@ -149,9 +149,9 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-thruster-command-f8b977b9a1fc1840ca67a8e8be7031de5f552dcc118ea61bffcd8e6594901765",
+      "defect_run": "run-thruster-command-0dea372a4fdd871c5c28f50902936ed09c72fad4e1081e016a9ca3a2a4b113b7",
       "domain": "state",
-      "evidence_bytes": 6076,
+      "evidence_bytes": 6098,
       "id": "mars-climate-orbiter",
       "minimization": null,
       "name": "Mars Climate Orbiter unit mismatch",
@@ -176,9 +176,9 @@
         []
       ],
       "clean_run_residuals": 0,
-      "defect_run": "run-date-parser-40e2fb7e94c154286ef2d471faed0252b832464ea4107106146e5b84f89e0122",
+      "defect_run": "run-date-parser-29dcca74497c1ebe3ee10a7670fdc1869263b7732aa40392aee0840c1a8b2268",
       "domain": "state",
-      "evidence_bytes": 6027,
+      "evidence_bytes": 6049,
       "id": "two-digit-year",
       "minimization": null,
       "name": "The two-digit-year (Y2K) date bug",
@@ -221,16 +221,16 @@
   },
   "evidence_overhead": {
     "baseline_bytes": 288,
-    "frf_bytes": 38160,
+    "frf_bytes": 38292,
     "per_case_bytes": {
-      "goto-fail": 7443,
-      "heartbleed": 6181,
-      "log4shell": 6130,
-      "mars-climate-orbiter": 6076,
-      "shellshock": 6303,
-      "two-digit-year": 6027
+      "goto-fail": 7465,
+      "heartbleed": 6203,
+      "log4shell": 6152,
+      "mars-climate-orbiter": 6098,
+      "shellshock": 6325,
+      "two-digit-year": 6049
     },
-    "ratio": 132.5
+    "ratio": 132.95833333333334
   },
   "minimization": [
     {
@@ -243,7 +243,7 @@
         "proven": true
       },
       "original_lines": "2",
-      "reduction": "3511dca0cb2053773a4d5f190302c65c62379d0885027a2d987668677f7f9ed2",
+      "reduction": "8548e6bfc50c791aaae6062d589d15e5cd9d61759f4ba542fbed3d43edbe5a1d",
       "residual": "cli-exit-0001"
     },
     {
@@ -256,7 +256,7 @@
         "proven": true
       },
       "original_lines": "2",
-      "reduction": "b4400d10c27333b5666e2f0b56dc22ed5274597a58b46231e8557b45b9010a79",
+      "reduction": "1b6e77202a0883d363dc3573dc5ddab2f93f382b0ed2480cd160660e5d5f76fc",
       "residual": "cli-text-0001"
     }
   ],

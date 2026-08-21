@@ -722,7 +722,8 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				str(bounds, "max_stream_bytes") != "16777216" ||
 				str(bounds, "rlimit_as_mb") != "2048" ||
 				str(bounds, "rlimit_cpu_s") != "30" ||
-				str(bounds, "rlimit_nofile") != "1024" {
+				str(bounds, "rlimit_nofile") != "1024" ||
+				str(bounds, "rlimit_nproc") != "512" {
 				fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract) for premise %s", receiptID, premID)
 			}
 		}

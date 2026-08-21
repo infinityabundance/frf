@@ -800,6 +800,7 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             "rlimit_as_mb": "2048",
             "rlimit_cpu_s": "30",
             "rlimit_nofile": "1024",
+            "rlimit_nproc": "512",
         });
         // EVERY premise was observed under the reference execution contract.
         for prem_id in &requires {

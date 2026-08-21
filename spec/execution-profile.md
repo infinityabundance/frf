@@ -49,11 +49,12 @@ pipes open past the direct process.
 | `rlimit_as_mb`       | `2048`       | Address-space limit per side (`RLIMIT_AS`)          |
 | `rlimit_cpu_s`       | `30`         | CPU-time limit per side (`RLIMIT_CPU`)              |
 | `rlimit_nofile`      | `1024`       | Open-file limit per side (`RLIMIT_NOFILE`)          |
+| `rlimit_nproc`       | `512`        | Process-count limit per side (`RLIMIT_NPROC`, v15)  |
 
 The defaults are overridable through test hooks (`FRF_EXEC_TIMEOUT_MS`,
 `FRF_EXEC_MAX_BYTES`, `FRF_EXEC_RLIMIT_AS_MB`, `FRF_EXEC_RLIMIT_CPU_S`,
-`FRF_EXEC_RLIMIT_NOFILE`) used by the regression suite; whatever bounds
-applied are what the capture records.
+`FRF_EXEC_RLIMIT_NOFILE`, `FRF_EXEC_RLIMIT_NPROC`) used by the regression
+suite; whatever bounds applied are what the capture records.
 
 ### Overflow is refusal, never truncation
 
