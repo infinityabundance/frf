@@ -118,7 +118,11 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v15";
 /// statements (`independence_evidence`) — the declared independence
 /// relations (spec/witness.md §6) that attest the premises, so an
 /// independently-witnessed claim documents WHICH independence claims were
-/// made, never conflating them with FRF's own verification.
+/// made, never conflating them with FRF's own verification. Admission
+/// REQUIRES at least one admissible independence relation per premise
+/// receipt at `independently-witnessed` and above: an affirming witness
+/// with zero declared independence is witnessed, not independently
+/// witnessed.
 pub const SCHEMA_CLAIM: &str = "frf-claim-v7";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
@@ -135,10 +139,15 @@ pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 ///   surface's defect class (same court semantic identity, same reference
 ///   artifact, a mutation on exactly that axis observed and nothing else).
 /// - [`CLAIM_POLICY_INDEPENDENTLY_WITNESSED`]: sensitivity coverage PLUS a
-///   verified witness attestation of the receipt (`outcome: affirm`).
+///   verified witness attestation of the receipt (`outcome: affirm`) PLUS at
+///   least one admissible INDEPENDENCE relation per premise receipt (a
+///   content-addressed `IndependenceEvidence` record bound to an attestation
+///   of that premise). An attestation alone is WITNESSED, not independently
+///   witnessed — the tier's name is its semantics.
 /// - [`CLAIM_POLICY_HIGH_ASSURANCE`]: independently witnessed PLUS the
 ///   observation was made under the reference execution profile with the
-///   reference capture bounds (the exact-replay contract).
+///   REFERENCE capture bounds — protocol constants that no `FRF_EXEC_*`
+///   override can redefine (the exact-replay contract).
 pub const CLAIM_POLICY_BASELINE: &str = "baseline";
 pub const CLAIM_POLICY_SENSITIVITY_BACKED: &str = "sensitivity-backed";
 pub const CLAIM_POLICY_INDEPENDENTLY_WITNESSED: &str = "independently-witnessed";
@@ -217,7 +226,10 @@ pub struct CaptureBounds {
     pub rlimit_nofile: String,
     /// Process-count limit of each side (RLIMIT_NPROC, v15): a side cannot
     /// fork a process bomb that exhausts the user's process table while the
-    /// harness waits for its own timeout.
+    /// harness waits for its own timeout. Linux semantics: the limit is
+    /// per REAL USER ID, not per side, and privileged execution is exempt —
+    /// it is one layer of the contract, not a per-side aggregate envelope
+    /// (the cgroup v2 profile is that).
     pub rlimit_nproc: String,
 }
 
@@ -3785,7 +3797,9 @@ pub struct ClaimRecord {
     /// addressed [`IndependenceEvidence`] records the claim's attestations
     /// carry, so an independently-witnessed claim documents WHICH
     /// independence relations were declared (never conflated with FRF's own
-    /// verification of the attestations). Empty when none were declared.
+    /// verification of the attestations). Required per premise from
+    /// `independently-witnessed` up: an attestation alone is witnessed, not
+    /// independently witnessed.
     #[serde(default)]
     pub independence_evidence: Vec<String>,
     /// Claim IR — the replay contract the claim's evidence was observed

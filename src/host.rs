@@ -56,6 +56,14 @@ pub const EXEC_RLIMIT_NOFILE: u64 = 1024;
 /// Child process-count limit (RLIMIT_NPROC): a hostile side cannot fork a
 /// process bomb that exhausts the user's process table while the harness
 /// waits for its own timeout.
+///
+/// Linux semantics (the repository does not redefine them): RLIMIT_NPROC
+/// bounds the number of processes/threads associated with the side's REAL
+/// USER ID — not the descendants of this one side — and privileged/root
+/// execution is exempt. It is therefore one LAYER against fork bombs, not a
+/// per-side aggregate envelope; the per-side aggregate resource contract
+/// (pids.max / memory.max / cpu.max over the whole descendant tree) is what
+/// the cgroup v2 execution profile (`frf-exec-linux-v2`) is for.
 pub const EXEC_RLIMIT_NPROC: u64 = 4096;
 
 /// Total budget for `ETXTBSY` spawn retries. Exec'ing a file another process
@@ -119,10 +127,32 @@ pub fn rlimit_nproc() -> u64 {
         .unwrap_or(EXEC_RLIMIT_NPROC)
 }
 
-/// The capture bounds that applied, as the profile records them (strings —
-/// the OpenReceipt canonical value domain has no numbers). Bound at
-/// observation time and copied into receipts, so an observation is always
-/// read against the harness contract it was actually made under.
+/// The REFERENCE capture bounds: the immutable protocol constants of the
+/// `frf-exec-linux-v1` profile. These NEVER honor the `FRF_EXEC_*` test
+/// hooks — an override must not be able to redefine what the reference
+/// execution contract IS. `high-assurance` claim admission compares a
+/// premise's recorded bounds against this value, so a run made under any
+/// overridden contract is refused no matter what environment the compiler
+/// runs in.
+pub fn reference_capture_bounds() -> CaptureBounds {
+    CaptureBounds {
+        timeout_ms: EXEC_TIMEOUT.as_millis().to_string(),
+        max_stream_bytes: EXEC_MAX_STREAM_BYTES.to_string(),
+        rlimit_as_mb: EXEC_RLIMIT_AS_MB.to_string(),
+        rlimit_cpu_s: EXEC_RLIMIT_CPU_S.to_string(),
+        rlimit_nofile: EXEC_RLIMIT_NOFILE.to_string(),
+        rlimit_nproc: EXEC_RLIMIT_NPROC.to_string(),
+    }
+}
+
+/// The EFFECTIVE capture bounds — the profile defaults or the `FRF_EXEC_*`
+/// test-hook overrides (strings, because the OpenReceipt canonical value
+/// domain has no numbers). Bound at OBSERVATION time and copied into the
+/// capture/receipt, so an observation is always read against the harness
+/// contract it was actually made under. The reference contract is
+/// [`reference_capture_bounds`]; the two differ exactly when a test hook
+/// overrides a bound, and only the observation side may consult the
+/// effective value.
 pub fn capture_bounds() -> CaptureBounds {
     CaptureBounds {
         timeout_ms: exec_timeout().as_millis().to_string(),

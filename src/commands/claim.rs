@@ -488,6 +488,25 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         }
         all.sort();
         all.dedup();
+        // The tier is NAMED independently-witnessed: every premise receipt
+        // must carry at least one admissible independence relation bound to
+        // an attestation of THAT premise. A producer-controlled affirm with
+        // zero declared independence is witnessed, not independently
+        // witnessed — the tier must not mean less than its name.
+        for rid in receipt_ids {
+            let attested: Vec<String> = witness_coverage(store, rid)?;
+            let covered = all.iter().any(|id| {
+                store
+                    .load_independence(id)
+                    .map(|rec| attested.contains(&rec.witness_statement))
+                    .unwrap_or(false)
+            });
+            if !covered {
+                return Err(FrfError::new(format!(
+                    "claim refused under policy {policy:?}: premise receipt {rid} has no admissible independence relation — an attestation alone is witnessed, not independently witnessed; declare one with `frf witness independence`"
+                )));
+            }
+        }
         all
     } else {
         Vec::new()
@@ -504,9 +523,9 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
                     r.execution_profile
                 )));
             }
-            if r.capture_bounds != host::capture_bounds() {
+            if r.capture_bounds != host::reference_capture_bounds() {
                 return Err(FrfError::new(format!(
-                    "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile)",
+                    "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile) — an FRF_EXEC_* override can never redefine the reference bounds",
                 )));
             }
         }

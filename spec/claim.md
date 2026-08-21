@@ -32,8 +32,8 @@ premise it belongs to.
 |---|---|---|
 | `baseline` | observation evidence only (the verified receipts + the absence scan over U) | — |
 | `sensitivity-backed` | EVERY claimed observable axis of EVERY premise has CHALLENGE coverage: a content-addressed challenge record for THAT premise's court semantic identity, wrapping the same reference artifact, targeting exactly that axis, with `saw_defect` and `specificity_clean` RECOMPUTED from the mutant run | `capability` (per-premise, per-axis challenge ids) |
-| `independently-witnessed` | sensitivity coverage PLUS a verified witness statement attesting EACH premise receipt (`subject kind=receipt`, `outcome: affirm` — the statement's identity, preserved request/response, and request binding all verify on read) | `witness_statements` (the union across premises) |
-| `high-assurance` | independently witnessed PLUS EVERY premise's observation was made under the reference execution profile (`frf-exec-linux-v1`) with the reference capture bounds (the exact-replay contract) | `replay_profile` |
+| `independently-witnessed` | sensitivity coverage PLUS a verified witness statement attesting EACH premise receipt (`subject kind=receipt`, `outcome: affirm` — the statement's identity, preserved request/response, and request binding all verify on read) PLUS at least one admissible INDEPENDENCE relation per premise: a content-addressed `IndependenceEvidence` record (`frf-independence-v1`) bound to an attestation of THAT premise (identity rederives, the relation is closed, the spec hash rederives). An affirming witness with zero declared independence is WITNESSED, not independently witnessed — the tier's name is its semantics | `witness_statements` (the union across premises) + `independence_evidence` (the records backing them) |
+| `high-assurance` | independently witnessed PLUS EVERY premise's observation was made under the reference execution profile (`frf-exec-linux-v1`) with the reference capture bounds — the protocol CONSTANTS of the profile, which no `FRF_EXEC_*` override can redefine (the exact-replay contract) | `replay_profile` |
 
 The tiers are strict supersets: the evidence is named by content address in
 the claim, never reduced to a boolean, so any implementation can re-derive
@@ -72,6 +72,13 @@ ClaimRecord {
                        that axis for that premise's court
     witness_statements the verified witness statements attesting the premise
                        receipts (independently-witnessed and above)
+    independence_evidence
+                       the content-addressed IndependenceEvidence records
+                       backing those attestations (independently-witnessed
+                       and above): every premise must have at least one
+                       admissible independence relation bound to an
+                       attestation of itself — an attestation alone is
+                       witnessed, not independently witnessed
     replay_profile     the execution contract the evidence was observed under
                        (high-assurance requires the reference profile for
                        every premise)

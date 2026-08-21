@@ -1,1 +1,0 @@
-{"authority":"ref-openssl-2014","blocks_claims":["heartbeat-record bytes.wire parity"],"disposition":"open","kind":"text","magnitude":"observed","next_court":"none","residual_id":"cli-text-0002","schema_version":"frf-token-v1","scope":"heartbeat-record","surface":"bytes.wire-divergence","token":"text/bytes.wire-divergence/observed/open"}

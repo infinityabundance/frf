@@ -21,22 +21,70 @@
 
 use frf::store::Store;
 use std::fs;
+use std::process::Output;
 
 mod common;
 use common::*;
+
+/// Run frf with the evidence root and an arbitrary env override set — the
+/// hostile-bypass tests need the SAME override on the run and the compile to
+/// prove that an FRF_EXEC_* hook can never redefine the reference contract.
+fn frf_root(work: &Workdir, envs: &[(&str, &str)], args: &[&str]) -> Output {
+    let mut full: Vec<&str> = vec!["--root", ROOT];
+    full.extend_from_slice(args);
+    frf_env(work, &full, envs)
+}
+
+fn admit_reference_env(work: &Workdir, envs: &[(&str, &str)]) {
+    let out = frf_root(
+        work,
+        envs,
+        &[
+            "authority",
+            "admit",
+            "golden/reference.sh",
+            "--name",
+            "ref-cli",
+            "--version",
+            "1.8.2",
+        ],
+    );
+    assert_success(&out, "authority admit");
+}
+
+fn run_court_env(work: &Workdir, envs: &[(&str, &str)]) -> String {
+    let out = frf_root(work, envs, &["court", "run", MANIFEST]);
+    assert_success(&out, "court run");
+    let run = stdout(&out);
+    assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
+    run
+}
+
+fn run_resolution_court_env(work: &Workdir, envs: &[(&str, &str)]) -> String {
+    let out = frf_root(work, envs, &["court", "run", RESOLUTION_MANIFEST]);
+    assert_success(&out, "resolution court run");
+    let run = stdout(&out);
+    assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
+    run
+}
 
 /// Drive the golden path to the resolution receipt (the run that observed the
 /// passing candidate and licenses the exit-axis claim): admit, run the court,
 /// dispose the original residuals, run the patched candidate, dispose `fixed`
 /// with the resolution edge, and emit the resolution receipt.
 fn resolution_receipt(work: &Workdir) -> (String, String) {
-    admit_reference(work);
-    let run = run_court(work);
+    resolution_receipt_env(work, &[])
+}
+
+/// [`resolution_receipt`] under an env override set — every frf invocation
+/// (admit, run, dispose, emit) inherits the overrides, so the receipt's
+/// capture bounds reflect the EFFECTIVE contract that applied.
+fn resolution_receipt_env(work: &Workdir, envs: &[(&str, &str)]) -> (String, String) {
+    admit_reference_env(work, envs);
+    let run = run_court_env(work, envs);
 
     let dispose = |id: &str, disposition: &str, reason: &str, extra: &[&str]| {
         let mut args: Vec<&str> = vec![
-            "--root",
-            ROOT,
             "residual",
             "dispose",
             id,
@@ -46,12 +94,12 @@ fn resolution_receipt(work: &Workdir) -> (String, String) {
             reason,
         ];
         args.extend_from_slice(extra);
-        let out = frf(work, &args);
+        let out = frf_root(work, envs, &args);
         assert_success(&out, "dispose");
     };
 
     // The resolution run: the patched candidate under the same question.
-    let resolution_run = run_resolution_court(work);
+    let resolution_run = run_resolution_court_env(work, envs);
     dispose(
         "cli-exit-0001",
         "fixed",
@@ -71,7 +119,7 @@ fn resolution_receipt(work: &Workdir) -> (String, String) {
         &[],
     );
 
-    let out = frf(work, &["--root", ROOT, "receipt", "emit", &resolution_run]);
+    let out = frf_root(work, envs, &["receipt", "emit", &resolution_run]);
     assert_success(&out, "receipt emit (resolution run)");
     let receipt = stdout(&out);
     (run, receipt)
@@ -280,7 +328,50 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
     let wid = stdout(&out);
     assert_eq!(wid.len(), 64);
 
-    // Now the tier compiles and carries the witness id.
+    // An attestation alone is WITNESSED, not INDEPENDENTLY witnessed: the
+    // tier refuses until at least one admissible independence relation is
+    // declared for this premise's attestation.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "independently-witnessed",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("no admissible independence relation"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // Declare the independence relation for that attestation (the witness's
+    // own claim — separate-party, with its basis recorded).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "separate-party",
+            "--basis",
+            "the attestation was made by an unaffiliated reviewer against the exported bundle",
+        ],
+    );
+    assert_success(&out, "witness independence");
+    let iid = stdout(&out);
+    assert_eq!(iid.len(), 64);
+
+    // Now the tier compiles and carries the witness id AND the declared
+    // independence evidence that backs it.
     let out = frf(
         &work,
         &[
@@ -303,6 +394,11 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         claim["witness_statements"],
         serde_json::json!([wid]),
         "the claim names the exact verified attestation"
+    );
+    assert_eq!(
+        claim["independence_evidence"],
+        serde_json::json!([iid]),
+        "the claim names the declared independence relation that backs it"
     );
 }
 
@@ -844,6 +940,22 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         ],
     );
     assert_success(&out, "witness attest receipt");
+    let wid = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "adversarial-review",
+            "--basis",
+            "the reviewer examined only the exported bundle, never the producing installation",
+        ],
+    );
+    assert_success(&out, "witness independence");
 
     let out = frf(
         &work,
@@ -897,4 +1009,122 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
     // closure against the source tree).
     let store = Store::new(work.path(ROOT));
     store.ensure_tree().unwrap();
+}
+
+/// The high-assurance reference-bounds test compares against the IMMUTABLE
+/// protocol constants, never the effective configuration: setting the SAME
+/// `FRF_EXEC_*` override on the run AND on the compile is the strongest
+/// bypass attempt (it used to satisfy `r.capture_bounds == host::capture_bounds()`
+/// when both sides saw the same hook), and it must refuse for EVERY override
+/// variable.
+#[test]
+fn high_assurance_refuses_observation_under_overridden_execution_bounds() {
+    // Safe non-reference values: different from the reference contract,
+    // within the protocol maxima, and generous enough that the sides still
+    // run normally (RLIMIT_NPROC is per-real-UID, so a too-small override
+    // could break forks on a busy machine and fail the run for the wrong
+    // reason).
+    let overrides: &[(&str, &str)] = &[
+        ("FRF_EXEC_TIMEOUT_MS", "30000"),
+        ("FRF_EXEC_MAX_BYTES", "8388608"),
+        ("FRF_EXEC_RLIMIT_AS_MB", "4096"),
+        ("FRF_EXEC_RLIMIT_CPU_S", "15"),
+        ("FRF_EXEC_RLIMIT_NOFILE", "512"),
+        ("FRF_EXEC_RLIMIT_NPROC", "8192"),
+    ];
+    for (var, value) in overrides {
+        let work = Workdir::new(&format!("policy-bypass-{var}"));
+        work.copy_canonical_tree();
+        let envs = [(*var, *value)];
+        // The full golden path under the override: the receipt records the
+        // EFFECTIVE (non-reference) bounds.
+        let (_run, receipt) = resolution_receipt_env(&work, &envs);
+
+        // Sensitivity coverage, the attestation, and the declared
+        // independence relation — everything high-assurance needs EXCEPT the
+        // reference execution contract.
+        let out = frf_root(
+            &work,
+            &envs,
+            &["court", "challenge", MANIFEST, "--operators", "exit-class"],
+        );
+        assert_success(&out, "court challenge (exit-class)");
+
+        let program = work.path("golden/witnesses/attest.py");
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::write(
+            &program,
+            "#!/usr/bin/env python3\n\
+import hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+req = json.loads(raw.decode(\"utf-8\"))\n\
+response = {\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
+    \"request_id\": request_id,\n\
+    \"indeterminate\": False,\n\
+    \"failure\": None,\n\
+    \"attestation\": {\n\
+        \"statement\": req[\"statement\"],\n\
+        \"outcome\": \"affirm\",\n\
+        \"detail\": \"independent confirmation of the receipt\",\n\
+    },\n\
+}\n\
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
+        )
+        .unwrap();
+        set_exec(&program);
+        let out = frf_root(
+            &work,
+            &envs,
+            &[
+                "witness",
+                "attest",
+                "receipt",
+                &receipt,
+                "--id",
+                "manual-review",
+                "--relation",
+                "independent-confirmation",
+                "--program",
+                "golden/witnesses/attest.py",
+                "--statement",
+                "the receipt binds a verified observation of the passing candidate",
+            ],
+        );
+        assert_success(&out, "witness attest receipt");
+        let wid = stdout(&out);
+        let out = frf_root(
+            &work,
+            &envs,
+            &[
+                "witness",
+                "independence",
+                &wid,
+                "--relation",
+                "separate-party",
+                "--basis",
+                "the attestation was made by an unaffiliated reviewer",
+            ],
+        );
+        assert_success(&out, "witness independence");
+
+        // The compile runs under the SAME override — the strongest bypass
+        // attempt — and must still refuse: the reference bounds are protocol
+        // constants, not the effective configuration.
+        let out = frf_root(
+            &work,
+            &envs,
+            &["claim", "compile", &receipt, "--policy", "high-assurance"],
+        );
+        assert!(
+            !out.status.success(),
+            "{var}={value} must not satisfy the reference-bounds test"
+        );
+        assert!(
+            stderr(&out).contains("non-reference capture bounds"),
+            "{var}={value}: stderr: {}",
+            stderr(&out)
+        );
+    }
 }
