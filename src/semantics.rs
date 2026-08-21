@@ -706,6 +706,70 @@ pub fn comparator_result_identity(c: &ComparatorResultContent) -> Result<String>
     hash_preimage("FRF/COMPARATOR-RESULT/v1", &doc)
 }
 
+/// The specification hash of a mutation relation: SHA-256 of
+/// `FRF/MUTATION-SPEC/v1` over (id, relation, relation_version). What kind of
+/// mutant is being asked for — not which program proposes it.
+pub fn mutation_specification_hash(
+    id: &str,
+    relation: &str,
+    relation_version: &str,
+) -> Result<String> {
+    hash_preimage(
+        "FRF/MUTATION-SPEC/v1",
+        &json!({"id": id, "relation": relation, "relation_version": relation_version}),
+    )
+}
+
+/// The content-addressable inputs of one mutation INVOCATION record.
+pub struct MutationInvocationContent<'a> {
+    pub operator: &'a str,
+    pub target_axis: &'a str,
+    pub request_cid: &'a str,
+    pub mutation_semantic_cid: &'a str,
+    pub mutation_implementation_artifact: &'a ArtifactIdentity,
+    pub execution_provenance: &'a RunnerIdentity,
+}
+
+/// The identity of a mutation invocation record: SHA-256 of
+/// `FRF/MUTATION-INVOCATION/v1` over its content.
+pub fn mutation_invocation_identity(c: &MutationInvocationContent) -> Result<String> {
+    let doc = json!({
+        "operator": c.operator,
+        "target_axis": c.target_axis,
+        "request_cid": c.request_cid,
+        "mutation_semantic_cid": c.mutation_semantic_cid,
+        "mutation_implementation_artifact":
+            serde_json::to_value(c.mutation_implementation_artifact)
+                .map_err(|e| FrfError::new(format!("cannot serialize the mutation implementation artifact: {e}")))?,
+        "execution_provenance":
+            serde_json::to_value(c.execution_provenance)
+                .map_err(|e| FrfError::new(format!("cannot serialize the execution provenance: {e}")))?,
+    });
+    hash_preimage("FRF/MUTATION-INVOCATION/v1", &doc)
+}
+
+/// The content-addressable inputs of one mutation RESULT record.
+pub struct MutationResultContent<'a> {
+    pub request_cid: &'a str,
+    pub response_cid: &'a str,
+    pub outcome: &'a str,
+    pub mutant_sha256: &'a str,
+    pub expected_affected_surfaces: &'a [String],
+}
+
+/// The identity of a mutation result record: SHA-256 of
+/// `FRF/MUTATION-RESULT/v1` over its content.
+pub fn mutation_result_identity(c: &MutationResultContent) -> Result<String> {
+    let doc = json!({
+        "request_cid": c.request_cid,
+        "response_cid": c.response_cid,
+        "outcome": c.outcome,
+        "mutant_sha256": c.mutant_sha256,
+        "expected_affected_surfaces": c.expected_affected_surfaces,
+    });
+    hash_preimage("FRF/MUTATION-RESULT/v1", &doc)
+}
+
 /// The content-addressable inputs of one normalizer INVOCATION record.
 pub struct NormalizerInvocationContent<'a> {
     pub normalizer_id: &'a str,

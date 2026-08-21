@@ -422,6 +422,21 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
                         needed.insert(format!("challenges/{cid}.json"));
                         let ch =
                             load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
+                        // An external mutation proposal's preserved evidence
+                        // travels with the challenge.
+                        if ch
+                            .get("mutation_invocation_id")
+                            .is_some_and(|v| v.is_string())
+                        {
+                            for f in [
+                                "request.json",
+                                "response.json",
+                                "invocation.json",
+                                "result.json",
+                            ] {
+                                needed.insert(format!("challenges/{cid}/mutation/{f}"));
+                            }
+                        }
                         let chrun = as_str(&ch["run"]).to_string();
                         if !seen_runs.contains(&chrun) && !runs.contains(&chrun) {
                             runs.push(chrun);

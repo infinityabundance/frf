@@ -14,6 +14,10 @@
 //! - **timing.latency**: the sides emit a duration; an EXTERNAL comparator
 //!   (the extension protocol) applies the declared envelope relation and
 //!   returns equivalent or divergent.
+//! - **external mutation providers** (spec/mutation.md): the court challenge
+//!   can seed domain defects through the extension protocol — a provider
+//!   PROPOSES a mutant candidate, the court runs it and independently
+//!   decides the verdicts.
 
 mod common;
 use common::*;
@@ -389,6 +393,204 @@ fn a_mode_divergence_is_preserved_alongside_a_content_divergence() {
         assert_eq!(verified.record().run, run);
         assert_eq!(verified.record().axis.as_str(), "filesystem.tree");
     }
+}
+
+/// The tree court manifest plus a declared EXTERNAL mutation provider
+/// (spec/mutation.md). The provider proposes a mutant candidate; the court
+/// runs the proposal and independently decides the verdicts.
+fn tree_manifest_with_mutation(provider_id: &str, program: &str, relation: &str) -> String {
+    format!(
+        "court:\n  id: fs-tree-build\n  question: >-\n    For the build spec in fixture family tree-build, does the candidate\n    produce the same filesystem tree as the reference?\n  falsifier: >-\n    The candidate's produced tree diverges from the reference's on some\n    path or file content.\n  authority: treegen-ref-1.0\n  candidate:\n    name: treegen-cand\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: treegen-cand.sh\n  fixture:\n    id: tree-spec.conf\n    path: frf/courts/fs-tree-build/fixtures/tree-spec.conf\n    arguments: [\"--spec\", \"{{fixture}}\", \"--out\", \"{{output}}\"]\n  admissibility_envelope:\n    fixture_family: tree-build\n    platforms: [\"x86_64-linux\"]\n    observables: [filesystem.tree]\n    normalizers: []\n    replay_scope: single-run\n  produce:\n    path: tree-out/\nmutations:\n    - id: {provider_id}\n      relation: {relation}\n      relation_version: \"1\"\n      target_axes: [filesystem.tree]\n      program: {program}\n"
+    )
+}
+
+/// The external mutation provider: reads the canonical request, rebuilds the
+/// reference artifact, and PROPOSES a mutant that replaces every produced
+/// file's content with a fixed marker — a domain mutation the built-in
+/// operators cannot express (it alters the produced TREE, not exit/stderr/
+/// stdout).
+const TREE_MUTATOR: &str = "#!/usr/bin/env python3\n\
+import base64, hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+req = json.loads(raw.decode(\"utf-8\"))\n\
+assert req[\"schema_version\"] == \"frf-mutation-request-v1\", req\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+ref = base64.b64decode(req[\"reference_artifact\"][\"contents_base64\"]).decode(\"utf-8\")\n\
+# Deterministic domain mutation: every produced file's content is replaced.\nmutant = ref.replace(\n\
+    \"printf '%s\\\\n' \\\"$content\\\" > \\\"$out/$path\\\"\",\n\
+    \"printf 'MUTATED-DEFECT\\\\n' > \\\"$out/$path\\\"\",\n\
+)\n\
+assert mutant != ref, \"the mutant must differ from the reference\"\n\
+response = {\n\
+    \"schema_version\": \"frf-mutation-response-v1\",\n\
+    \"request_id\": request_id,\n\
+    \"mutant_base64\": base64.b64encode(mutant.encode(\"utf-8\")).decode(\"ascii\"),\n\
+    \"expected_affected_surfaces\": [\"filesystem.tree\"],\n\
+    \"failure\": None,\n\
+}\n\
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n";
+
+#[test]
+fn an_external_mutation_provider_proposes_a_domain_mutant_and_the_court_decides() {
+    let work = Workdir::new("noncli-tree-mutation");
+    write_files(
+        &work,
+        &[
+            ("treegen-ref.sh", TREE_REF),
+            ("treegen-cand.sh", TREE_CAND),
+            ("treegen-mutate.py", TREE_MUTATOR),
+            (
+                "frf/courts/fs-tree-build/manifest.yaml",
+                &tree_manifest_with_mutation(
+                    "treegen-content-swap",
+                    "treegen-mutate.py",
+                    "produced-content-swap",
+                ),
+            ),
+            (
+                "frf/courts/fs-tree-build/fixtures/tree-spec.conf",
+                "src/main.c\t#include <stdio.h>\nREADME.md\t# treegen\nbuild/config\tDEBUG=0\n",
+            ),
+        ],
+    );
+    admit(&work, "treegen-ref.sh", "treegen-ref", "1.0");
+
+    // The external operator: the provider proposes; the court runs the
+    // proposal and must observe the seeded tree defect and only it.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            "frf/courts/fs-tree-build/manifest.yaml",
+            "--operators",
+            "treegen-content-swap",
+        ],
+    );
+    assert_success(&out, "external mutation challenge");
+    assert!(
+        stderr(&out).contains("court can see this defect class"),
+        "stderr: {}",
+        stderr(&out)
+    );
+
+    // The challenge record: operator = the provider id, verdicts rederive
+    // from the run, and the mutation evidence is bound + cross-verified.
+    let store = Store::new(work.path(ROOT));
+    let mut found = 0;
+    for entry in fs::read_dir(work.path("frf/challenges")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().to_string();
+        if !name.ends_with(".json") {
+            continue;
+        }
+        let id = name.trim_end_matches(".json").to_string();
+        let ch = store.load_challenge(&id).unwrap();
+        if ch.operator != "treegen-content-swap" {
+            continue;
+        }
+        found += 1;
+        assert_eq!(ch.target_axis, "filesystem.tree");
+        assert!(ch.saw_defect && ch.specificity_clean);
+        let inv_id = ch.mutation_invocation_id.expect("mutation invocation id");
+        let res_id = ch.mutation_result_id.expect("mutation result id");
+        // The preserved evidence is cross-verified on read: identities
+        // rederive, the response names its request, the mutant rehashes to
+        // the challenge's recorded mutant hash.
+        let evidence = store.load_mutation_evidence(&id).unwrap();
+        assert_eq!(evidence.invocation.invocation_id, inv_id);
+        assert_eq!(evidence.result.result_id, res_id);
+        assert_eq!(evidence.invocation.operator, "treegen-content-swap");
+        assert_eq!(evidence.invocation.target_axis, "filesystem.tree");
+        assert_eq!(evidence.result.mutant_sha256, ch.mutant_candidate_sha256);
+        assert_eq!(
+            evidence.result.expected_affected_surfaces,
+            vec!["filesystem.tree".to_string()]
+        );
+        // The mutant object is content-addressed like any candidate.
+        assert!(store
+            .object_path(&ch.mutant_candidate_sha256)
+            .unwrap()
+            .is_file());
+    }
+    assert_eq!(found, 1, "exactly one external-mutation challenge");
+}
+
+#[test]
+fn a_mutation_provider_that_does_not_move_the_target_axis_is_refused() {
+    // The extension PROPOSES; the court DECIDES. A provider whose mutant
+    // leaves the targeted surface unchanged is a blind challenge — the court
+    // observes no divergence, saw_defect rederives false, and the command
+    // refuses (the records remain as evidence).
+    let work = Workdir::new("noncli-tree-mutation-blind");
+    // A provider that mutates the generator's COMMENT: the script differs
+    // from the reference (a real proposal) but the produced TREE is
+    // byte-identical — the targeted surface does not move.
+    let blind_mutator = TREE_MUTATOR.replace(
+        "printf 'MUTATED-DEFECT\\\\n' > \\\"$out/$path\\\"",
+        "printf 'MUTATED-COMMENT\\\\n' > /dev/null; printf '%s\\\\n' \\\"$content\\\" > \\\"$out/$path\\\"",
+    );
+    write_files(
+        &work,
+        &[
+            ("treegen-ref.sh", TREE_REF),
+            ("treegen-cand.sh", TREE_CAND),
+            ("treegen-mutate.py", &blind_mutator),
+            (
+                "frf/courts/fs-tree-build/manifest.yaml",
+                &tree_manifest_with_mutation(
+                    "treegen-content-swap",
+                    "treegen-mutate.py",
+                    "produced-content-swap",
+                ),
+            ),
+            (
+                "frf/courts/fs-tree-build/fixtures/tree-spec.conf",
+                "src/main.c\t#include <stdio.h>\nREADME.md\t# treegen\nbuild/config\tDEBUG=0\n",
+            ),
+        ],
+    );
+    admit(&work, "treegen-ref.sh", "treegen-ref", "1.0");
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            "frf/courts/fs-tree-build/manifest.yaml",
+            "--operators",
+            "treegen-content-swap",
+        ],
+    );
+    assert!(!out.status.success(), "a blind challenge must be refused");
+    assert!(
+        stderr(&out).contains("observed NO divergence on the targeted axis"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    // The refusal record remains as evidence: the mutation was proposed and
+    // the court ran it — and could not see the (nonexistent) defect.
+    let store = Store::new(work.path(ROOT));
+    let mut found = 0;
+    for entry in fs::read_dir(work.path("frf/challenges")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().to_string();
+        if !name.ends_with(".json") {
+            continue;
+        }
+        let id = name.trim_end_matches(".json").to_string();
+        let ch = store.load_challenge(&id).unwrap();
+        if ch.operator != "treegen-content-swap" {
+            continue;
+        }
+        found += 1;
+        assert!(!ch.saw_defect, "the mutant did not move the tree surface");
+        let evidence = store.load_mutation_evidence(&id).unwrap();
+        assert_eq!(evidence.result.outcome, "proposed");
+    }
+    assert_eq!(found, 1, "the refusal record remains as evidence");
 }
 
 // ---------------------------------------------------------------------------

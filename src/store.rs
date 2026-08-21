@@ -292,6 +292,133 @@ impl Store {
         Ok(crate::model::ComparatorEvidence { invocation, result })
     }
 
+    /// `challenges/<id>/mutation/` — the preserved request + response +
+    /// invocation + result evidence of an external mutation proposal.
+    pub fn challenge_mutation_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_id("challenge", id)?;
+        Ok(self.root.join("challenges").join(id).join("mutation"))
+    }
+
+    /// Load + verify a mutation INVOCATION record: its identity rederives
+    /// from its own fields, and the preserved request document hashes to the
+    /// recorded `request_cid`.
+    pub fn load_mutation_invocation(&self, id: &str) -> Result<crate::model::MutationInvocation> {
+        let dir = self.challenge_mutation_dir(id)?;
+        let path = dir.join("invocation.json");
+        let bytes = fs::read(&path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        let inv: crate::model::MutationInvocation = serde_json::from_slice(&bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let rederived = crate::semantics::mutation_invocation_identity(
+            &crate::semantics::MutationInvocationContent {
+                operator: &inv.operator,
+                target_axis: &inv.target_axis,
+                request_cid: &inv.request_cid,
+                mutation_semantic_cid: &inv.mutation_semantic_cid,
+                mutation_implementation_artifact: &inv.mutation_implementation_artifact,
+                execution_provenance: &inv.execution_provenance,
+            },
+        )?;
+        if rederived != inv.invocation_id {
+            return Err(FrfError::new(format!(
+                "mutation invocation {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
+                &rederived[..16]
+            )));
+        }
+        let request_bytes = fs::read(dir.join("request.json")).map_err(|e| {
+            FrfError::new(format!(
+                "cannot read {}: {e}",
+                dir.join("request.json").display()
+            ))
+        })?;
+        if crate::host::sha256_bytes(&request_bytes) != inv.request_cid {
+            return Err(FrfError::new(format!(
+                "mutation invocation {id}: the preserved request does not hash to the recorded request_cid"
+            )));
+        }
+        Ok(inv)
+    }
+
+    /// Load + verify a mutation RESULT record: its identity rederives, and
+    /// the preserved response document hashes to the recorded `response_cid`.
+    pub fn load_mutation_result(&self, id: &str) -> Result<crate::model::MutationResult> {
+        let dir = self.challenge_mutation_dir(id)?;
+        let path = dir.join("result.json");
+        let bytes = fs::read(&path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        let res: crate::model::MutationResult = serde_json::from_slice(&bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let rederived =
+            crate::semantics::mutation_result_identity(&crate::semantics::MutationResultContent {
+                request_cid: &res.request_cid,
+                response_cid: &res.response_cid,
+                outcome: &res.outcome,
+                mutant_sha256: &res.mutant_sha256,
+                expected_affected_surfaces: &res.expected_affected_surfaces,
+            })?;
+        if rederived != res.result_id {
+            return Err(FrfError::new(format!(
+                "mutation result {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
+                &rederived[..16]
+            )));
+        }
+        let response_bytes = fs::read(dir.join("response.json")).map_err(|e| {
+            FrfError::new(format!(
+                "cannot read {}: {e}",
+                dir.join("response.json").display()
+            ))
+        })?;
+        if crate::host::sha256_bytes(&response_bytes) != res.response_cid {
+            return Err(FrfError::new(format!(
+                "mutation result {id}: the preserved response does not hash to the recorded response_cid"
+            )));
+        }
+        Ok(res)
+    }
+
+    /// Load + cross-verify a mutation proposal's invocation AND result
+    /// evidence, and the response's binding to its request: the result must
+    /// answer the invocation's exact request, the response must
+    /// cryptographically name it, and the proposed mutant must rehash to the
+    /// recorded content address.
+    pub fn load_mutation_evidence(&self, id: &str) -> Result<crate::model::MutationEvidence> {
+        let invocation = self.load_mutation_invocation(id)?;
+        let result = self.load_mutation_result(id)?;
+        if result.request_cid != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "mutation evidence {id}: the result answers a different request than the invocation"
+            )));
+        }
+        let dir = self.challenge_mutation_dir(id)?;
+        let response: crate::model::MutationResponse =
+            serde_json::from_slice(&fs::read(dir.join("response.json")).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "cannot parse {}: {e}",
+                    dir.join("response.json").display()
+                ))
+            })?;
+        if response.request_id != invocation.request_cid {
+            return Err(FrfError::new(format!(
+                "mutation evidence {id}: the response does not name the request it answers"
+            )));
+        }
+        if let Some(b64) = &response.mutant_base64 {
+            let bytes = crate::ext::unb64(b64, "mutation response mutant")?;
+            if crate::host::sha256_bytes(&bytes) != result.mutant_sha256 {
+                return Err(FrfError::new(format!(
+                    "mutation evidence {id}: the proposed mutant does not rehash to the recorded content address"
+                )));
+            }
+        }
+        Ok(crate::model::MutationEvidence { invocation, result })
+    }
+
     /// `captures/<run>/normalizer/<id>/<side>/` — the invocation evidence
     /// directory for one normalizer applied to one side (request.json,
     /// response.json, invocation.json, result.json). The id and side are
