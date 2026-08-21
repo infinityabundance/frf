@@ -179,4 +179,8 @@ compiled claim CARRIES U (content-addressed):
   run (the verifier rehashes every object the absence search depended on).
 
 Prose is ONE renderer of the IR; `--json` emits the same IR canonically
-(RFC 8785).
+(RFC 8785). `frf claim render RECEIPT --format prose|json|sarif|ci|badge`
+presents a COMPILED claim in other voices — a SARIF 2.1.0 document (the
+admissible claim as a `none`-level result, each carried residual as
+`note`/`error`), a CI gate document, or a badge — all pure, deterministic
+functions of the IR, never a new source of epistemic meaning.
