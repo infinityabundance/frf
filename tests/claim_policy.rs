@@ -148,7 +148,7 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v6");
+    assert_eq!(claim["schema_version"], "frf-claim-v7");
     assert_eq!(claim["policy"], "sensitivity-backed");
     assert_eq!(claim["observable_scope"], serde_json::json!(["exit"]));
     let capability = claim["capability"].as_array().unwrap();
@@ -243,7 +243,7 @@ raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 req = json.loads(raw.decode(\"utf-8\"))\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
@@ -368,7 +368,7 @@ fn multi_premise_claim_compiles_under_the_region_algebra() {
         &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v6");
+    assert_eq!(claim["schema_version"], "frf-claim-v7");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt, receipt2]),
@@ -555,7 +555,7 @@ raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 req = json.loads(raw.decode(\"utf-8\"))\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
@@ -590,6 +590,26 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
     );
     assert_success(&out, "witness attest receipt");
 
+    // The DECLARED independence relation (spec/witness.md §6): an operator
+    // records which independence claim the attestation rests on and why.
+    let wid = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "separate-party",
+            "--basis",
+            "the attestation was made by an unaffiliated reviewer against the exported bundle",
+        ],
+    );
+    assert_success(&out, "witness independence");
+    let iid = stdout(&out);
+
     let out = frf(
         &work,
         &[
@@ -611,6 +631,153 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
     assert_eq!(claim["replay_profile"], "frf-exec-linux-v1");
     assert_eq!(claim["witness_statements"].as_array().unwrap().len(), 1);
     assert_eq!(claim["capability"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        claim["independence_evidence"],
+        serde_json::json!([iid]),
+        "the claim carries the declared independence evidence"
+    );
+    // The record is verified on read: identity rederives, the bound
+    // statement verifies.
+    let store = Store::new(work.path(ROOT));
+    store.load_independence(&iid).unwrap();
+}
+
+#[test]
+fn the_bundle_carries_the_independence_evidence_and_verifies() {
+    let work = Workdir::new("policy-independence-bundle");
+    work.copy_canonical_tree();
+    let (_run, receipt) = resolution_receipt(&work);
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            MANIFEST,
+            "--operators",
+            "exit-class",
+        ],
+    );
+    assert_success(&out, "court challenge");
+
+    let program = work.path("golden/witnesses/attest.py");
+    fs::create_dir_all(program.parent().unwrap()).unwrap();
+    fs::write(
+        &program,
+        "#!/usr/bin/env python3\n\
+import hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+req = json.loads(raw.decode(\"utf-8\"))\n\
+response = {\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
+    \"request_id\": request_id,\n\
+    \"indeterminate\": False,\n\
+    \"failure\": None,\n\
+    \"attestation\": {\n\
+        \"statement\": req[\"statement\"],\n\
+        \"outcome\": \"affirm\",\n\
+        \"detail\": \"independent confirmation of the receipt\",\n\
+    },\n\
+}\n\
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
+    )
+    .unwrap();
+    set_exec(&program);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "attest",
+            "receipt",
+            &receipt,
+            "--id",
+            "manual-review",
+            "--relation",
+            "independent-confirmation",
+            "--program",
+            "golden/witnesses/attest.py",
+            "--statement",
+            "the receipt binds a verified observation of the passing candidate",
+        ],
+    );
+    assert_success(&out, "witness attest receipt");
+    let wid = stdout(&out);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "unaffiliated-channel",
+            "--basis",
+            "the reviewer examined only the exported bundle, never the producing installation",
+        ],
+    );
+    assert_success(&out, "witness independence");
+    let iid = stdout(&out);
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "high-assurance",
+        ],
+    );
+    assert_success(&out, "high-assurance claim");
+
+    // Export: the closure carries the independence record AND the witness
+    // program object the claim's evidence refs point at.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "bundle",
+            "export",
+            &receipt,
+            "--output",
+            "portable-independence.frf",
+        ],
+    );
+    assert_success(&out, "bundle export (independence)");
+    let bundle = work.path("portable-independence.frf");
+    assert!(
+        bundle.join(format!("independence/{iid}.json")).is_file(),
+        "the bundle must carry the independence record"
+    );
+    assert!(
+        fs::read_dir(bundle.join("witnesses")).unwrap().count() >= 1,
+        "the bundle must carry the witness statement"
+    );
+    let stmt = {
+        let store = Store::new(work.path(ROOT));
+        store.load_witness_statement(&wid).unwrap()
+    };
+    if let Some(artifact) = &stmt.witness_implementation.artifact {
+        assert!(
+            bundle
+                .join(format!("objects/sha256/{}", artifact.sha256))
+                .is_file(),
+            "the bundle must carry the witness program object"
+        );
+    }
+    // The independent verifiers agree from the bundle alone (identity
+    // rederives, the independence record binds a carried witness statement).
+    let out = frf(&work, &["bundle", "verify", "portable-independence.frf"]);
+    assert_success(&out, "bundle verify (independence)");
 }
 
 #[test]
@@ -643,7 +810,7 @@ raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 req = json.loads(raw.decode(\"utf-8\"))\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\

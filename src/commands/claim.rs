@@ -471,6 +471,27 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
     } else {
         Vec::new()
     };
+    // The declared INDEPENDENCE evidence bound to those attestations (v7):
+    // every verified IndependenceEvidence record whose witness statement the
+    // claim carries. The claim documents WHICH independence relations were
+    // declared for its witnesses — a different executable hash is never by
+    // itself independence, and the carried records are the declared claims
+    // with their bases (verified on load: identity rederives, the bound
+    // statement verifies).
+    let independence_evidence = if witness_required {
+        let mut all = Vec::new();
+        for id in store.independence_ids()? {
+            let rec = store.load_independence(&id)?;
+            if witness_statements.contains(&rec.witness_statement) {
+                all.push(id);
+            }
+        }
+        all.sort();
+        all.dedup();
+        all
+    } else {
+        Vec::new()
+    };
     let replay_profile = if policy == CLAIM_POLICY_HIGH_ASSURANCE {
         // High assurance requires the exact-replay contract: every premise's
         // observation was made under the reference profile with the reference
@@ -563,6 +584,7 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         policy: policy.to_string(),
         capability,
         witness_statements,
+        independence_evidence,
         replay_profile,
         positive: positive.clone(),
         non_claims: sentences::non_claims(family),

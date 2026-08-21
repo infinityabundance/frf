@@ -242,6 +242,35 @@ pub enum WitnessCmd {
         #[arg(long, value_name = "TEXT")]
         statement: String,
     },
+    /// Declare the independence relation of a witness statement
+    /// (spec/witness.md §6): an operator records an independence CLAIM about
+    /// a verified attestation — which relation is claimed (`different-
+    /// implementation`, `separate-party`, `unaffiliated-channel`,
+    /// `adversarial-review`) and the basis it rests on. The claim is
+    /// recorded as a content-addressed IndependenceEvidence record; FRF
+    /// verifies the evidence structure, never the social truth of
+    /// independence — a different executable hash is never by itself
+    /// evidence of independent observation, the DECLARATION is the evidence
+    Independence {
+        /// Witness statement id (printed by `frf witness attest`)
+        statement_id: String,
+        /// The declared independence relation (a closed set)
+        #[arg(
+            long,
+            value_name = "different-implementation|separate-party|unaffiliated-channel|adversarial-review"
+        )]
+        relation: String,
+        /// The relation version (part of the semantic identity)
+        #[arg(long, value_name = "VERSION", default_value = "v1")]
+        relation_version: String,
+        /// WHY the relation is claimed — the evidence the claim rests on
+        /// (mandatory)
+        #[arg(long, value_name = "TEXT")]
+        basis: String,
+        /// Optional detail
+        #[arg(long, value_name = "TEXT")]
+        detail: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

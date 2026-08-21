@@ -647,6 +647,17 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				if str(subj, "kind") != "receipt" || str(subj, "id") != premID {
 					continue
 				}
+				// The statement's identity rederives from its own fields (the
+				// witness IDENTITY — the stable WHO — included), and the
+				// identity itself rederives from the semantic + implementation.
+				id, err := witnessStatementIdentity(stmt)
+				if err != nil || id != wid {
+					fail("claim %s: witness %s is not content-addressed", receiptID, wid)
+				}
+				widID, err := witnessIdentity(obj(recVal(stmt, "witness_semantic")), obj(recVal(stmt, "witness_implementation")))
+				if err != nil || widID != str(stmt, "witness_identity") {
+					fail("claim %s: witness %s identity does not rederive", receiptID, wid)
+				}
 				for _, f := range []string{"request.json", "response.json"} {
 					b := readFile(safeJoin(bundle, "witnesses/"+wid+"/"+f))
 					cidField := "request_cid"
@@ -663,6 +674,38 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 			}
 			if !affirmedThis {
 				fail("claim %s: no named witness affirms premise receipt %s", receiptID, premID)
+			}
+		}
+		// The declared INDEPENDENCE evidence the claim carries: every record
+		// verifies (identity rederives, the relation is closed, the spec hash
+		// rederives) and binds one of the claim's own witness statements.
+		for _, iidV := range arr(recVal(claim, "independence_evidence")) {
+			iid := iidV.(string)
+			rec := obj(loadEvidence(safeJoin(bundle, "independence/"+iid+".json")))
+			recID, err := independenceIdentity(rec)
+			if err != nil || recID != iid {
+				fail("claim %s: independence record %s is not content-addressed", receiptID, iid)
+			}
+			relation := str(rec, "relation")
+			switch relation {
+			case "different-implementation", "separate-party", "unaffiliated-channel", "adversarial-review":
+			default:
+				fail("claim %s: independence record %s names unknown relation %s", receiptID, iid, relation)
+			}
+			spec, err := independenceSpecHash(relation, str(rec, "relation_version"))
+			if err != nil || spec != str(rec, "specification_hash") {
+				fail("claim %s: independence record %s spec hash does not rederive", receiptID, iid)
+			}
+			stmtID := str(rec, "witness_statement")
+			inClaim := false
+			for _, w := range witnesses {
+				if w == stmtID {
+					inClaim = true
+					break
+				}
+			}
+			if !inClaim {
+				fail("claim %s: independence record %s binds a witness statement the claim does not carry", receiptID, iid)
 			}
 		}
 	}

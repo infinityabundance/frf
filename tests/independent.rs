@@ -232,7 +232,7 @@ fn both_verifiers_agree_on_a_multi_premise_claim_bundle() {
         &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt_final}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v6");
+    assert_eq!(claim["schema_version"], "frf-claim-v7");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt_final, receipt2])

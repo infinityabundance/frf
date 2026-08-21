@@ -1146,6 +1146,20 @@ fn witness_statements_are_self_consistent() {
         // names its request, and the attestation names the statement.
         let stmt = store.load_witness_statement(&id).unwrap();
         assert_eq!(stmt.id, id, "the filename must be the content address");
+        // v3: the witness IDENTITY (the stable WHO) rederives from the
+        // relation's specification and the program's bytes + interpreter.
+        assert_eq!(
+            frf::semantics::witness_identity(&stmt.witness_semantic, &stmt.witness_implementation)
+                .unwrap(),
+            stmt.witness_identity,
+            "the witness identity must rederive"
+        );
+        if let Some(authority) = &stmt.authority {
+            assert!(
+                frf::model::WitnessAuthority::KINDS.contains(&authority.kind.as_str()),
+                "declared authority kind is closed"
+            );
+        }
         assert!(
             matches!(stmt.subject.kind.as_str(), "run" | "receipt" | "residual"),
             "witness subject kind"
@@ -1178,7 +1192,45 @@ fn witness_statements_are_self_consistent() {
     }
     assert!(
         found >= 1,
-        "the golden path must leave at least one witness"
+        "the golden path must leave at least one witness statement"
+    );
+}
+
+/// independence/ — the DECLARED independence relations (spec/witness.md §6):
+/// every record rederives its identity, binds a verified witness statement,
+/// and carries the statement's witness identity + subject verbatim.
+#[test]
+fn independence_records_are_self_consistent() {
+    let store = store();
+    let dir = store.root.join("independence");
+    let mut found = 0;
+    if !dir.is_dir() {
+        return;
+    }
+    for entry in fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let id = name.trim_end_matches(".json").to_string();
+        // The verified loader rehashes: identity rederives, the bound
+        // statement verifies, witness identity + subject match the statement.
+        let rec = store.load_independence(&id).unwrap();
+        assert_eq!(rec.id, id);
+        assert!(
+            frf::model::INDEPENDENCE_RELATIONS.contains(&rec.relation.as_str()),
+            "the relation is closed"
+        );
+        assert_eq!(
+            frf::semantics::independence_specification_hash(&rec.relation, &rec.relation_version)
+                .unwrap(),
+            rec.specification_hash,
+            "the independence spec hash must rederive"
+        );
+        assert!(!rec.basis.trim().is_empty(), "a basis is mandatory");
+        found += 1;
+    }
+    assert!(
+        found >= 1,
+        "the golden path must leave at least one independence record"
     );
 }
 

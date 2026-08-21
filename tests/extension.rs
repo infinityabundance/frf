@@ -627,7 +627,7 @@ req = json.loads(raw.decode(\"utf-8\"))\n\
 assert req[\"schema_version\"] == \"frf-witness-request-v1\", req\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
@@ -751,7 +751,7 @@ import hashlib, json, sys\n\
 raw = sys.stdin.buffer.read()\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 response = {\n\
-    \"schema_version\": \"frf-witness-response-v2\",\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
     \"request_id\": request_id,\n\
     \"indeterminate\": False,\n\
     \"failure\": None,\n\
@@ -792,4 +792,280 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
             .exists(),
         "no statement for a declined attestation"
     );
+}
+
+#[test]
+fn the_independence_relation_is_declared_evidence_not_derived() {
+    // spec/witness.md §6: independence is a DECLARED relation. The statement
+    // carries the witness IDENTITY (the stable WHO); the operator declares
+    // the independence claim with its basis; FRF verifies the evidence
+    // structure — never the social truth of independence.
+    let work = Workdir::new("ext-independence");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let _run = run_court(&work);
+    write_program(&work, "golden/witnesses/attest.py", WITNESS_PY);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "attest",
+            "residual",
+            "cli-exit-0001",
+            "--id",
+            "manual-review",
+            "--relation",
+            "independent-confirmation",
+            "--program",
+            "golden/witnesses/attest.py",
+            "--statement",
+            "the candidate diverges on the malformed fixture (witnessed)",
+        ],
+    );
+    assert_success(&out, "witness attest");
+    let wid = stdout(&out);
+    let store = Store::new(work.path(ROOT));
+    let stmt = store.load_witness_statement(&wid).unwrap();
+    // The witness identity (the stable WHO) rederives from the relation's
+    // specification and the program's bytes + interpreter chain.
+    assert_eq!(
+        frf::semantics::witness_identity(&stmt.witness_semantic, &stmt.witness_implementation)
+            .unwrap(),
+        stmt.witness_identity
+    );
+
+    // An unknown relation is refused.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "totally-independent",
+            "--basis",
+            "nope",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("unknown independence relation"));
+
+    // A missing basis is refused.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "separate-party",
+            "--basis",
+            "   ",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("needs a basis"));
+
+    // The declared relation: content-addressed, bound to the statement.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "independence",
+            &wid,
+            "--relation",
+            "separate-party",
+            "--basis",
+            "the attestation was made by an unaffiliated reviewer",
+            "--detail",
+            "reviewed the exported bundle",
+        ],
+    );
+    assert_success(&out, "witness independence");
+    let iid = stdout(&out);
+    assert_eq!(iid.len(), 64);
+    let rec = store.load_independence(&iid).unwrap();
+    assert_eq!(rec.witness_statement, wid);
+    assert_eq!(rec.witness_identity, stmt.witness_identity);
+    assert_eq!(rec.subject, stmt.subject);
+    assert_eq!(rec.relation, "separate-party");
+    assert_eq!(
+        rec.specification_hash,
+        frf::semantics::independence_specification_hash("separate-party", "v1").unwrap()
+    );
+    // The typed evidence refs bind the statement + the program object.
+    assert!(rec
+        .evidence_refs
+        .iter()
+        .any(|r| r.role == "witness-statement" && r.cid == wid));
+    assert!(rec
+        .evidence_refs
+        .iter()
+        .any(|r| r.role == "witness-implementation"
+            && r.cid == stmt.witness_implementation.implementation_hash));
+    // The record is idempotent: writing it again verifies the existing one.
+    store.write_independence(&rec).unwrap();
+    // A record bound to a statement that does not exist is refused on load.
+    let forged = frf::model::IndependenceEvidence {
+        schema_version: frf::model::SCHEMA_INDEPENDENCE.to_string(),
+        id: String::new(),
+        subject: rec.subject.clone(),
+        witness_statement: "f".repeat(64),
+        witness_identity: rec.witness_identity.clone(),
+        relation: rec.relation.clone(),
+        relation_version: rec.relation_version.clone(),
+        specification_hash: rec.specification_hash.clone(),
+        basis: rec.basis.clone(),
+        detail: rec.detail.clone(),
+        evidence_refs: rec.evidence_refs.clone(),
+        created_by: rec.created_by.clone(),
+    };
+    let forged_id = frf::semantics::independence_identity(&frf::semantics::IndependenceContent {
+        subject: &forged.subject,
+        witness_statement: &forged.witness_statement,
+        witness_identity: &forged.witness_identity,
+        relation: &forged.relation,
+        relation_version: &forged.relation_version,
+        specification_hash: &forged.specification_hash,
+        basis: &forged.basis,
+        detail: &forged.detail,
+        evidence_refs: &forged.evidence_refs,
+    })
+    .unwrap();
+    let path = store.independence_path(&forged_id).unwrap();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, frf::canon::canonical(&forged).unwrap()).unwrap();
+    assert!(
+        store.load_independence(&forged_id).is_err(),
+        "an independence record bound to a missing statement must refuse"
+    );
+}
+
+#[test]
+fn a_declared_authority_is_recorded_verbatim_and_kind_is_closed() {
+    let work = Workdir::new("ext-witness-authority");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let _run = run_court(&work);
+    write_program(
+        &work,
+        "golden/witnesses/authority.py",
+        "#!/usr/bin/env python3\n\
+import hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+response = {\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
+    \"request_id\": request_id,\n\
+    \"indeterminate\": False,\n\
+    \"failure\": None,\n\
+    \"authority\": {\"id\": \"independent-review-board\", \"kind\": \"organization\", \"detail\": \"chartered reviewer pool\"},\n\
+    \"attestation\": {\n\
+        \"statement\": \"the candidate diverges (witnessed)\",\n\
+        \"outcome\": \"affirm\",\n\
+        \"detail\": \"board review\",\n\
+    },\n\
+}\n\
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
+    );
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "attest",
+            "residual",
+            "cli-exit-0001",
+            "--id",
+            "board-review",
+            "--relation",
+            "independent-confirmation",
+            "--program",
+            "golden/witnesses/authority.py",
+            "--statement",
+            "the candidate diverges (witnessed)",
+        ],
+    );
+    assert_success(&out, "witness attest with authority");
+    let wid = stdout(&out);
+    let store = Store::new(work.path(ROOT));
+    let stmt = store.load_witness_statement(&wid).unwrap();
+    let authority = stmt
+        .authority
+        .clone()
+        .expect("the declared authority is recorded");
+    assert_eq!(authority.id, "independent-review-board");
+    assert_eq!(authority.kind, "organization");
+    // The authority is part of the statement's identity (a different
+    // declaration is a different statement).
+    let mut without = stmt.clone();
+    without.authority = None;
+    assert_ne!(
+        frf::semantics::witness_statement_identity(&frf::semantics::WitnessStatementContent {
+            subject: &without.subject,
+            witness_semantic: &without.witness_semantic,
+            witness_implementation: &without.witness_implementation,
+            witness_identity: &without.witness_identity,
+            authority: &without.authority,
+            statement: &without.statement,
+            attestation: &without.attestation,
+            request_cid: &without.request_cid,
+            response_cid: &without.response_cid,
+        })
+        .unwrap(),
+        wid
+    );
+
+    // A witness declaring an unknown authority kind is refused.
+    write_program(
+        &work,
+        "golden/witnesses/bad-authority.py",
+        "#!/usr/bin/env python3\n\
+import hashlib, json, sys\n\
+raw = sys.stdin.buffer.read()\n\
+request_id = hashlib.sha256(raw).hexdigest()\n\
+response = {\n\
+    \"schema_version\": \"frf-witness-response-v3\",\n\
+    \"request_id\": request_id,\n\
+    \"indeterminate\": False,\n\
+    \"failure\": None,\n\
+    \"authority\": {\"id\": \"x\", \"kind\": \"royal-society\"},\n\
+    \"attestation\": {\n\
+        \"statement\": \"anything\",\n\
+        \"outcome\": \"affirm\",\n\
+        \"detail\": \"x\",\n\
+    },\n\
+}\n\
+json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
+    );
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "witness",
+            "attest",
+            "residual",
+            "cli-exit-0001",
+            "--id",
+            "bad-board",
+            "--relation",
+            "independent-confirmation",
+            "--program",
+            "golden/witnesses/bad-authority.py",
+            "--statement",
+            "anything",
+        ],
+    );
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("declared authority kind"));
 }

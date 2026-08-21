@@ -912,15 +912,41 @@ pub struct WitnessStatementContent<'a> {
     pub subject: &'a WitnessSubject,
     pub witness_semantic: &'a WitnessSemantic,
     pub witness_implementation: &'a WitnessImplementation,
+    pub witness_identity: &'a str,
+    pub authority: &'a Option<WitnessAuthority>,
     pub statement: &'a str,
     pub attestation: &'a WitnessAttestation,
     pub request_cid: &'a str,
     pub response_cid: &'a str,
 }
 
+/// The WITNESS IDENTITY — the stable WHO behind an attestation: SHA-256 of
+/// `FRF/WITNESS-IDENTITY/v1` over the relation's specification and the
+/// program's exact bytes + interpreter chain. Two attestations with the same
+/// identity were made by the same instrument; a different identity is a
+/// different instrument, and nothing more.
+pub fn witness_identity(
+    semantic: &WitnessSemantic,
+    implementation: &WitnessImplementation,
+) -> Result<String> {
+    let doc = json!({
+        "specification_hash": semantic.specification_hash,
+        "implementation_hash": implementation.implementation_hash,
+        "interpreter": implementation
+            .artifact
+            .as_ref()
+            .and_then(|a| a.interpreter.as_ref())
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|e| FrfError::new(format!("cannot serialize the interpreter identity: {e}")))?,
+    });
+    hash_preimage("FRF/WITNESS-IDENTITY/v1", &doc)
+}
+
 /// The identity of a witness statement record: SHA-256 of
 /// `FRF/WITNESS-STATEMENT/v1` over its content. Rederivable from the record's
-/// own fields.
+/// own fields. v3: the witness identity and the declared authority enter the
+/// preimage.
 pub fn witness_statement_identity(c: &WitnessStatementContent) -> Result<String> {
     let doc = json!({
         "subject": serde_json::to_value(c.subject)
@@ -929,6 +955,8 @@ pub fn witness_statement_identity(c: &WitnessStatementContent) -> Result<String>
             .map_err(|e| FrfError::new(format!("cannot serialize the witness semantic: {e}")))?,
         "witness_implementation": serde_json::to_value(c.witness_implementation)
             .map_err(|e| FrfError::new(format!("cannot serialize the witness implementation: {e}")))?,
+        "witness_identity": c.witness_identity,
+        "authority": c.authority,
         "statement": c.statement,
         "attestation": serde_json::to_value(c.attestation)
             .map_err(|e| FrfError::new(format!("cannot serialize the attestation: {e}")))?,
@@ -936,6 +964,48 @@ pub fn witness_statement_identity(c: &WitnessStatementContent) -> Result<String>
         "response_cid": c.response_cid,
     });
     hash_preimage("FRF/WITNESS-STATEMENT/v1", &doc)
+}
+
+/// The specification hash of an INDEPENDENCE relation: SHA-256 of
+/// `FRF/INDEPENDENCE-SPEC/v1` over `{relation, relation_version}`.
+pub fn independence_specification_hash(relation: &str, relation_version: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/INDEPENDENCE-SPEC/v1",
+        &json!({ "relation": relation, "relation_version": relation_version }),
+    )
+}
+
+/// The content-addressable inputs of one independence evidence record.
+pub struct IndependenceContent<'a> {
+    pub subject: &'a WitnessSubject,
+    pub witness_statement: &'a str,
+    pub witness_identity: &'a str,
+    pub relation: &'a str,
+    pub relation_version: &'a str,
+    pub specification_hash: &'a str,
+    pub basis: &'a str,
+    pub detail: &'a Option<String>,
+    pub evidence_refs: &'a [EvidenceRef],
+}
+
+/// The identity of an independence evidence record: SHA-256 of
+/// `FRF/INDEPENDENCE/v1` over its content. Rederivable from the record's own
+/// fields.
+pub fn independence_identity(c: &IndependenceContent) -> Result<String> {
+    let doc = json!({
+        "subject": serde_json::to_value(c.subject)
+            .map_err(|e| FrfError::new(format!("cannot serialize the subject: {e}")))?,
+        "witness_statement": c.witness_statement,
+        "witness_identity": c.witness_identity,
+        "relation": c.relation,
+        "relation_version": c.relation_version,
+        "specification_hash": c.specification_hash,
+        "basis": c.basis,
+        "detail": c.detail,
+        "evidence_refs": serde_json::to_value(c.evidence_refs)
+            .map_err(|e| FrfError::new(format!("cannot serialize the evidence refs: {e}")))?,
+    });
+    hash_preimage("FRF/INDEPENDENCE/v1", &doc)
 }
 
 /// The first semantic dimension on which two captures differ, phrased for an
