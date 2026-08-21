@@ -45,6 +45,29 @@ func recordContentIdentity(record jcs.Value) (string, error) {
 	return jcs.Sha256Hex([]byte(json)), nil
 }
 
+// claimIdentity — the content address of a compiled claim: FRF/CLAIM/v1
+// over the canonical document minus the id field (the same formula as the
+// reference engine, over the Go verifier's own strict parser + JCS
+// encoder). The claim is an immutable protocol object — the same receipt
+// under a different universe or policy is a different claim id.
+func claimIdentity(claim jcs.Value) (string, error) {
+	clone := *obj(claim)
+	var kept []string
+	var keptValues []jcs.Value
+	for i, k := range clone.Keys {
+		if k != "id" {
+			kept = append(kept, k)
+			keptValues = append(keptValues, clone.Values[i])
+		}
+	}
+	doc := &jcs.Object{Keys: kept, Values: keptValues}
+	json, err := jcs.Canonical(doc)
+	if err != nil {
+		return "", err
+	}
+	return jcs.Sha256Hex([]byte("FRF/CLAIM/v1\n" + json)), nil
+}
+
 // witnessIdentity: FRF/WITNESS-IDENTITY/v1 over {specification_hash,
 // implementation_hash, interpreter} — the stable WHO behind an attestation.
 func witnessIdentity(semantic, implementation *jcs.Object) (string, error) {

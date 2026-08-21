@@ -221,34 +221,54 @@ func verifyBundle(bundle string) ClaimIR {
 	//     residuals' compared projections.
 	verifyTrajectoryEvidence(bundle, body, run)
 
-	// 5. The claim, when the bundle carries one: its knowledge snapshot
-	//    rederives and its blockers derive from the bundle's universe.
+	// 5. The claims bound to the receipt, when the bundle carries them:
+	//    resolved through the claims/by-receipt index. Each claim's id must
+	//    rederive (FRF/CLAIM/v1 over the canonical document minus the id — a
+	//    hand-written or forged claim file is refused), its knowledge
+	//    snapshot rederives, and its blockers derive from the bundle's
+	//    universe.
 	var ir ClaimIR
-	claimRel := "claims/" + receiptID + ".json"
-	if _, ok := inventory[claimRel]; ok {
-		claim := loadEvidence(safeJoin(bundle, claimRel))
-		snapshot := obj(recVal(obj(claim), "knowledge_snapshot"))
-		expectedCID, err := knowledgeSnapshotIdentity(snapshot)
-		if err != nil || expectedCID != str(snapshot, "cid") {
-			fail("claim %s: the knowledge snapshot cid does not rederive", receiptID)
-		}
-		for _, h := range arr(recVal(snapshot, "residual_heads")) {
-			ho := obj(h)
-			record := obj(loadEvidence(safeJoin(bundle, "residuals/"+str(ho, "id")+".json")))
-			rcid, err := recordContentIdentity(record)
-			if err != nil || rcid != str(ho, "record_cid") {
-				fail("claim %s: snapshot head %s record_cid does not rederive", receiptID, str(ho, "id"))
+	claimIndex := safeJoin(bundle, "claims/by-receipt/"+receiptID)
+	claimIDs := sortedNames(claimIndex)
+	if len(claimIDs) > 0 {
+		for _, claimID := range claimIDs {
+			if len(claimID) != 64 {
+				fail("claim index %s: %s is not a claim id", receiptID, claimID)
 			}
-			fp, err := residualFingerprint(record)
-			if err != nil || fp != str(ho, "fingerprint") {
-				fail("claim %s: snapshot head %s fingerprint does not rederive", receiptID, str(ho, "id"))
+			claimRel := "claims/" + claimID + ".json"
+			claim := loadEvidence(safeJoin(bundle, claimRel))
+			// The claim id rederives: FRF/CLAIM/v1 over the canonical
+			// document minus the id field.
+			claimCID, err := claimIdentity(claim)
+			if err != nil || claimCID != claimID {
+				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
+			if str(obj(claim), "schema_version") != "frf-claim-v8" {
+				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
+			}
+			snapshot := obj(recVal(obj(claim), "knowledge_snapshot"))
+			expectedCID, err := knowledgeSnapshotIdentity(snapshot)
+			if err != nil || expectedCID != str(snapshot, "cid") {
+				fail("claim %s: the knowledge snapshot cid does not rederive", claimID)
+			}
+			for _, h := range arr(recVal(snapshot, "residual_heads")) {
+				ho := obj(h)
+				record := obj(loadEvidence(safeJoin(bundle, "residuals/"+str(ho, "id")+".json")))
+				rcid, err := recordContentIdentity(record)
+				if err != nil || rcid != str(ho, "record_cid") {
+					fail("claim %s: snapshot head %s record_cid does not rederive", claimID, str(ho, "id"))
+				}
+				fp, err := residualFingerprint(record)
+				if err != nil || fp != str(ho, "fingerprint") {
+					fail("claim %s: snapshot head %s fingerprint does not rederive", claimID, str(ho, "id"))
+				}
+			}
+			// The claim's admission policy re-derives from the bundle alone:
+			// the capability/witness evidence is referenced by content, never
+			// trusted from the claim file.
+			verifyClaimPolicy(bundle, obj(claim), body, receiptID)
 		}
 		ir = claimIR(body, bundle)
-		// The claim's admission policy re-derives from the bundle alone: the
-		// capability/witness evidence is referenced by content, never trusted
-		// from the claim file.
-		verifyClaimPolicy(bundle, obj(claim), body, receiptID)
 	} else {
 		ir = claimIR(body, bundle)
 	}

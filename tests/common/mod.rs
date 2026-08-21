@@ -113,6 +113,55 @@ pub fn assert_success(out: &Output, what: &str) {
     );
 }
 
+/// The compiled claim document path for a receipt: a claim is content-
+/// addressed (`claims/<id>.json`) with a by-receipt index, and a test
+/// workdir compiles each receipt exactly once — resolve the single claim
+/// through the index. Panics when the index is empty or ambiguous.
+pub fn claim_path(work: &Workdir, receipt_id: &str) -> PathBuf {
+    let index = work.path(&format!("{ROOT}/claims/by-receipt/{receipt_id}"));
+    let mut names: Vec<String> = fs::read_dir(&index)
+        .unwrap_or_else(|e| panic!("no claim index for {receipt_id}: {e}"))
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.len() == 64)
+        .collect();
+    names.sort();
+    assert_eq!(
+        names.len(),
+        1,
+        "expected exactly one compiled claim for {receipt_id}, found: {names:?}"
+    );
+    work.path(&format!("{ROOT}/claims/{}.json", names[0]))
+}
+
+/// The compiled claim document CONTENT for a receipt (see [`claim_path`]).
+pub fn claim_json(work: &Workdir, receipt_id: &str) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(claim_path(work, receipt_id)).unwrap()).unwrap()
+}
+
+/// EVERY compiled claim bound to a receipt, in index order (a receipt
+/// compiled under different universes or policies is several claims that
+/// coexist forever).
+pub fn claim_json_all(work: &Workdir, receipt_id: &str) -> Vec<serde_json::Value> {
+    let index = work.path(&format!("{ROOT}/claims/by-receipt/{receipt_id}"));
+    let mut names: Vec<String> = fs::read_dir(&index)
+        .unwrap_or_else(|e| panic!("no claim index for {receipt_id}: {e}"))
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.len() == 64)
+        .collect();
+    names.sort();
+    names
+        .iter()
+        .map(|id| {
+            serde_json::from_str(
+                &fs::read_to_string(work.path(&format!("{ROOT}/claims/{id}.json"))).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect()
+}
+
 /// The canonical golden-path setup: fresh workdir, admitted authority.
 pub fn admit_reference(work: &Workdir) {
     let out = frf(

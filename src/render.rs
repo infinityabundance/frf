@@ -1,12 +1,18 @@
-//! Claim RENDERERS — pure presentations of the compiled Claim IR.
+//! Claim RENDERERS — pure presentations of the verified Claim IR.
 //!
 //! Prose is one renderer of the IR; `--json` emits the IR itself. These
 //! renderers add SARIF 2.1.0 (static-analysis interchange), a CI status
 //! document, and a badge — presentation only, never new epistemic meaning:
 //! a claim is what it is because of its evidence; the renderer only says it
-//! in another voice. The claim file is the input; the renderers are pure
-//! functions of its fields (no store access, no re-derivation — the
-//! compiled claim already carries the verified IR).
+//! in another voice.
+//!
+//! The renderers accept ONLY a [`RenderView`] built from a [`ClaimVerified`]
+//! (`frf claim render` resolves + verifies the claim first) — a hand-written
+//! canonical file at `claims/<id>.json` is REFUSED, never rendered. The
+//! prose (`positive`, `non_claims`) is NOT stored in the claim IR; the view
+//! DERIVES it from the verified premise receipts, so a renderer can never
+//! restate a sentence that the verified IR does not deterministically
+//! produce.
 //!
 //! - SARIF: one `result` per positive sentence (level `none` — the claim is
 //!   admissible by construction) and one per carried residual (level
@@ -20,10 +26,54 @@
 use crate::error::{FrfError, Result};
 use crate::model::ClaimRecord;
 
+/// The renderer's input: the verified claim plus the prose DERIVED from its
+/// verified premises. Built by [`RenderView::from_verified`]; the renderers
+/// are pure functions of it (no store access — the view is precomputed by
+/// the verified loader's caller).
+pub struct RenderView<'a> {
+    pub claim: &'a ClaimRecord,
+    /// The positive sentences, derived from the verified premise receipts
+    /// (never read from the claim document).
+    pub positive: Vec<String>,
+    /// The non-claim sentences, derived from the premise fixture family.
+    pub non_claims: Vec<String>,
+}
+
+impl<'a> RenderView<'a> {
+    /// Derive the render view from a VERIFIED claim: prose is a deterministic
+    /// function of the verified premises, not of anything stored in the
+    /// claim document.
+    pub fn from_verified(verified: &'a crate::verify::ClaimVerified) -> Result<RenderView<'a>> {
+        let claim = verified.claim();
+        let premises = verified.premises();
+        let positive: Vec<String> = premises
+            .iter()
+            .filter_map(|p| crate::sentences::positive_claim(p.body()))
+            .collect();
+        if positive.is_empty() {
+            return Err(FrfError::new(format!(
+                "claim {}: the verified premises derive no positive sentence — nothing to render",
+                verified.id()
+            )));
+        }
+        let family = &premises[0]
+            .body()
+            .court
+            .admissibility_envelope
+            .fixture_family;
+        Ok(RenderView {
+            claim,
+            positive,
+            non_claims: crate::sentences::non_claims(family),
+        })
+    }
+}
+
 /// The SARIF 2.1.0 document for a compiled claim.
-pub fn sarif(claim: &ClaimRecord, driver_version: &str) -> Result<String> {
+pub fn sarif(view: &RenderView, driver_version: &str) -> Result<String> {
+    let claim = view.claim;
     let mut results: Vec<serde_json::Value> = Vec::new();
-    for sentence in &claim.positive {
+    for sentence in &view.positive {
         results.push(serde_json::json!({
             "ruleId": "frf/claim",
             "level": "none",
@@ -97,7 +147,8 @@ pub fn sarif(claim: &ClaimRecord, driver_version: &str) -> Result<String> {
 }
 
 /// The CI status document: the compact gate a pipeline can consume.
-pub fn ci_status(claim: &ClaimRecord) -> Result<String> {
+pub fn ci_status(view: &RenderView) -> Result<String> {
+    let claim = view.claim;
     let doc = serde_json::json!({
         "schema_version": "frf-ci-status-v1",
         "status": if claim.blockers.is_empty() { "pass" } else { "fail" },
@@ -106,17 +157,18 @@ pub fn ci_status(claim: &ClaimRecord) -> Result<String> {
         "proposition": claim.proposition,
         "observable_scope": claim.observable_scope,
         "requires": claim.requires,
-        "positive": claim.positive,
+        "positive": view.positive,
         "excluded_evidence": claim.excluded_evidence,
         "blockers": claim.blockers,
-        "non_claims": claim.non_claims,
+        "non_claims": view.non_claims,
     });
     crate::canon::canonical(&doc)
 }
 
 /// The badge: a deterministic shields-style SVG. `admissible` is green; a
 /// blocked claim would be red; the message is the scope (short).
-pub fn badge(claim: &ClaimRecord) -> Result<String> {
+pub fn badge(view: &RenderView) -> Result<String> {
+    let claim = view.claim;
     let scope = claim.observable_scope.join(",");
     let (status, color) = if claim.blockers.is_empty() {
         (format!("admissible · {scope}"), "#4c1")
@@ -143,23 +195,24 @@ pub fn badge(claim: &ClaimRecord) -> Result<String> {
     Ok(svg)
 }
 
-/// Render a compiled claim into the requested format. The claim file is the
-/// verified IR; `prose` re-states the compiled sentences, `json` emits the
-/// IR canonically, `sarif` / `ci` / `badge` are the presentations above.
-pub fn render(claim: &ClaimRecord, format: &str, driver_version: &str) -> Result<String> {
+/// Render a verified claim into the requested format. `prose` re-states the
+/// derived sentences, `json` emits the IR canonically, `sarif` / `ci` /
+/// `badge` are the presentations above.
+pub fn render(view: &RenderView, format: &str, driver_version: &str) -> Result<String> {
+    let claim = view.claim;
     match format {
         "prose" => {
-            let mut out = claim.positive.join("\n");
-            if !claim.non_claims.is_empty() {
+            let mut out = view.positive.join("\n");
+            if !view.non_claims.is_empty() {
                 out.push('\n');
-                out.push_str(&claim.non_claims.join("\n"));
+                out.push_str(&view.non_claims.join("\n"));
             }
             Ok(out)
         }
         "json" => crate::canon::canonical(claim),
-        "sarif" => sarif(claim, driver_version),
-        "ci" => ci_status(claim),
-        "badge" => badge(claim),
+        "sarif" => sarif(view, driver_version),
+        "ci" => ci_status(view),
+        "badge" => badge(view),
         other => Err(FrfError::new(format!(
             "unknown render format {other:?}: the claim renderer admits prose, json, sarif, ci, or badge"
         ))),
@@ -174,13 +227,14 @@ mod tests {
     fn claim() -> ClaimRecord {
         let empty_region = EvidenceRegion::empty();
         ClaimRecord {
+            id: "a".repeat(64),
             schema_version: SCHEMA_CLAIM.to_string(),
             receipt: "receipt-run-x-abc".to_string(),
             authority: "ref-cli-1.8.2".to_string(),
             candidate: ClaimCandidate {
-                name: "cand".to_string(),
+                name: "cand-cli".to_string(),
                 version_or_commit: "0.1.0".to_string(),
-                identity_hash: "f".repeat(64),
+                identity_hash: "b".repeat(64),
             },
             court: "cli-malformed-input".to_string(),
             fixture_family: "malformed-input".to_string(),
@@ -203,6 +257,15 @@ mod tests {
             witness_statements: Vec::new(),
             independence_evidence: Vec::new(),
             replay_profile: "frf-exec-linux-v1".to_string(),
+        }
+    }
+
+    /// The render view: the claim plus the prose a verified loader would
+    /// have derived from its premises (the renderers never read prose from
+    /// the claim document).
+    fn view(c: &ClaimRecord) -> RenderView<'_> {
+        RenderView {
+            claim: c,
             positive: vec!["For reference ref-cli-1.8.2, fixture family malformed-input, candidate cand 0.1.0 preserves exit class.".to_string()],
             non_claims: vec!["This receipt does not establish byte-identical stderr.".to_string()],
         }
@@ -211,7 +274,8 @@ mod tests {
     #[test]
     fn sarif_is_a_well_formed_2_1_0_document() {
         let c = claim();
-        let doc: serde_json::Value = serde_json::from_str(&sarif(&c, "0.1.39").unwrap()).unwrap();
+        let v = view(&c);
+        let doc: serde_json::Value = serde_json::from_str(&sarif(&v, "0.1.39").unwrap()).unwrap();
         assert_eq!(doc["version"], "2.1.0");
         assert_eq!(doc["runs"][0]["tool"]["driver"]["name"], "frf");
         let results = doc["runs"][0]["results"].as_array().unwrap();
@@ -225,14 +289,15 @@ mod tests {
             serde_json::json!(["exit"])
         );
         // Deterministic: a second render is byte-identical.
-        assert_eq!(sarif(&c, "0.1.39").unwrap(), sarif(&c, "0.1.39").unwrap());
+        assert_eq!(sarif(&v, "0.1.39").unwrap(), sarif(&v, "0.1.39").unwrap());
     }
 
     #[test]
     fn a_blocker_renders_as_an_error() {
         let mut c = claim();
         c.blockers.push("cli-exit-0001".to_string());
-        let doc: serde_json::Value = serde_json::from_str(&sarif(&c, "0.1.39").unwrap()).unwrap();
+        let v = view(&c);
+        let doc: serde_json::Value = serde_json::from_str(&sarif(&v, "0.1.39").unwrap()).unwrap();
         let results = doc["runs"][0]["results"].as_array().unwrap();
         let blocker = results
             .iter()
@@ -244,31 +309,37 @@ mod tests {
     #[test]
     fn ci_status_gates_on_blockers() {
         let c = claim();
-        let doc: serde_json::Value = serde_json::from_str(&ci_status(&c).unwrap()).unwrap();
+        let v = view(&c);
+        let doc: serde_json::Value = serde_json::from_str(&ci_status(&v).unwrap()).unwrap();
         assert_eq!(doc["status"], "pass");
         assert_eq!(doc["schema_version"], "frf-ci-status-v1");
         assert_eq!(doc["observable_scope"], serde_json::json!(["exit"]));
         let mut blocked = claim();
         blocked.blockers.push("cli-exit-0001".to_string());
-        let doc: serde_json::Value = serde_json::from_str(&ci_status(&blocked).unwrap()).unwrap();
+        let vb = view(&blocked);
+        let doc: serde_json::Value = serde_json::from_str(&ci_status(&vb).unwrap()).unwrap();
         assert_eq!(doc["status"], "fail");
     }
 
     #[test]
     fn badge_is_deterministic_svg() {
         let c = claim();
-        let svg = badge(&c).unwrap();
+        let v = view(&c);
+        let svg = badge(&v).unwrap();
         assert!(svg.starts_with("<svg "));
         assert!(svg.contains("admissible"));
         assert!(svg.contains("#4c1"));
-        assert_eq!(badge(&c).unwrap(), svg, "badge is deterministic");
+        assert_eq!(badge(&v).unwrap(), svg, "badge is deterministic");
         let mut blocked = claim();
         blocked.blockers.push("x".to_string());
-        assert!(badge(&blocked).unwrap().contains("blocked"));
+        let vb = view(&blocked);
+        assert!(badge(&vb).unwrap().contains("blocked"));
     }
 
     #[test]
     fn unknown_formats_are_refused() {
-        assert!(render(&claim(), "html", "0.1.39").is_err());
+        let c = claim();
+        let v = view(&c);
+        assert!(render(&v, "html", "0.1.39").is_err());
     }
 }

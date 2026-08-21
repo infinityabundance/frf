@@ -19,7 +19,8 @@
 //!                        evidence references
 //!   residuals/           residual records + <id>.events/ hash-chained
 //!                        disposition events
-//!   claims/<id>.yaml     the compiled claim, when present
+//!   claims/<id>.json     the compiled claim(s) bound to the receipt
+//!                        (content-addressed) + claims/by-receipt/ index
 //! ```
 //!
 //! The property that defines this milestone:
@@ -272,17 +273,20 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         },
     );
 
-    // The compiled claim, when present — and the EVIDENCE UNIVERSE its
-    // knowledge snapshot names (the negative search is as portable as the
-    // premises: the verifier must be able to rehash every residual head, its
-    // events, its run, and the reduction records the claim's absence search
-    // ran over). The snapshot's residual heads are pushed as runs into the
-    // traversal below (a head's record + its run's capture + authority +
-    // objects + series all enter the closure that way).
-    let claim_path = store.claim_path(receipt_id)?;
-    if claim_path.is_file() {
+    // The compiled claims bound to this receipt, when present — every claim
+    // in the by-receipt index (a receipt compiled under a different universe
+    // or policy is a DIFFERENT claim, and a bundle carries them all) — plus
+    // the EVIDENCE UNIVERSE each claim's knowledge snapshot names (the
+    // negative search is as portable as the premises: the verifier must be
+    // able to rehash every residual head, its events, its run, and the
+    // reduction records the claim's absence search ran over). The snapshot's
+    // residual heads are pushed as runs into the traversal below (a head's
+    // record + its run's capture + authority + objects + series all enter the
+    // closure that way).
+    for claim_id in store.claim_ids_for_receipt(receipt_id)? {
+        let claim_path = store.claim_path(&claim_id)?;
         let bytes = read(&claim_path, "claim")?;
-        let rel = format!("claims/{receipt_id}.json");
+        let rel = format!("claims/{claim_id}.json");
         entries.insert(
             rel.clone(),
             ClosureEntry {
@@ -291,11 +295,22 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 kind: "claim",
             },
         );
-        let parsed: ClaimRecord = store.parse_evidence(&claim_path)?;
-        // The claim is MULTI-PREMISE since v6: every premise receipt's run is
-        // part of the evidence the claim was compiled under, so each premise's
-        // capture + objects + residuals + authorities enter the closure (the
-        // walk below picks them up by run id).
+        // The non-normative by-receipt index marker travels with the claim:
+        // a verifier resolves the receipt's claims through the index.
+        let index_rel = format!("claims/by-receipt/{receipt_id}/{claim_id}");
+        entries.insert(
+            index_rel.clone(),
+            ClosureEntry {
+                rel: index_rel,
+                sha256: host::sha256_bytes(receipt_id.as_bytes()),
+                kind: "claim-index",
+            },
+        );
+        let parsed: ClaimRecord = store.load_claim(&claim_id)?; // canonical + identity rederives
+                                                                // The claim is MULTI-PREMISE since v6: every premise receipt's run is
+                                                                // part of the evidence the claim was compiled under, so each premise's
+                                                                // capture + objects + residuals + authorities enter the closure (the
+                                                                // walk below picks them up by run id).
         for prem_id in &parsed.requires {
             let prem = crate::verify::load_receipt_verified(store, prem_id)?;
             // The premise receipt document itself is part of the closure (a
@@ -386,7 +401,7 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         // witness PROGRAM object the attestation's implementation bound (the
         // independence evidence's typed refs point at it).
         for wid in &parsed.witness_statements {
-            let stmt = store.load_witness_statement(wid)?; // verified on read
+            let stmt = crate::verify::load_witness_statement_verified(store, wid)?; // verified + subject rebound
             let bytes = read(&store.witness_path(wid)?, "witness statement")?;
             let rel = format!("witnesses/{wid}.json");
             entries.insert(
@@ -397,7 +412,8 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     kind: "witness",
                 },
             );
-            if let Some(artifact) = &stmt.witness_implementation.artifact {
+            let inner = stmt.statement();
+            if let Some(artifact) = &inner.witness_implementation.artifact {
                 store.verified_object_bytes(&artifact.sha256)?;
                 let rel = format!("objects/sha256/{}", artifact.sha256);
                 entries.insert(
@@ -410,9 +426,9 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 );
             }
             for f in ["request.json", "response.json"] {
-                let path = store.witness_dir(&stmt.id)?.join(f);
+                let path = store.witness_dir(&inner.id)?.join(f);
                 let bytes = read(&path, "witness evidence")?;
-                let rel = format!("witnesses/{}/{f}", stmt.id);
+                let rel = format!("witnesses/{}/{f}", inner.id);
                 entries.insert(
                     rel.clone(),
                     ClosureEntry {

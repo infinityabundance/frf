@@ -192,11 +192,15 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         ],
     );
     assert_success(&out, "sensitivity-backed claim");
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v7");
+    // The receipt now has TWO compiled claims (the baseline from earlier and
+    // this one — a different policy is a DIFFERENT claim, and they coexist);
+    // resolve the sensitivity-backed one through the index.
+    let claims: Vec<serde_json::Value> = claim_json_all(&work, &receipt);
+    let claim = claims
+        .iter()
+        .find(|c| c["policy"] == "sensitivity-backed")
+        .expect("the sensitivity-backed claim");
+    assert_eq!(claim["schema_version"], "frf-claim-v8");
     assert_eq!(claim["policy"], "sensitivity-backed");
     assert_eq!(claim["observable_scope"], serde_json::json!(["exit"]));
     let capability = claim["capability"].as_array().unwrap();
@@ -385,10 +389,8 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         ],
     );
     assert_success(&out, "independently-witnessed claim");
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    let claim: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     assert_eq!(claim["policy"], "independently-witnessed");
     assert_eq!(
         claim["witness_statements"],
@@ -460,11 +462,9 @@ fn multi_premise_claim_compiles_under_the_region_algebra() {
         &["--root", ROOT, "claim", "compile", &receipt, &receipt2],
     );
     assert_success(&out, "multi-premise claim");
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v7");
+    let claim: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
+    assert_eq!(claim["schema_version"], "frf-claim-v8");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt, receipt2]),
@@ -497,8 +497,25 @@ fn multi_premise_claim_compiles_under_the_region_algebra() {
         cell_axes.contains(&vec!["stdout".to_string()]),
         "the stdout premise's cell: {cell_axes:?}"
     );
-    // One conservative sentence per premise cell.
-    assert_eq!(claim["positive"].as_array().unwrap().len(), 2);
+    // One conservative sentence per premise cell — DERIVED by the renderer
+    // from the verified premises (prose is never stored as Claim IR).
+    assert!(
+        claim.get("positive").is_none(),
+        "prose is a renderer output"
+    );
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", &receipt, "--format", "prose",
+        ],
+    );
+    assert_success(&out, "render the multi-premise claim");
+    let prose = stdout(&out);
+    assert_eq!(
+        prose.lines().count(),
+        4,
+        "two conservative sentences (one per premise cell) + the two non-claims"
+    );
     let prop = claim["proposition"].as_str().unwrap();
     assert!(prop.starts_with("parity(cells="), "proposition: {prop}");
     assert!(
@@ -586,10 +603,8 @@ fn multi_premise_capability_binds_each_premise_receipt() {
         ],
     );
     assert_success(&out, "multi-premise sensitivity-backed claim");
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    let claim: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     let capability = claim["capability"].as_array().unwrap();
     assert_eq!(capability.len(), 2, "one capability entry per claimed axis");
     let exit_cap = capability
@@ -719,10 +734,8 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         ],
     );
     assert_success(&out, "high-assurance claim");
-    let claim: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/claims/{receipt}.json"))).unwrap(),
-    )
-    .unwrap();
+    let claim: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     assert_eq!(claim["policy"], "high-assurance");
     assert_eq!(claim["replay_profile"], "frf-exec-linux-v1");
     assert_eq!(claim["witness_statements"].as_array().unwrap().len(), 1);

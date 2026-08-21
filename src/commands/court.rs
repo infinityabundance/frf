@@ -287,7 +287,11 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
 
 /// Derive one trajectory per lineage observed in the series. Trajectories
 /// are DERIVED projections of the series (regenerable from the immutable
-/// runs), so re-derivation overwrites — the runs never change.
+/// runs), so re-derivation overwrites — the runs never change. Every
+/// observation consumed here is VERIFIED first: a series point's run is a
+/// verified capture (identity rederives), and each residual is a verified
+/// observation of that run (derivation re-proven) before its fingerprint,
+/// lineage, or magnitude may drive the classification.
 fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize> {
     /// Per-point observation of one lineage: (residual id, fingerprint,
     /// magnitude).
@@ -295,11 +299,12 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
     // lineage -> (axis, per-point observation)
     let mut seen: BTreeMap<String, (String, Observed)> = BTreeMap::new();
     for (i, point) in series.points.iter().enumerate() {
-        let capture = store.load_capture(&point.run)?;
-        for id in &capture.residuals {
-            let record = store.load_residual(id)?;
-            let fp = crate::semantics::residual_fingerprint(&record)?;
-            let lineage = crate::semantics::residual_lineage_of_record(store, &record)?;
+        let capture = crate::verify::load_capture_verified(store, &point.run)?;
+        for id in &capture.capture.residuals {
+            let record = crate::verify::load_residual_verified(store, id)?;
+            let record = record.record();
+            let fp = crate::semantics::residual_fingerprint(record)?;
+            let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
             // The divergence DEGREE at this point (v4): the axis's declared
             // magnitude measure applied to the compared projections — the
             // deterministic input to the `gradual` vocabulary.
@@ -387,8 +392,12 @@ const MINIMIZE_MAX_ATTEMPTS: usize = 256;
 /// its role, outcome, and acceptance; the attempt budget is a HARD gate
 /// around every execution; the final reproducer is court-verified.
 pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
-    let record = store.load_residual(residual_id)?;
-    let capture = store.load_capture(&record.run)?;
+    // The residual is VERIFIED before anything may consume it: identity +
+    // derivation from its verified parent run. The reduction's transform
+    // declaration is read from verified evidence, never from raw records.
+    let verified = crate::verify::load_residual_verified(store, residual_id)?;
+    let record = verified.record();
+    let capture = &verified.capture().capture;
 
     // The fixture being reduced: the exact bytes the residual's run used.
     let fixture_bytes = store.verified_object_bytes(&capture.fixture_sha256)?;
@@ -419,7 +428,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // The evaluation plan of the residual's axis — the SAME plan the court
     // bound at observation time (semantic + implementation). Preservation is
     // decided by [`crate::comparators::evaluate`], nothing else.
-    let plan = crate::comparators::EvaluationPlan::from_capture(&capture, &record.axis)?;
+    let plan = crate::comparators::EvaluationPlan::from_capture(capture, &record.axis)?;
     let environment_digest = capture.environment.digest.clone();
 
     // The routed minimizer (the extension protocol, spec/minimizer.md): the
@@ -431,8 +440,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     if let Some(semantic) = capture.minimizer_semantics.iter().find(|m| m.id == route) {
         return minimize_external(
             store,
-            &capture,
-            &record,
+            capture,
+            record,
             semantic,
             &fixture_bytes,
             original_lines,
@@ -452,7 +461,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // reduction (nothing shrank).
     let baseline = run_attempt(
         store,
-        &capture,
+        capture,
         &plan,
         &authority_program,
         &candidate_program,
@@ -492,7 +501,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             let candidate_bytes: Vec<u8> = candidate.concat();
             let outcome = run_attempt(
                 store,
-                &capture,
+                capture,
                 &plan,
                 &authority_program,
                 &candidate_program,
@@ -541,7 +550,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
     // too: if it is exhausted the record cannot claim a verified reproducer.
     let outcome = run_attempt(
         store,
-        &capture,
+        capture,
         &plan,
         &authority_program,
         &candidate_program,

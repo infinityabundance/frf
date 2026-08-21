@@ -88,31 +88,40 @@ pub fn store_blockers(
         if !is_scope_blocking(&head.disposition) {
             continue;
         }
-        let record = store.load_residual(&head.id)?;
+        // The residual is VERIFIED before its scope may be read: identity +
+        // derivation from its verified parent run (the same doctrine the
+        // blocker scan's scope depends on — an unverified record cannot
+        // decide whether a claim is blocked).
+        let verified = crate::verify::load_residual_verified(store, &head.id)?;
+        let record = verified.record();
         // The universe commits the exact observation: the record loaded now
         // must BE the record the universe named (canonical record content
         // address + fingerprint). A store that no longer matches the
         // committed universe cannot be scanned against it — the claim would
         // be compiled against evidence it does not name.
-        let record_cid = crate::semantics::record_content_identity(&record)?;
+        let record_cid = crate::semantics::record_content_identity(record)?;
         if record_cid != head.record_cid {
             return Err(FrfError::new(format!(
                 "residual {} no longer matches the committed knowledge universe (its record content address changed); re-compile against a fresh universe",
                 head.id
             )));
         }
-        let fingerprint = crate::semantics::residual_fingerprint(&record)?;
+        let fingerprint = crate::semantics::residual_fingerprint(record)?;
         if fingerprint != head.fingerprint {
             return Err(FrfError::new(format!(
                 "residual {} no longer matches the committed knowledge universe (its fingerprint changed); re-compile against a fresh universe",
                 head.id
             )));
         }
-        let capture = store.load_capture(&record.run)?;
         let authority = store.load_authority(&record.authority)?;
-        let surface = scope::residual_scope(&record, &capture, &authority.version);
+        let surface =
+            scope::residual_scope(record, &verified.capture().capture, &authority.version);
         if k.intersects(&surface) {
-            blockers.push((record.id.clone(), record.kind, head.disposition.clone()));
+            blockers.push((
+                record.id.clone(),
+                record.kind.clone(),
+                head.disposition.clone(),
+            ));
         }
     }
     blockers.sort_by(|a, b| a.0.cmp(&b.0));
@@ -207,12 +216,14 @@ fn capability_coverage(
                 continue;
             }
             // The verdicts RECOMPUTE from the mutant run's residuals (derived
-            // facts are never trusted from the record file).
+            // facts are never trusted from the record file, and each residual
+            // is itself VERIFIED — identity + derivation from its parent run
+            // — before its axis is read).
             let mut on_target = false;
             let mut on_unaffected = false;
             for rid in &cv.capture.residuals {
-                let record = store.load_residual(rid)?;
-                if record.axis.as_str() == ch.target_axis {
+                let record = crate::verify::load_residual_verified(store, rid)?;
+                if record.record().axis.as_str() == ch.target_axis {
                     on_target = true;
                 } else {
                     on_unaffected = true;
@@ -237,18 +248,47 @@ fn capability_coverage(
     Ok(out)
 }
 
+/// Resolve a claim render target: a claim content address directly, or a
+/// receipt via the `claims/by-receipt/<receipt>/` index. A receipt compiled
+/// more than once (a different committed universe or admission policy is a
+/// DIFFERENT claim) names several claims — the caller must render by claim
+/// id; the index keeps the ambiguity visible instead of picking one
+/// arbitrarily.
+pub fn resolve_claim(store: &Store, target: &str) -> Result<String> {
+    if let Ok(p) = store.claim_path(target) {
+        if p.is_file() {
+            return Ok(target.to_string());
+        }
+    }
+    let ids = store.claim_ids_for_receipt(target)?;
+    match ids.len() {
+        0 => Err(FrfError::new(format!(
+            "no compiled claim for '{target}': run `frf claim compile {target}` first — the renderers present the verified IR"
+        ))),
+        1 => Ok(ids[0].clone()),
+        _ => Err(FrfError::new(format!(
+            "receipt '{target}' has {} compiled claims (a different universe or policy is a different claim): render one by its claim id: {}",
+            ids.len(),
+            ids.join(", ")
+        ))),
+    }
+}
+
 /// The verified witness statements attesting one premise receipt
 /// (`outcome: affirm`) that an independently-witnessed claim requires. The
-/// statement loader verifies the identity rederives, the preserved
-/// request/response hash to their cids, and the response names its request —
-/// an attestation bound to the exact receipt content address, never a label.
+/// verified loader establishes the identity rederives, the preserved
+/// request/response hash to their cids, the response names its request, AND
+/// the subject is REBOUND to the actual evidence object (the statement's
+/// subject cid must rederive from the verified premise receipt itself) — an
+/// attestation bound to the exact receipt content address, never a label,
+/// and never a self-consistent but misbound statement.
 fn witness_coverage(store: &Store, receipt_id: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for id in witness_ids(store)? {
-        let stmt = store.load_witness_statement(&id)?;
-        if stmt.subject.kind == "receipt"
-            && stmt.subject.id == receipt_id
-            && stmt.attestation.outcome == "affirm"
+        let stmt = crate::verify::load_witness_statement_verified(store, &id)?;
+        if stmt.subject().kind == "receipt"
+            && stmt.subject().id == receipt_id
+            && stmt.statement().attestation.outcome == "affirm"
         {
             out.push(id);
         }
@@ -261,8 +301,10 @@ fn witness_coverage(store: &Store, receipt_id: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// The machine-readable proposition of one scope cell.
-fn cell_proposition(cell: &ClaimScope) -> String {
+/// The machine-readable proposition of one scope cell — a pure function of
+/// the cell, shared by the claim compiler and the verified loader (the
+/// claim's stored proposition must rederive).
+pub fn cell_proposition(cell: &ClaimScope) -> String {
     format!(
         "{{observables=[{}]; fixtures=[{}]; family={}; authority=[{}]; candidate=[{}]; environments=[{}]; versions=[{}]}}",
         cell.observables.join(", "),
@@ -580,7 +622,12 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         "validated: every premise has a clean axis"
     );
 
-    let claim = ClaimRecord {
+    // The ClaimRecord WITHOUT the id first: the content address is
+    // FRF/CLAIM/v1 over the canonical document minus the id — a claim is an
+    // immutable protocol object, and the same receipt compiled under a
+    // different universe or policy is a DIFFERENT claim id.
+    let mut claim = ClaimRecord {
+        id: String::new(),
         schema_version: SCHEMA_CLAIM.to_string(),
         receipt: receipt_ids[0].clone(),
         authority: format!("{}-{}", first.authority.name, first.authority.version),
@@ -605,9 +652,8 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         witness_statements,
         independence_evidence,
         replay_profile,
-        positive: positive.clone(),
-        non_claims: sentences::non_claims(family),
     };
+    claim.id = crate::semantics::claim_identity(&claim)?;
 
     if json {
         let canonical = crate::canon::canonical(&claim)?;
@@ -615,16 +661,18 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         return Ok(());
     }
 
-    let json = store.to_evidence(&claim)?;
-    let path = store.claim_path(&receipt_ids[0])?;
-    store.write_derived(&path, &json)?;
+    store.write_claim(&claim)?;
 
     for sentence in &positive {
         println!("{sentence}");
     }
-    for nc in &claim.non_claims {
+    for nc in sentences::non_claims(family) {
         println!("{nc}");
     }
-    eprintln!("claim written to {}", path.display());
+    eprintln!(
+        "claim written to {}",
+        store.claim_path(&claim.id)?.display()
+    );
+    println!("claim {}", claim.id);
     Ok(())
 }

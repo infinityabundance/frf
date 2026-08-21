@@ -216,11 +216,18 @@ pub enum ClaimCmd {
         policy: String,
     },
     /// Render a COMPILED claim into a presentation format (prose, json,
-    /// sarif, ci, badge). The renderers are pure functions of the Claim IR
-    /// — presentation only, never new epistemic meaning; the claim must
-    /// already be compiled (`claims/<receipt>.json`)
+    /// sarif, ci, badge). The target is a CLAIM id (content address) or a
+    /// receipt (resolved through the by-receipt index); the claim is
+    /// RE-VERIFIED against the evidence tree before a single field is
+    /// rendered — identity rederives (FRF/CLAIM/v1), the premises verify,
+    /// scope + universe re-derive, and the policy evidence re-verifies — so
+    /// a hand-written canonical file at `claims/<id>.json` is refused, never
+    /// rendered. Prose is DERIVED from the verified premises, never stored
+    /// as authoritative Claim IR.
     Render {
-        /// Receipt id (printed by `frf receipt emit`); the claim must exist
+        /// A claim id (content address), or a receipt id (the by-receipt
+        /// index must resolve it; a receipt compiled more than once names
+        /// several claims and must be rendered by claim id)
         receipt: String,
         /// The presentation format
         #[arg(long, value_name = "prose|json|sarif|ci|badge")]

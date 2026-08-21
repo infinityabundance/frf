@@ -32,6 +32,7 @@ mod experiment_external_v2;
 mod jcs;
 mod rederive;
 mod regen;
+mod regen_readme;
 mod rules;
 
 use jcs::{encode, parse_strict};
@@ -378,135 +379,148 @@ fn needed_closure(bundle: &Path, receipt_id: &str) -> std::collections::BTreeSet
             }
         }
     }
-    // The compiled claim, when present — and the EVIDENCE UNIVERSE its
-    // knowledge snapshot names: every residual head's record + events + run
-    // (the negative search must be reproducible from the bundle), plus the
-    // reduction records it references.
-    let claim_rel = format!("claims/{receipt_id}.json");
-    if bundle.join(&claim_rel).is_file() {
-        needed.insert(claim_rel.clone());
-        let claim = load_evidence(&safe_rel(bundle, &claim_rel));
-        // The claim is MULTI-PREMISE since v6: every premise receipt's run is
-        // part of the evidence, so each premise's capture/objects/residuals
-        // enter the traversal, and the premise receipt documents are part of
-        // the closure.
-        if let Some(requires) = claim["requires"].as_array() {
-            for prem_id in requires {
-                let prem_id = as_str(prem_id).to_string();
-                needed.insert(format!("receipts/{prem_id}.json"));
-                let prem = load_evidence(&safe_rel(bundle, &format!("receipts/{prem_id}.json")));
-                let prun = as_str(&prem["run"]).to_string();
-                if !seen_runs.contains(&prun) && !runs.contains(&prun) {
-                    runs.push(prun);
-                }
-            }
-        }
-        if let Some(heads) = claim["knowledge_snapshot"]["residual_heads"].as_array() {
-            for h in heads {
-                let hid = as_str(&h["id"]);
-                needed.insert(format!("residuals/{hid}.json"));
-                let ev_dir = bundle.join(format!("residuals/{hid}.events"));
-                if ev_dir.is_dir() {
-                    let mut names: Vec<String> = std::fs::read_dir(&ev_dir)
-                        .unwrap()
-                        .flatten()
-                        .map(|e| e.file_name().to_string_lossy().to_string())
-                        .filter(|n| n.ends_with(".json"))
-                        .collect();
-                    names.sort();
-                    for n in names {
-                        needed.insert(format!("residuals/{hid}.events/{n}"));
+    // The compiled claims bound to the receipt, when present — resolved
+    // through the claims/by-receipt index (a receipt compiled under a
+    // different universe or policy is a DIFFERENT claim; the bundle carries
+    // them all). Each claim's EVIDENCE UNIVERSE enters the closure: every
+    // residual head's record + events + run (the negative search must be
+    // reproducible from the bundle), plus the reduction records it
+    // references.
+    let claim_index = bundle.join("claims/by-receipt").join(receipt_id);
+    if claim_index.is_dir() {
+        let claim_ids: Vec<String> = sorted_names(&claim_index)
+            .into_iter()
+            .filter(|n| n.len() == 64)
+            .collect();
+        for claim_id in claim_ids {
+            let claim_rel = format!("claims/{claim_id}.json");
+            needed.insert(claim_rel.clone());
+            needed.insert(format!("claims/by-receipt/{receipt_id}/{claim_id}"));
+            let claim = load_evidence(&safe_rel(bundle, &claim_rel));
+            // The claim is MULTI-PREMISE since v6: every premise receipt's run is
+            // part of the evidence, so each premise's capture/objects/residuals
+            // enter the traversal, and the premise receipt documents are part of
+            // the closure.
+            if let Some(requires) = claim["requires"].as_array() {
+                for prem_id in requires {
+                    let prem_id = as_str(prem_id).to_string();
+                    needed.insert(format!("receipts/{prem_id}.json"));
+                    let prem =
+                        load_evidence(&safe_rel(bundle, &format!("receipts/{prem_id}.json")));
+                    let prun = as_str(&prem["run"]).to_string();
+                    if !seen_runs.contains(&prun) && !runs.contains(&prun) {
+                        runs.push(prun);
                     }
                 }
-                // The head's run enters the traversal: its capture, sides,
-                // objects, authority, residuals, and series all become
-                // required closure.
-                let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
-                let hrun = as_str(&record["run"]).to_string();
-                if !seen_runs.contains(&hrun) && !runs.contains(&hrun) {
-                    runs.push(hrun);
+            }
+            if let Some(heads) = claim["knowledge_snapshot"]["residual_heads"].as_array() {
+                for h in heads {
+                    let hid = as_str(&h["id"]);
+                    needed.insert(format!("residuals/{hid}.json"));
+                    let ev_dir = bundle.join(format!("residuals/{hid}.events"));
+                    if ev_dir.is_dir() {
+                        let mut names: Vec<String> = std::fs::read_dir(&ev_dir)
+                            .unwrap()
+                            .flatten()
+                            .map(|e| e.file_name().to_string_lossy().to_string())
+                            .filter(|n| n.ends_with(".json"))
+                            .collect();
+                        names.sort();
+                        for n in names {
+                            needed.insert(format!("residuals/{hid}.events/{n}"));
+                        }
+                    }
+                    // The head's run enters the traversal: its capture, sides,
+                    // objects, authority, residuals, and series all become
+                    // required closure.
+                    let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
+                    let hrun = as_str(&record["run"]).to_string();
+                    if !seen_runs.contains(&hrun) && !runs.contains(&hrun) {
+                        runs.push(hrun);
+                    }
                 }
             }
-        }
-        // The capability evidence a sensitivity-backed claim names: each
-        // content-addressed challenge record and its mutant run (the run
-        // traversal picks up its capture, objects, residuals).
-        if let Some(capability) = claim["capability"].as_array() {
-            for cap in capability {
-                if let Some(ids) = cap["challenge_ids"].as_array() {
-                    for cid in ids {
-                        let cid = as_str(cid).to_string();
-                        needed.insert(format!("challenges/{cid}.json"));
-                        let ch =
-                            load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
-                        // An external mutation proposal's preserved evidence
-                        // travels with the challenge.
-                        if ch
-                            .get("mutation_invocation_id")
-                            .is_some_and(|v| v.is_string())
-                        {
-                            for f in [
-                                "request.json",
-                                "response.json",
-                                "invocation.json",
-                                "result.json",
-                            ] {
-                                needed.insert(format!("challenges/{cid}/mutation/{f}"));
+            // The capability evidence a sensitivity-backed claim names: each
+            // content-addressed challenge record and its mutant run (the run
+            // traversal picks up its capture, objects, residuals).
+            if let Some(capability) = claim["capability"].as_array() {
+                for cap in capability {
+                    if let Some(ids) = cap["challenge_ids"].as_array() {
+                        for cid in ids {
+                            let cid = as_str(cid).to_string();
+                            needed.insert(format!("challenges/{cid}.json"));
+                            let ch =
+                                load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
+                            // An external mutation proposal's preserved evidence
+                            // travels with the challenge.
+                            if ch
+                                .get("mutation_invocation_id")
+                                .is_some_and(|v| v.is_string())
+                            {
+                                for f in [
+                                    "request.json",
+                                    "response.json",
+                                    "invocation.json",
+                                    "result.json",
+                                ] {
+                                    needed.insert(format!("challenges/{cid}/mutation/{f}"));
+                                }
+                            }
+                            let chrun = as_str(&ch["run"]).to_string();
+                            if !seen_runs.contains(&chrun) && !runs.contains(&chrun) {
+                                runs.push(chrun);
                             }
                         }
-                        let chrun = as_str(&ch["run"]).to_string();
-                        if !seen_runs.contains(&chrun) && !runs.contains(&chrun) {
-                            runs.push(chrun);
-                        }
                     }
                 }
             }
-        }
-        // The witness evidence an independently-witnessed claim names: each
-        // verified statement + its preserved request/response + the witness
-        // program object the attestation's implementation bound.
-        if let Some(witnesses) = claim["witness_statements"].as_array() {
-            for wid in witnesses {
-                let wid = as_str(wid).to_string();
-                needed.insert(format!("witnesses/{wid}.json"));
-                for f in ["request.json", "response.json"] {
-                    needed.insert(format!("witnesses/{wid}/{f}"));
-                }
-                let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
-                if let Some(artifact) = stmt["witness_implementation"]["artifact"].as_object() {
-                    needed.insert(format!("objects/sha256/{}", as_str(&artifact["sha256"])));
+            // The witness evidence an independently-witnessed claim names: each
+            // verified statement + its preserved request/response + the witness
+            // program object the attestation's implementation bound.
+            if let Some(witnesses) = claim["witness_statements"].as_array() {
+                for wid in witnesses {
+                    let wid = as_str(wid).to_string();
+                    needed.insert(format!("witnesses/{wid}.json"));
+                    for f in ["request.json", "response.json"] {
+                        needed.insert(format!("witnesses/{wid}/{f}"));
+                    }
+                    let stmt = load_evidence(&safe_rel(bundle, &format!("witnesses/{wid}.json")));
+                    if let Some(artifact) = stmt["witness_implementation"]["artifact"].as_object() {
+                        needed.insert(format!("objects/sha256/{}", as_str(&artifact["sha256"])));
+                    }
                 }
             }
-        }
-        // The declared independence evidence a claim carries: each record
-        // binds one of the claim's witness statements.
-        if let Some(independence) = claim["independence_evidence"].as_array() {
-            for iid in independence {
-                needed.insert(format!("independence/{}.json", as_str(iid)));
-            }
-        }
-        // The v2 universe commits every other member as (kind, id, cid)
-        // objects; reductions enter the closure through kind == "reduction".
-        if let Some(objects) = claim["knowledge_snapshot"]["objects"].as_array() {
-            for o in objects {
-                if as_str(&o["kind"]) != "reduction" {
-                    continue;
+            // The declared independence evidence a claim carries: each record
+            // binds one of the claim's witness statements.
+            if let Some(independence) = claim["independence_evidence"].as_array() {
+                for iid in independence {
+                    needed.insert(format!("independence/{}.json", as_str(iid)));
                 }
-                let rid = as_str(&o["id"]);
-                needed.insert(format!("reductions/{rid}.json"));
-                // An external minimizer's invocation evidence lives under
-                // `reductions/<id>/minimizer/`; the record binds it.
-                let reduction = load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
-                if reduction["minimizer_semantic_id"].is_string() {
-                    for f in [
-                        "request.json",
-                        "response.json",
-                        "invocation.json",
-                        "result.json",
-                    ] {
-                        let p = bundle.join(format!("reductions/{rid}/minimizer/{f}"));
-                        if p.is_file() {
-                            needed.insert(format!("reductions/{rid}/minimizer/{f}"));
+            }
+            // The v2 universe commits every other member as (kind, id, cid)
+            // objects; reductions enter the closure through kind == "reduction".
+            if let Some(objects) = claim["knowledge_snapshot"]["objects"].as_array() {
+                for o in objects {
+                    if as_str(&o["kind"]) != "reduction" {
+                        continue;
+                    }
+                    let rid = as_str(&o["id"]);
+                    needed.insert(format!("reductions/{rid}.json"));
+                    // An external minimizer's invocation evidence lives under
+                    // `reductions/<id>/minimizer/`; the record binds it.
+                    let reduction =
+                        load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
+                    if reduction["minimizer_semantic_id"].is_string() {
+                        for f in [
+                            "request.json",
+                            "response.json",
+                            "invocation.json",
+                            "result.json",
+                        ] {
+                            let p = bundle.join(format!("reductions/{rid}/minimizer/{f}"));
+                            if p.is_file() {
+                                needed.insert(format!("reductions/{rid}/minimizer/{f}"));
+                            }
                         }
                     }
                 }
@@ -1424,122 +1438,157 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
         }
     }
 
-    // 7. The compiled claim, when the bundle carries one: its EVIDENCE
+    // 7. The compiled claims bound to the receipt, when the bundle carries
+    //    them: resolved through the claims/by-receipt index. Each claim's id
+    //    must rederive (FRF/CLAIM/v1 over the canonical document minus the
+    //    id — a hand-written or forged claim file is refused), its EVIDENCE
     //    UNIVERSE (the knowledge snapshot the absence search ran over) must
     //    be self-consistent — the snapshot cid rederives from its own
     //    fields, every residual head exists in the bundle with the recorded
     //    disposition, and every referenced reduction exists with a rederived
     //    identity. The negative search is as portable as the premises.
-    let claim_rel = format!("claims/{receipt_id}.json");
-    if inventory.contains_key(&claim_rel) {
-        let claim = load_evidence(&safe_rel(bundle, &claim_rel));
-        let snapshot = &claim["knowledge_snapshot"];
-        let expected_cid = rederive::knowledge_snapshot_identity(snapshot);
-        if as_str(&snapshot["cid"]) != expected_cid {
-            panic!("claim {receipt_id}: the knowledge snapshot cid does not rederive");
-        }
-        let mut head_ids: Vec<String> = Vec::new();
-        if let Some(heads) = snapshot["residual_heads"].as_array() {
-            for h in heads {
-                let hid = as_str(&h["id"]).to_string();
-                head_ids.push(hid.clone());
-                let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
-                if as_str(&record["id"]) != hid {
-                    panic!("claim {receipt_id}: snapshot residual head {hid} is missing from the bundle");
-                }
-                // The v2 universe commits the head's RECORD CONTENT ADDRESS
-                // and FINGERPRINT — the exact immutable observation the
-                // blocker scan read — not the label. Both rederive from the
-                // bundle's own record.
-                let record_cid = sha256_bytes(
-                    encode(&record)
-                        .unwrap_or_else(|e| {
-                            panic!("claim {receipt_id}: cannot canonicalize residual {hid}: {e}")
-                        })
-                        .as_bytes(),
+    let claim_index = bundle.join("claims/by-receipt").join(&receipt_id);
+    if claim_index.is_dir() {
+        let claim_ids: Vec<String> = sorted_names(&claim_index)
+            .into_iter()
+            .filter(|n| n.len() == 64)
+            .collect();
+        for claim_id in claim_ids {
+            let claim_rel = format!("claims/{claim_id}.json");
+            let claim = load_evidence(&safe_rel(bundle, &claim_rel));
+            // The claim id rederives: FRF/CLAIM/v1 over the canonical
+            // document minus the id field.
+            let mut doc = claim.clone();
+            if let Some(obj) = doc.as_object_mut() {
+                obj.remove("id");
+            }
+            let canonical = encode(&doc)
+                .unwrap_or_else(|e| panic!("claim {claim_id}: cannot canonicalize: {e}"));
+            let expected = sha256_bytes(format!("FRF/CLAIM/v1\n{canonical}").as_bytes());
+            if expected != claim_id {
+                panic!(
+                    "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
-                if record_cid != as_str(&h["record_cid"]) {
-                    panic!(
+            }
+            if as_str(&claim["schema_version"]) != "frf-claim-v8" {
+                panic!(
+                    "claim {claim_id}: unexpected schema version {}",
+                    as_str(&claim["schema_version"])
+                );
+            }
+            let snapshot = &claim["knowledge_snapshot"];
+            let expected_cid = rederive::knowledge_snapshot_identity(snapshot);
+            if as_str(&snapshot["cid"]) != expected_cid {
+                panic!("claim {receipt_id}: the knowledge snapshot cid does not rederive");
+            }
+            let mut head_ids: Vec<String> = Vec::new();
+            if let Some(heads) = snapshot["residual_heads"].as_array() {
+                for h in heads {
+                    let hid = as_str(&h["id"]).to_string();
+                    head_ids.push(hid.clone());
+                    let record = load_evidence(&safe_rel(bundle, &format!("residuals/{hid}.json")));
+                    if as_str(&record["id"]) != hid {
+                        panic!("claim {receipt_id}: snapshot residual head {hid} is missing from the bundle");
+                    }
+                    // The v2 universe commits the head's RECORD CONTENT ADDRESS
+                    // and FINGERPRINT — the exact immutable observation the
+                    // blocker scan read — not the label. Both rederive from the
+                    // bundle's own record.
+                    let record_cid = sha256_bytes(
+                        encode(&record)
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "claim {receipt_id}: cannot canonicalize residual {hid}: {e}"
+                                )
+                            })
+                            .as_bytes(),
+                    );
+                    if record_cid != as_str(&h["record_cid"]) {
+                        panic!(
                         "claim {receipt_id}: snapshot head {hid} record_cid does not rederive from the bundle's record"
                     );
-                }
-                if rederive::residual_fingerprint(&record) != as_str(&h["fingerprint"]) {
-                    panic!("claim {receipt_id}: snapshot head {hid} fingerprint does not rederive");
-                }
-                // The head disposition must be the bundle's projected
-                // disposition for that residual (the events are verified
-                // elsewhere in this walk).
-                if projected_disposition(bundle, &hid) != as_str(&h["disposition"]) {
-                    panic!(
+                    }
+                    if rederive::residual_fingerprint(&record) != as_str(&h["fingerprint"]) {
+                        panic!(
+                            "claim {receipt_id}: snapshot head {hid} fingerprint does not rederive"
+                        );
+                    }
+                    // The head disposition must be the bundle's projected
+                    // disposition for that residual (the events are verified
+                    // elsewhere in this walk).
+                    if projected_disposition(bundle, &hid) != as_str(&h["disposition"]) {
+                        panic!(
                         "claim {receipt_id}: snapshot head {hid} disposition does not match its events"
                     );
+                    }
                 }
             }
-        }
-        head_ids.sort();
-        let mut snapshot_ids = head_ids.clone();
-        snapshot_ids.dedup();
-        if snapshot_ids.len() != head_ids.len() {
-            panic!("claim {receipt_id}: duplicate residual heads in the knowledge snapshot");
-        }
-        // The v2 universe commits every other member as (kind, id, cid)
-        // objects; the reduction records enter through kind == "reduction".
-        if let Some(objects) = snapshot["objects"].as_array() {
-            let mut seen: Vec<String> = Vec::new();
-            for o in objects {
-                let key = format!("{}:{}", as_str(&o["kind"]), as_str(&o["id"]));
-                if seen.contains(&key) {
-                    panic!(
-                        "claim {receipt_id}: duplicate object {:?} in the knowledge snapshot",
-                        key
-                    );
-                }
-                seen.push(key);
+            head_ids.sort();
+            let mut snapshot_ids = head_ids.clone();
+            snapshot_ids.dedup();
+            if snapshot_ids.len() != head_ids.len() {
+                panic!("claim {receipt_id}: duplicate residual heads in the knowledge snapshot");
             }
-            for o in objects {
-                if as_str(&o["kind"]) != "reduction" {
-                    continue;
+            // The v2 universe commits every other member as (kind, id, cid)
+            // objects; the reduction records enter through kind == "reduction".
+            if let Some(objects) = snapshot["objects"].as_array() {
+                let mut seen: Vec<String> = Vec::new();
+                for o in objects {
+                    let key = format!("{}:{}", as_str(&o["kind"]), as_str(&o["id"]));
+                    if seen.contains(&key) {
+                        panic!(
+                            "claim {receipt_id}: duplicate object {:?} in the knowledge snapshot",
+                            key
+                        );
+                    }
+                    seen.push(key);
                 }
-                let rid = as_str(&o["id"]);
-                let reduction = load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
-                if as_str(&reduction["id"]) != rid {
-                    panic!(
+                for o in objects {
+                    if as_str(&o["kind"]) != "reduction" {
+                        continue;
+                    }
+                    let rid = as_str(&o["id"]);
+                    let reduction =
+                        load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
+                    if as_str(&reduction["id"]) != rid {
+                        panic!(
                         "claim {receipt_id}: snapshot reduction {rid} is missing from the bundle"
                     );
-                }
-                let expected = rederive::reduction_identity(
-                    as_str(&reduction["residual_id"]),
-                    as_str(&reduction["source_run"]),
-                    as_str(&reduction["axis"]),
-                    as_str(&reduction["kind"]),
-                    as_str(&reduction["court_semantic_identity"]),
-                    as_str(&reduction["authority_artifact_sha256"]),
-                    as_str(&reduction["candidate_artifact_sha256"]),
-                    as_str(&reduction["environment_digest"]),
-                    as_str(&reduction["comparator_semantic_id"]),
-                    as_str(&reduction["comparator_semantic_hash"]),
-                    as_str(&reduction["comparator_implementation_hash"]),
-                    &reduction["argv_template"],
-                    as_str(&reduction["original_fixture_sha256"]),
-                    as_str(&reduction["final_fixture_sha256"]),
-                    &reduction["attempts"],
-                    &reduction["derivation"],
-                    &reduction["transform"],
-                    &reduction["minimizer"],
-                );
-                if expected != rid {
-                    panic!("claim {receipt_id}: reduction {rid} is not content-addressed");
+                    }
+                    let expected = rederive::reduction_identity(
+                        as_str(&reduction["residual_id"]),
+                        as_str(&reduction["source_run"]),
+                        as_str(&reduction["axis"]),
+                        as_str(&reduction["kind"]),
+                        as_str(&reduction["court_semantic_identity"]),
+                        as_str(&reduction["authority_artifact_sha256"]),
+                        as_str(&reduction["candidate_artifact_sha256"]),
+                        as_str(&reduction["environment_digest"]),
+                        as_str(&reduction["comparator_semantic_id"]),
+                        as_str(&reduction["comparator_semantic_hash"]),
+                        as_str(&reduction["comparator_implementation_hash"]),
+                        &reduction["argv_template"],
+                        as_str(&reduction["original_fixture_sha256"]),
+                        as_str(&reduction["final_fixture_sha256"]),
+                        &reduction["attempts"],
+                        &reduction["derivation"],
+                        &reduction["transform"],
+                        &reduction["minimizer"],
+                    );
+                    if expected != rid {
+                        panic!("claim {receipt_id}: reduction {rid} is not content-addressed");
+                    }
                 }
             }
+            // 8. The claim's ADMISSION POLICY re-derives from the bundle alone:
+            //    a sensitivity-backed claim must name challenge records that
+            //    genuinely demonstrate sensitivity on every claimed axis, an
+            //    independently-witnessed claim must name verified attestations of
+            //    this receipt, and high-assurance must additionally be backed by
+            //    the reference execution contract. The capability is evidence,
+            //    never a boolean in the claim file.
+            verify_claim_policy(bundle, &claim, &body, &receipt_id);
         }
-        // 8. The claim's ADMISSION POLICY re-derives from the bundle alone:
-        //    a sensitivity-backed claim must name challenge records that
-        //    genuinely demonstrate sensitivity on every claimed axis, an
-        //    independently-witnessed claim must name verified attestations of
-        //    this receipt, and high-assurance must additionally be backed by
-        //    the reference execution contract. The capability is evidence,
-        //    never a boolean in the claim file.
-        verify_claim_policy(bundle, &claim, &body, &receipt_id);
     }
 
     let ir = claim_ir(&body, bundle);
@@ -1635,6 +1684,7 @@ fn main() {
                cargo xtask verify bundle <bundle.frf/>\n\
                cargo xtask verify corpus <conformance-dir>\n\
                cargo xtask regen corpus <conformance-dir>\n\
+               cargo xtask regen-readme [--check]\n\
                cargo xtask experiment [OUT.json] [--no-check]\n\
                cargo xtask external-experiment [OUT.json] [--no-check]\n\
                cargo xtask external-experiment-v2 [OUT.json] [--no-check]\n"
@@ -1680,6 +1730,10 @@ fn main() {
                     std::process::exit(2);
                 }
             }
+        }
+        "regen-readme" => {
+            let check = args.iter().any(|a| a == "--check");
+            regen_readme::run(check);
         }
         "experiment" => {
             // The empirical program: seeded mutations over the cross-domain

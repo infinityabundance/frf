@@ -536,13 +536,31 @@ pub fn knowledge_snapshot_identity(snapshot: &KnowledgeSnapshot) -> Result<Strin
     hash_preimage("FRF/KNOWLEDGE/v2", &doc)
 }
 
+/// The content address of a COMPILED CLAIM: `FRF/CLAIM/v1` over the
+/// canonical document minus the `id` field. The claim is an immutable
+/// protocol object — the same receipt compiled under a different evidence
+/// universe, admission policy, or scope is a DIFFERENT claim with a
+/// different id, and they coexist forever. The identity cryptographically
+/// binds the proposition and the whole evidence graph it rests on.
+pub fn claim_identity(claim: &ClaimRecord) -> Result<String> {
+    let mut value = serde_json::to_value(claim)
+        .map_err(|e| FrfError::new(format!("cannot serialize the claim: {e}")))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("id");
+    }
+    let json = crate::canon::canonical(&value)?;
+    Ok(host::sha256_bytes(
+        format!("FRF/CLAIM/v1\n{json}").as_bytes(),
+    ))
+}
+
 /// The CONTENT ADDRESS of an evidence record (a residual record or an
 /// authority record): SHA-256 of the canonical serialization of the record's
-/// own fields. Records are stored as YAML by the reference engine, but their
-/// content identity is the canonical JSON document of their fields — the
-/// same document any independent implementation rederives from its own
-/// parsing. This is what the knowledge universe commits for a record whose
-/// id is a label, not a content address.
+/// own fields. Records are stored as canonical JSON evidence documents, and
+/// their content identity is the canonical JSON of their fields — the same
+/// document any independent implementation rederives from its own parsing.
+/// This is what the knowledge universe commits for a record whose id is a
+/// label, not a content address.
 pub fn record_content_identity<T: serde::Serialize>(record: &T) -> Result<String> {
     let value = serde_json::to_value(record)
         .map_err(|e| FrfError::new(format!("cannot serialize the record: {e}")))?;

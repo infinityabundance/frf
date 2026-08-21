@@ -460,7 +460,7 @@ fn golden_path_end_to_end() {
         "non-claim scope: {out_text}"
     );
 
-    let claim_path = work.path(&format!("{root}/claims/{receipt_final}.json"));
+    let claim_path = claim_path(&work, &receipt_final);
     let claim_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&claim_path).unwrap()).unwrap();
     assert_eq!(claim_json["receipt"], receipt_final);
@@ -471,8 +471,35 @@ fn golden_path_end_to_end() {
         h1_hash,
         "the claim names the candidate artifact that actually passed"
     );
-    let positive = claim_json["positive"].as_array().unwrap();
-    assert_eq!(positive.len(), 1, "exactly one conservative sentence");
+
+    // The prose is NOT stored in the Claim IR — it is DERIVED by the
+    // renderer from the verified premises (a hand-written claim file can
+    // never make a renderer restate a sentence the evidence does not
+    // deterministically produce).
+    assert!(
+        claim_json.get("positive").is_none(),
+        "prose is a renderer output, never stored Claim IR"
+    );
+    let rendered = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "claim",
+            "render",
+            &receipt_final,
+            "--format",
+            "prose",
+        ],
+    );
+    assert_success(&rendered, "claim render prose");
+    let rendered_out = stdout(&rendered);
+    let rendered_lines: Vec<&str> = rendered_out.lines().collect();
+    assert_eq!(
+        rendered_lines.len(),
+        3,
+        "one conservative sentence + the two non-claims"
+    );
 
     // -- 6. authority drift refuses to run -------------------------------------------
 
