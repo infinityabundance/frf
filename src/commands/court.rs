@@ -415,8 +415,22 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
 
     // The execution recipe: snapshotted authority + candidate (the exact
     // artifacts the run executed), the resolved argv with the fixture slot.
+    // The executed images are the SEALED verified bytes (verify→execute race
+    // closed): the snapshot paths remain argv[0] and the evidence paths.
     let authority_program = store.root.join(&capture.authority_artifact.path);
     let candidate_program = store.root.join(&capture.candidate_artifact.path);
+    let authority_bytes = store.verified_object_bytes(&capture.authority_artifact.sha256)?;
+    let candidate_bytes = store.verified_object_bytes(&capture.candidate_artifact.sha256)?;
+    let authority_image = host::ExecImage::seal(
+        &authority_bytes,
+        &capture.authority_artifact.sha256,
+        &authority_program,
+    )?;
+    let candidate_image = host::ExecImage::seal(
+        &candidate_bytes,
+        &capture.candidate_artifact.sha256,
+        &candidate_program,
+    )?;
     let original_fixture_arg = store
         .root
         .join("objects")
@@ -446,8 +460,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             &fixture_bytes,
             original_lines,
             &plan,
-            &authority_program,
-            &candidate_program,
+            &authority_image,
+            &candidate_image,
             &original_fixture_arg,
             &environment_digest,
         );
@@ -463,8 +477,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         store,
         capture,
         &plan,
-        &authority_program,
-        &candidate_program,
+        &authority_image,
+        &candidate_image,
         &original_fixture_arg,
         &environment_digest,
         &fixture_bytes,
@@ -503,8 +517,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
                 store,
                 capture,
                 &plan,
-                &authority_program,
-                &candidate_program,
+                &authority_image,
+                &candidate_image,
                 &original_fixture_arg,
                 &environment_digest,
                 &candidate_bytes,
@@ -552,8 +566,8 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         store,
         capture,
         &plan,
-        &authority_program,
-        &candidate_program,
+        &authority_image,
+        &candidate_image,
         &original_fixture_arg,
         &environment_digest,
         &final_bytes,
@@ -663,8 +677,8 @@ fn run_attempt(
     store: &Store,
     capture: &CaptureManifest,
     plan: &crate::comparators::EvaluationPlan,
-    authority_program: &Path,
-    candidate_program: &Path,
+    authority_image: &host::ExecImage,
+    candidate_image: &host::ExecImage,
     original_fixture_arg: &str,
     environment_digest: &str,
     bytes: &[u8],
@@ -690,8 +704,8 @@ fn run_attempt(
             }
         })
         .collect();
-    let raw_reference_out = host::run_process(authority_program, &arguments)?;
-    let raw_candidate_out = host::run_process(candidate_program, &arguments)?;
+    let raw_reference_out = host::run_process(authority_image, &arguments)?;
+    let raw_candidate_out = host::run_process(candidate_image, &arguments)?;
     // The comparison surface is the NORMALIZED streams: re-apply the exact
     // snapshotted normalizers the court bound (a fresh attempt is a NEW
     // observation — its requests are not checked against the run's evidence).
@@ -775,8 +789,8 @@ fn minimize_external(
     fixture_bytes: &[u8],
     original_lines: String,
     plan: &crate::comparators::EvaluationPlan,
-    authority_program: &Path,
-    candidate_program: &Path,
+    authority_image: &host::ExecImage,
+    candidate_image: &host::ExecImage,
     original_fixture_arg: &str,
     environment_digest: &str,
 ) -> Result<String> {
@@ -882,8 +896,8 @@ fn minimize_external(
         store,
         capture,
         plan,
-        authority_program,
-        candidate_program,
+        authority_image,
+        candidate_image,
         original_fixture_arg,
         environment_digest,
         fixture_bytes,
@@ -910,8 +924,8 @@ fn minimize_external(
         store,
         capture,
         plan,
-        authority_program,
-        candidate_program,
+        authority_image,
+        candidate_image,
         original_fixture_arg,
         environment_digest,
         &proposal_bytes,
@@ -1379,6 +1393,16 @@ pub fn run_once(
     let candidate_snapshot = store.materialize_object(&candidate_bytes, true)?;
     let fixture_snapshot = store.materialize_object(&fixture_bytes, false)?;
 
+    // The executed images are the SEALED verified bytes, not the snapshot
+    // paths: the same-OS-user verify→execute race is closed — the bytes that
+    // were hashed are the bytes that exec (a memfd sealed read-only, executed
+    // via /proc/self/fd/<n>). The snapshot path remains argv[0] and the
+    // evidence path; only the executed IMAGE is the sealed object.
+    let authority_image =
+        host::ExecImage::seal(&authority_bytes, &authority_sha256, &authority_snapshot)?;
+    let candidate_image =
+        host::ExecImage::seal(&candidate_bytes, &candidate_sha256, &candidate_snapshot)?;
+
     // Scripts execute under an interpreter; bind it for the exact-artifact
     // claim (binaries yield None).
     let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
@@ -1652,7 +1676,7 @@ pub fn run_once(
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let reference_out = host::run_process(&authority_snapshot, &arguments)?;
+    let reference_out = host::run_process(&authority_image, &arguments)?;
     let mut reference = SideCapture::from_outcome(&reference_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
@@ -1660,7 +1684,7 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
-    let candidate_out = host::run_process(&candidate_snapshot, &arguments)?;
+    let candidate_out = host::run_process(&candidate_image, &arguments)?;
     let mut candidate = SideCapture::from_outcome(&candidate_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
@@ -1708,7 +1732,7 @@ pub fn run_once(
             );
             let (request_bytes, _request_cid) = crate::normalizers::canonical_request(&request)?;
             let (new_stdout, new_stderr, response_bytes) = crate::normalizers::run_side(
-                &snap.snapshot,
+                &snap.image,
                 &request_bytes,
                 &semantic,
                 &stdout,
@@ -1799,7 +1823,7 @@ pub fn run_once(
             let json = crate::canon::canonical(&request)?;
             let request_bytes = json.into_bytes();
             let response_bytes =
-                crate::ext::run_program(&snap.snapshot, &request_bytes, std::path::Path::new("."))?;
+                crate::ext::run_program(&snap.image, &request_bytes, std::path::Path::new("."))?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
             crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
@@ -2592,7 +2616,7 @@ pub fn challenge(
                 let request_bytes = crate::canon::canonical(&request)?.into_bytes();
                 let request_cid = crate::ext::request_cid(&request_bytes);
                 let response_bytes =
-                    crate::ext::run_program(&snap.snapshot, &request_bytes, Path::new("."))?;
+                    crate::ext::run_program(&snap.image, &request_bytes, Path::new("."))?;
                 let response_cid = host::sha256_bytes(&response_bytes);
                 // The protocol says canonical JSON: the response must BE its
                 // own canonical serialization.

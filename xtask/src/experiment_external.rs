@@ -271,8 +271,25 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             );
             let mut scope = Vec::new();
             if claim_ok {
+                // Claim v8: content-addressed claim files with a by-receipt
+                // index; the experiment compiles once per receipt (baseline),
+                // so exactly one claim must resolve.
+                let index = case_work.join("ev/claims/by-receipt").join(&receipt);
+                let mut ids: Vec<String> = std::fs::read_dir(&index)
+                    .unwrap_or_else(|e| panic!("claim index for {receipt} is missing: {e}"))
+                    .flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                ids.sort();
+                assert_eq!(
+                    ids.len(),
+                    1,
+                    "receipt {receipt} has {} compiled claim(s); the experiment compiles once per receipt",
+                    ids.len()
+                );
                 let claim =
-                    load_evidence(&case_work.join("ev/claims").join(format!("{receipt}.json")));
+                    load_evidence(&case_work.join("ev/claims").join(format!("{}.json", ids[0])));
                 for o in claim["observable_scope"]
                     .as_array()
                     .cloned()

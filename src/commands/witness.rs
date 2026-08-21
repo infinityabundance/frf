@@ -143,8 +143,7 @@ pub fn attest(
     };
     let request_bytes = crate::canon::canonical(&request)?.into_bytes();
     let request_cid = crate::ext::request_cid(&request_bytes);
-    let response_bytes =
-        crate::ext::run_program(&snapshot.snapshot, &request_bytes, Path::new("."))?;
+    let response_bytes = crate::ext::run_program(&snapshot.image, &request_bytes, Path::new("."))?;
     let response_cid = host::sha256_bytes(&response_bytes);
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.

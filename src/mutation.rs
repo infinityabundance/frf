@@ -28,6 +28,15 @@
 //! mutant artifact is content-addressed like any candidate; its hash is
 //! rederivable from the operator + reference hash, so a verifier regenerates
 //! the wrapper and proves the recorded mutant hash.
+//!
+//! The wrapper locates the reference WITHOUT depending on `$0`: the sealed
+//! reference profile executes images from a sealed memfd, so a script's `$0`
+//! is its image path (`/proc/self/fd/<n>`), not an `objects/sha256/` path.
+//! The wrapper first tries `$0`'s directory (path-based execution), then the
+//! FIXTURE argument — the court always passes the fixture as an
+//! `objects/sha256/<fixture-hash>` path, and the reference lives in the same
+//! directory — so the same deterministic bytes resolve the reference under
+//! both execution mechanisms, root-independently and cwd-independently.
 
 use crate::error::{FrfError, Result};
 
@@ -89,18 +98,38 @@ impl MutationOperator {
     /// The mutant wrapper: a deterministic shell script that re-executes the
     /// reference snapshot and alters exactly the targeted surface. The
     /// wrapper and the reference snapshot live in the SAME `objects/sha256/`
-    /// directory (both are content-addressed court artifacts), so the wrapper
-    /// resolves the reference RELATIVE TO ITSELF (`dirname $0` + the
-    /// reference hash) — root-independent and cwd-independent: the same bytes
-    /// run under any `--root` spelling, and any verifier regenerates the same
-    /// bytes from (operator, reference hash). The untouched streams are
-    /// re-emitted byte-for-byte.
+    /// directory (both are content-addressed court artifacts). The reference
+    /// is resolved WITHOUT depending on `$0` — under the sealed reference
+    /// profile a script's `$0` is its image path, not an `objects/sha256/`
+    /// path — so the wrapper tries `$0`'s directory first (path-based
+    /// execution) and then the fixture argument (an `objects/sha256/` path
+    /// the court always passes, naming the directory the reference lives
+    /// in). Root-independent, cwd-independent, and content-addressed: any
+    /// verifier regenerates the same bytes from (operator, reference hash),
+    /// and the same bytes resolve the reference under both execution
+    /// mechanisms. The untouched streams are re-emitted byte-for-byte.
     pub fn wrapper(self, reference_sha256: &str) -> String {
         let preamble = format!(
             "#!/bin/sh\n\
              # FRF court-challenge mutant: {} of objects/sha256/{reference_sha256}\n\
-             self_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd) || exit 2\n\
+             self_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd) 2>/dev/null || exit 2\n\
              ref=\"$self_dir/{reference_sha256}\"\n\
+             if [ ! -f \"$ref\" ]; then\n\
+               ref=\"\"\n\
+               for arg in \"$@\"; do\n\
+                 case \"$arg\" in\n\
+                   */objects/sha256/*)\n\
+                     dir=$(CDPATH= cd -- \"$(dirname -- \"$arg\")\" && pwd) 2>/dev/null || continue\n\
+                     if [ -f \"$dir/{reference_sha256}\" ]; then ref=\"$dir/{reference_sha256}\"; break; fi\
+\
+                     ;;\n\
+                 esac\n\
+               done\n\
+             fi\n\
+             if [ -z \"$ref\" ]; then\n\
+               echo \"FRF-MUTANT: cannot locate reference object {reference_sha256}\" >&2\n\
+               exit 2\n\
+             fi\n\
              out=$(mktemp) || exit 2\n\
              err=$(mktemp) || exit 2\n\
              \"$ref\" \"$@\" >\"$out\" 2>\"$err\"\n\

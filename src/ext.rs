@@ -27,12 +27,15 @@ use crate::store::Store;
 use std::path::{Path, PathBuf};
 
 /// A snapshotted extension program: the exact bytes that will run.
-#[derive(Debug, Clone)]
 pub struct ProgramSnapshot {
     /// SHA-256 of the program bytes.
     pub impl_hash: String,
-    /// The immutable, sealed snapshot under `objects/sha256/`.
+    /// The immutable, sealed snapshot under `objects/sha256/` (the evidence
+    /// path + argv[0]).
     pub snapshot: PathBuf,
+    /// The SEALED executable image: the exact verified bytes, executed via a
+    /// memfd sealed read-only (verify→execute race closed).
+    pub image: host::ExecImage,
     /// The artifact identity (root-relative snapshot path + interpreter
     /// chain) recorded in provenance and carried by the bundle closure.
     pub artifact: ArtifactIdentity,
@@ -40,11 +43,12 @@ pub struct ProgramSnapshot {
 
 /// Read + hash + seal a program BEFORE anything executes it, and record its
 /// interpreter chain. The program is a content-addressed object like any
-/// artifact.
+/// artifact; the executed image is the sealed verified bytes.
 pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
     let bytes = host::read_file(path)?;
     let impl_hash = host::sha256_bytes(&bytes);
     let snapshot = store.materialize_object(&bytes, true)?;
+    let image = host::ExecImage::seal(&bytes, &impl_hash, &snapshot)?;
     let interpreter = host::interpreter_identity(&bytes)?;
     let artifact = ArtifactIdentity {
         path: store
@@ -61,6 +65,7 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
     Ok(ProgramSnapshot {
         impl_hash,
         snapshot,
+        image,
         artifact,
     })
 }
@@ -69,12 +74,12 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
 /// stdin. Fail-closed: a non-zero exit or an execution error (timeout,
 /// overflow, missing program) is a refusal. Returns the raw stdout bytes —
 /// the caller parses and interprets them against the protocol.
-pub fn run_program(snapshot: &Path, request_bytes: &[u8], cwd: &Path) -> Result<Vec<u8>> {
-    let out = host::run_process_with_stdin_in(snapshot, &[], request_bytes, cwd)?;
+pub fn run_program(image: &host::ExecImage, request_bytes: &[u8], cwd: &Path) -> Result<Vec<u8>> {
+    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "extension program {} exited {}; refusing to record evidence from a failed participant",
-            snapshot.display(),
+            image.argv0().display(),
             out.exit
         )));
     }

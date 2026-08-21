@@ -18,3 +18,9 @@
 # run; CI asserts on a fresh report, so neither is tracked.
 /golden/work/experiment/
 /golden/work/experiment.json
+# The external empirical program (v1 + v2) likewise regenerates its case
+# working dirs and reports each run.
+/golden/work/external-experiment/
+/golden/work/external-experiment.json
+/golden/work/external-experiment-v2/
+/golden/work/external-experiment-v2.json

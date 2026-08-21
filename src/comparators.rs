@@ -759,13 +759,13 @@ pub fn canonical_request(request: &crate::model::ComparatorRequest) -> Result<(V
 /// that does not name the request it answers, and every contradictory or
 /// inconclusive response ([`interpret`]).
 pub fn run_external(
-    snapshot: &Path,
+    image: &host::ExecImage,
     axis: &ObservableId,
     request_bytes: &[u8],
     request_cid: &str,
     cwd: &Path,
 ) -> Result<(ComparatorOutcome, Vec<u8>)> {
-    let out = host::run_process_with_stdin_in(snapshot, &[], request_bytes, cwd)?;
+    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",
@@ -802,12 +802,16 @@ pub fn evidence_file_names() -> [&'static str; 4] {
 
 /// `Store` binding: materialize + verify a comparator implementation artifact
 /// (the exact bytes the court snapshotted) for re-execution.
+/// Materialize an extension implementation artifact and SEAL it into an
+/// executable image: the exact verified bytes (verify→execute race closed)
+/// with the materialized object path as argv[0].
 pub fn materialize_implementation(
     store: &Store,
     artifact: &ArtifactIdentity,
-) -> Result<std::path::PathBuf> {
+) -> Result<host::ExecImage> {
     let bytes = store.verified_object_bytes(&artifact.sha256)?;
-    store.materialize_object(&bytes, true)
+    let path = store.materialize_object(&bytes, true)?;
+    host::ExecImage::seal(&bytes, &artifact.sha256, &path)
 }
 
 fn b64(bytes: &[u8]) -> String {

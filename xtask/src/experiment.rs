@@ -444,7 +444,25 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             );
             let mut claim_scope = Vec::new();
             if claim_ok {
-                let claim = load_evidence(&ev.join("claims").join(format!("{receipt}.json")));
+                // Since claim v8 the claim is content-addressed
+                // (`claims/<claim-id>.json`) with a non-normative by-receipt
+                // index; the experiment compiles exactly once per receipt
+                // (baseline policy), so exactly one claim must resolve.
+                let index = ev.join("claims").join("by-receipt").join(&receipt);
+                let mut ids: Vec<String> = std::fs::read_dir(&index)
+                    .unwrap_or_else(|e| panic!("claim index for {receipt} is missing: {e}"))
+                    .flatten()
+                    .filter(|e| e.path().is_file())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect();
+                ids.sort();
+                assert_eq!(
+                    ids.len(),
+                    1,
+                    "receipt {receipt} has {} compiled claim(s); the experiment compiles once per receipt",
+                    ids.len()
+                );
+                let claim = load_evidence(&ev.join("claims").join(format!("{}.json", ids[0])));
                 // K is a REGION of cells since claim v6; the claimed axes are
                 // the flat union across the cells.
                 for o in claim["observable_scope"]

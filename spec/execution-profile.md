@@ -34,11 +34,47 @@ profile declares it, and exact replay across profiles is refused.
 ## `frf-exec-linux-v1` — the reference profile
 
 Every side runs as a direct child of the harness: **no shell** is involved
-in execution (the captured argv is passed to `execve(2)` on the
-content-addressed, re-sealed artifact). Each side lives in its own process
-group; when the direct process exits, times out, or overflows a stream cap,
-the **entire group** is terminated, so a descendant cannot hold the capture
-pipes open past the direct process.
+in execution (the captured argv is passed to `execve(2)` on the sealed
+image). Each side lives in its own process group; when the direct process
+exits, times out, or overflows a stream cap, the **entire group** is
+terminated, so a descendant cannot hold the capture pipes open past the
+direct process.
+
+### Sealed-image execution (the verify→execute race is closed)
+
+An executable image is bound to its verified bytes **at execution time**:
+
+```text
+read artifact bytes → verify CID → memfd_create → copy →
+F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL →
+execute /proc/self/fd/<n>
+```
+
+No pathname whose contents were verified earlier is ever re-opened for
+execution — the bytes that were hashed are the bytes that exec. After
+sealing, **no process, not even the same OS user**, can alter the image;
+the seals are read back (`F_GET_SEALS`) before the image may be executed.
+This closes the same-OS-user verify→execute race for the executed image.
+
+Two declared properties follow from the mechanism:
+
+- **Native (ELF) images keep their `argv[0]`**: the harness sets argv[0]
+  to the materialized snapshot path, so a binary observes the same
+  program name as a path-based execution.
+- **Scripts observe their image path as `$0`**: the kernel executes a
+  shebang script via its exec path, so a script's `$0` is
+  `/proc/self/fd/<n>` (the sealed image), never an `objects/sha256/`
+  path. The captured argv (the arguments after the program name) is
+  unchanged, and the interpreter chain is bound from the artifact bytes.
+  A script whose behavior depends on `$0` is therefore observed under
+  the profile's declared mechanism, and FRF's own generated
+  instrumentation never depends on `$0` (the court-challenge mutant
+  wrapper resolves the reference from the fixture argument).
+
+Data files (fixtures) remain path-based: the recorded argv is part of the
+run identity, and the content-addressed object CAS plus `0444`/`0555`
+permissions plus re-hashing on every use are the data discipline. Sealing
+is for the executed **image**.
 
 ### Capture bounds (the parameters that actually applied)
 
@@ -49,7 +85,7 @@ pipes open past the direct process.
 | `rlimit_as_mb`       | `2048`       | Address-space limit per side (`RLIMIT_AS`)          |
 | `rlimit_cpu_s`       | `30`         | CPU-time limit per side (`RLIMIT_CPU`)              |
 | `rlimit_nofile`      | `1024`       | Open-file limit per side (`RLIMIT_NOFILE`)          |
-| `rlimit_nproc`       | `512`        | Process-count limit per side (`RLIMIT_NPROC`, v15)  |
+| `rlimit_nproc`       | `4096`       | Process-count limit per side (`RLIMIT_NPROC`, v15)  |
 
 The defaults are overridable through test hooks (`FRF_EXEC_TIMEOUT_MS`,
 `FRF_EXEC_MAX_BYTES`, `FRF_EXEC_RLIMIT_AS_MB`, `FRF_EXEC_RLIMIT_CPU_S`,
