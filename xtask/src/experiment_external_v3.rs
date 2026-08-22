@@ -695,14 +695,30 @@ pub(crate) fn run_case_experiments(
         );
         let residuals = cap["residuals"].as_array().cloned().unwrap_or_default();
         if !residuals.is_empty() {
+            // The capture's `residuals` are residual RECORD ids (strings);
+            // load each record so the failure names the exact axis, kind,
+            // and raw projections that diverged without the trigger — a
+            // timing-sensitive probe and a genuine defect divergence look
+            // very different in this detail.
+            let detail: Vec<String> = residuals
+                .iter()
+                .filter_map(|r| r.as_str())
+                .map(|rid| {
+                    let rec =
+                        load_evidence(&case_work.join("ev/residuals").join(format!("{rid}.json")));
+                    format!(
+                        "{rid} axis={} kind={} ref={:?} cand={:?}",
+                        as_str(&rec["axis"]),
+                        as_str(&rec["kind"]),
+                        as_str(&rec["raw_reference"]),
+                        as_str(&rec["raw_candidate"]),
+                    )
+                })
+                .collect();
             failures.push(format!(
                 "{id}/clean-control: the vulnerable side diverged WITHOUT the trigger ({} residual(s): {})",
                 residuals.len(),
-                residuals
-                    .iter()
-                    .map(|r| as_str(&r["id"]).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                detail.join(" | ")
             ));
         }
         clean_controls.push(CleanControl {
