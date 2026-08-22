@@ -1486,11 +1486,19 @@ pub fn run_once(
     // closure instead: the dynamic loader + the resolved dependency closure,
     // hashed at observation time (executable hash is not executable
     // semantics — spec/execution-profile.md). The closure is resolved for
-    // the SNAPSHOT path the side actually executes.
+    // the SNAPSHOT path the side actually executes. The native runtime
+    // closure resolves against the SEALED EXEC PATH (the loader sees
+    // `/proc/self/fd/<n>` at exec time), never the materialized snapshot
+    // path: `$ORIGIN`-relative dependencies resolve exactly as the loader
+    // resolves them when the side runs — a dependency the sealed mechanism
+    // cannot find is a REFUSAL (the artifact cannot load under the profile's
+    // sealed execution).
     let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
-    let authority_native = crate::native::runtime_closure(&authority_snapshot, &authority_bytes)?;
+    let authority_native =
+        crate::native::runtime_closure(authority_image.path(), &authority_bytes)?;
     let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
-    let candidate_native = crate::native::runtime_closure(&candidate_snapshot, &candidate_bytes)?;
+    let candidate_native =
+        crate::native::runtime_closure(candidate_image.path(), &candidate_bytes)?;
 
     // -- the DECLARED execution-context closure -----------------------------
     // The court declares the child executables / runtime libraries / data
@@ -1622,11 +1630,20 @@ pub fn run_once(
                     // operation re-hashes the sealed snapshot on every use.
                     let snapshot = store.materialize_object(&bytes, true)?;
                     let interpreter = host::interpreter_identity(&bytes)?;
+                    // The comparator's native runtime closure resolves
+                    // against its SEALED EXEC PATH (it runs via the sealed
+                    // memfd like every other program): `$ORIGIN`-relative
+                    // dependencies must resolve as the loader resolves them
+                    // when the comparator actually runs.
+                    let comparator_image = host::ExecImage::seal(&bytes, &impl_hash, &snapshot)?;
                     let artifact = ArtifactIdentity {
                         path: rel_to_root(&snapshot),
                         sha256: impl_hash.clone(),
                         interpreter,
-                        native_runtime: crate::native::runtime_closure(&snapshot, &bytes)?,
+                        native_runtime: crate::native::runtime_closure(
+                            comparator_image.path(),
+                            &bytes,
+                        )?,
                     };
                     external_hosts.push(Some(ExternalHost {
                         artifact: artifact.clone(),

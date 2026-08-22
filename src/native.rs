@@ -143,19 +143,22 @@ fn resolve_dependencies(loader: &str, executable: &Path) -> Result<Vec<String>> 
     Ok(resolved)
 }
 
-/// Compute the native runtime closure of an ELF executable at
-/// `<path>`, whose bytes are `bytes`: the loader (`PT_INTERP`), the resolved
-/// dependency closure, and the hash of every loaded component. Returns
-/// `Ok(None)` for a non-ELF artifact (a script — the caller binds the
-/// interpreter chain instead). The closure is content-addressed:
-/// `FRF/RUNTIME-CLOSURE/v1` over the canonical document minus the cid.
-pub fn runtime_closure(path: &Path, bytes: &[u8]) -> Result<Option<NativeRuntimeClosure>> {
+/// Compute the native runtime closure of an ELF executable whose bytes are
+/// `bytes`, resolved exactly as the side's own exec resolves it: the
+/// `exec_path` is the path the loader sees as the executable (for a sealed
+/// image that is `/proc/self/fd/<n>` — the memfd fd the loader child
+/// inherits — so `$ORIGIN`-relative resolution sees the SAME origin the real
+/// execution sees, never the materialized snapshot path). Returns `Ok(None)`
+/// for a non-ELF artifact (a script — the caller binds the interpreter chain
+/// instead). The closure is content-addressed: `FRF/RUNTIME-CLOSURE/v1` over
+/// the canonical document minus the cid.
+pub fn runtime_closure(exec_path: &Path, bytes: &[u8]) -> Result<Option<NativeRuntimeClosure>> {
     if !is_elf(bytes) {
         return Ok(None);
     }
     let loader = interp_path(bytes)?;
     let mut components: Vec<NativeRuntimeComponent> = Vec::new();
-    for dep in resolve_dependencies(&loader, path)? {
+    for dep in resolve_dependencies(&loader, exec_path)? {
         let dep_bytes = std::fs::read(&dep).map_err(|e| {
             FrfError::new(format!(
                 "cannot read the resolved dependency {dep}: {e} — the native runtime closure cannot be bound"
