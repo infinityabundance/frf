@@ -61,6 +61,7 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
             .unwrap_or_else(|_| impl_hash.clone()),
         sha256: impl_hash.clone(),
         interpreter,
+        native_runtime: crate::native::runtime_closure(&snapshot, &bytes)?,
     };
     Ok(ProgramSnapshot {
         impl_hash,

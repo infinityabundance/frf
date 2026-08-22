@@ -172,6 +172,62 @@ downstream interpreter) is recorded for every script artifact, so a changed
 `/usr/bin/env` or downstream interpreter is visible to exact replay even
 when the kernel is unchanged.
 
+## Native runtime closure — `executable hash` is not `executable semantics`
+
+For a native (ELF) executable, the artifact's behavior depends on more than
+its own bytes. The kernel invokes the dynamic loader named by `PT_INTERP`;
+the loader then resolves the executable's `DT_NEEDED` dependencies,
+transitively, under the loader's search configuration (its cache, its
+default directories, and the effective `LD_LIBRARY_PATH` of the
+observation). Two artifacts with identical hashes can behave differently
+under different loaders or libraries, and one artifact can behave
+differently on two machines that load different components.
+
+The engine therefore binds the **native runtime closure AT OBSERVATION
+TIME** (receipt schema v17):
+
+```text
+FRF/RUNTIME-CLOSURE/v1 {
+    schema_version: frf-runtime-closure-v1
+    cid
+    interp:   { path, sha256 }   // the dynamic loader (PT_INTERP)
+    components: [ { path, sha256 }, … ]  // the resolved closure
+}
+```
+
+- The executable's ELF program headers are parsed (self-contained, no
+  external parser) to find `PT_INTERP`; a malformed ELF is a REFUSAL — an
+  artifact that is not what it claims is not evidence. A statically linked
+  binary (no `PT_INTERP`) has no dynamic loader to bind; the closure is
+  refused honestly rather than silently omitted.
+- The resolved dependency closure is produced by invoking the SYSTEM loader
+  read-only (`ld.so --list <executable>`) — the same resolution the side's
+  own exec would perform, with the observation's cache, default
+  directories, and `LD_LIBRARY_PATH` applying. Only the loader executes,
+  never the artifact's code. An unresolvable dependency (`not found`) or a
+  loader that refuses to resolve is a REFUSAL: a closure that cannot be
+  bound is an honest outcome, never a silent gap.
+- Every resolved component (loader + libraries) is hashed; components are
+  sorted by path, so the identity is a deterministic SET identity. The
+  closure's `cid` rederives in any implementation:
+  `SHA-256("FRF/RUNTIME-CLOSURE/v1\n" ‖ JCS(document minus the cid))`.
+- The closure lives on the artifact identity (`ArtifactIdentity.native_runtime`,
+  in the capture and copied verbatim into the receipt). An artifact is a
+  script OR a native ELF, never both: the interpreter chain and the closure
+  are mutually exclusive, and verification REFUSES an artifact carrying
+  both.
+- Verification rederives the closure's `cid` from its own fields before the
+  artifact is consumed, and the receipt's copy must EQUAL the capture's — a
+  receipt never invents the machinery its run loaded.
+- The resolved paths and hashes are evidence recorded at observation time;
+  like interpreter hashes they are machine-specific and not re-derivable
+  cross-machine. The closure's CID rederives from its own fields in any
+  implementation.
+- High-assurance claim admission requires the runtime closure for every
+  native premise artifact: under that policy, a native artifact without its
+  bound closure is refused, exactly as a script without its interpreter
+  chain is refused.
+
 ## The reproduction policies
 
 `frf replay RUN_ID | RECEIPT_ID --policy exact|semantic`:
@@ -187,7 +243,8 @@ Exact replay requires:
 - the same working directory;
 - every artifact's interpreter chain re-resolving to the recorded
   identities (kernel interpreter, downstream interpreter, shebang
-  arguments, env resolver, PATH digest);
+  arguments, env resolver, PATH digest); a native artifact's runtime
+  closure re-resolving to the recorded loader + component hashes;
 - the same observations, byte for byte.
 
 Any provenance drift **REFUSES** the replay. An exact reproduction under

@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_SCHEMA: &str = "frf-receipt-v16";
+const RECEIPT_SCHEMA: &str = "frf-receipt-v17";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).

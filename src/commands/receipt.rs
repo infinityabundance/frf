@@ -231,6 +231,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             identity_hash: authority.executable_sha256.clone(),
             provenance: format!("file:{}", authority.path),
             interpreter: capture.authority_artifact.interpreter.clone(),
+            native_runtime: capture.authority_artifact.native_runtime.clone(),
         },
         candidate: ReceiptCandidate {
             name: spec.candidate.name.clone(),
@@ -238,6 +239,7 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             build_profile: spec.candidate.build_profile.clone(),
             identity_hash: capture.candidate_artifact.sha256.clone(),
             interpreter: capture.candidate_artifact.interpreter.clone(),
+            native_runtime: capture.candidate_artifact.native_runtime.clone(),
         },
         environment: capture.environment.clone(),
         fixtures: vec![ReceiptFixture {

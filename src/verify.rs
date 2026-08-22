@@ -936,6 +936,43 @@ fn disposition_of(res: &ReceiptResidual) -> Option<Disposition> {
     }
 }
 
+/// Verify a native runtime closure: its schema, its content address
+/// (`FRF/RUNTIME-CLOSURE/v1` over the canonical document minus the cid — a
+/// hand-edited or forged closure is refused), and every component's hash
+/// shape. The resolved paths and hashes are evidence recorded at observation
+/// time (machine-specific, like interpreter hashes); the CID rederives in
+/// any implementation.
+pub fn verify_runtime_closure(closure: &crate::model::NativeRuntimeClosure) -> Result<()> {
+    if closure.schema_version != crate::model::SCHEMA_RUNTIME_CLOSURE {
+        return Err(FrfError::new(format!(
+            "unsupported runtime closure schema {:?} (this implementation speaks {})",
+            closure.schema_version,
+            crate::model::SCHEMA_RUNTIME_CLOSURE
+        )));
+    }
+    let rederived = crate::semantics::runtime_closure_identity(closure)?;
+    if rederived != closure.cid {
+        return Err(FrfError::new(format!(
+            "the native runtime closure is not content-addressed: its fields hash to {} but its cid claims {}; refusing to consume a hand-edited or forged closure",
+            &rederived[..16],
+            &closure.cid[..16]
+        )));
+    }
+    for (what, component) in std::iter::once(("interp", &closure.interp))
+        .chain(closure.components.iter().map(|c| ("component", c)))
+    {
+        if component.sha256.len() != 64 || !component.sha256.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(FrfError::new(format!(
+                "the runtime closure {what} {} carries a malformed hash {:?}",
+                component.path,
+                &component.sha256[..component.sha256.len().min(16)]
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Verify a receipt before anything may consume it:
 ///
 /// 1. content addressing: `id == receipt-{run}-{SHA-256(canonical body)}`;
@@ -1021,6 +1058,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     }
     if body.authority.identity_hash != cap.authority_artifact.sha256
         || body.authority.interpreter != cap.authority_artifact.interpreter
+        || body.authority.native_runtime != cap.authority_artifact.native_runtime
     {
         return Err(FrfError::new(format!(
             "receipt {id}: the authority artifact does not match the capture"
@@ -1028,10 +1066,37 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     }
     if body.candidate.identity_hash != cap.candidate_artifact.sha256
         || body.candidate.interpreter != cap.candidate_artifact.interpreter
+        || body.candidate.native_runtime != cap.candidate_artifact.native_runtime
     {
         return Err(FrfError::new(format!(
             "receipt {id}: the candidate artifact does not match the capture"
         )));
+    }
+    // The closure, when carried, must be self-authenticating; and an artifact
+    // is EITHER a script (interpreter chain) OR a native ELF (runtime
+    // closure) — never both, never neither (a native artifact that names no
+    // runtime cannot claim what it loaded; a script's interpreter chain is
+    // its binding).
+    for (who, interpreter, native_runtime) in [
+        (
+            "authority",
+            &body.authority.interpreter,
+            &body.authority.native_runtime,
+        ),
+        (
+            "candidate",
+            &body.candidate.interpreter,
+            &body.candidate.native_runtime,
+        ),
+    ] {
+        if interpreter.is_some() && native_runtime.is_some() {
+            return Err(FrfError::new(format!(
+                "receipt {id}: the {who} artifact carries BOTH an interpreter chain and a native runtime closure — an artifact is a script OR a native ELF, never both"
+            )));
+        }
+        if let Some(nr) = native_runtime {
+            verify_runtime_closure(nr)?;
+        }
     }
     if body.fixtures.len() != 1 {
         return Err(FrfError::new(format!(
@@ -1760,6 +1825,27 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
                 return Err(FrfError::new(format!(
                     "claim {id}: high-assurance requires the reference capture bounds for every premise"
                 )));
+            }
+            // Native artifacts must bind their runtime closure: for native
+            // software, executable hash is not executable semantics — a
+            // high-assurance premise must name what its artifacts actually
+            // loaded.
+            for (who, artifact) in [
+                (
+                    "authority",
+                    (&r.authority.interpreter, &r.authority.native_runtime),
+                ),
+                (
+                    "candidate",
+                    (&r.candidate.interpreter, &r.candidate.native_runtime),
+                ),
+            ] {
+                if artifact.0.is_none() && artifact.1.is_none() {
+                    return Err(FrfError::new(format!(
+                        "claim {id}: the premise {} is a NATIVE artifact whose runtime closure is not bound — high-assurance native evidence must name the dynamic loader and the resolved dependency closure",
+                        who
+                    )));
+                }
             }
         }
         if claim.replay_profile != crate::model::EXECUTION_PROFILE_LINUX {
@@ -2750,9 +2836,9 @@ mod tests {
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
                 rlimit_nproc: "512".into(),
-            cgroup_pids_max: None,
-            cgroup_memory_max: None,
-            cgroup_cpu_max: None,
+                cgroup_pids_max: None,
+                cgroup_memory_max: None,
+                cgroup_cpu_max: None,
             },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
@@ -2761,6 +2847,7 @@ mod tests {
                 identity_hash: authority_hash,
                 provenance: "file:golden/reference.sh".into(),
                 interpreter: None,
+                native_runtime: None,
             },
             candidate: ReceiptCandidate {
                 name: "cand-cli".into(),
@@ -2768,6 +2855,7 @@ mod tests {
                 build_profile: "debug".into(),
                 identity_hash: candidate_hash,
                 interpreter: None,
+                native_runtime: None,
             },
             environment: env,
             fixtures: vec![ReceiptFixture {

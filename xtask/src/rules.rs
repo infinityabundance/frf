@@ -80,9 +80,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v16" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v17" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v16",
+            "schema_version is {:?}, expected frf-receipt-v17",
             doc["schema_version"]
         ));
     }
@@ -113,6 +113,30 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             v.push(format!(
                 "unknown property {k:?} on receipt.{what} (strict evidence)"
             ));
+        }
+    }
+    // v17: the native runtime closure's own structure (authority/candidate).
+    for what in ["authority", "candidate"] {
+        if let Some(closure) = doc[what].get("native_runtime").filter(|n| !n.is_null()) {
+            for k in unknown_keys(closure, RUNTIME_CLOSURE_KEYS) {
+                v.push(format!(
+                    "unknown property {k:?} on receipt.{what}.native_runtime"
+                ));
+            }
+            for k in unknown_keys(&closure["interp"], RUNTIME_COMPONENT_KEYS) {
+                v.push(format!(
+                    "unknown property {k:?} on receipt.{what}.native_runtime.interp"
+                ));
+            }
+            if let Some(comps) = closure["components"].as_array() {
+                for (i, c) in comps.iter().enumerate() {
+                    for k in unknown_keys(c, RUNTIME_COMPONENT_KEYS) {
+                        v.push(format!(
+                            "unknown property {k:?} on receipt.{what}.native_runtime.components[{i}]"
+                        ));
+                    }
+                }
+            }
         }
     }
     for k in unknown_keys(&doc["court"]["admissibility_envelope"], ENVELOPE_KEYS) {
@@ -347,7 +371,7 @@ const PROVENANCE_KEYS: &[&str] = &[
 const RUNNER_KEYS: &[&str] = &["schema_version", "frf_version", "frf_executable_hash"];
 const COMPARATOR_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash", "artifact"];
 const EXTENSION_IMPL_KEYS: &[&str] = &["id", "implementation_hash", "runner_hash", "artifact"];
-const ARTIFACT_KEYS: &[&str] = &["path", "sha256", "interpreter"];
+const ARTIFACT_KEYS: &[&str] = &["path", "sha256", "interpreter", "native_runtime"];
 const NORMALIZER_SEMANTIC_KEYS: &[&str] = &[
     "id",
     "relation_id",
@@ -376,14 +400,20 @@ const AUTHORITY_KEYS: &[&str] = &[
     "identity_hash",
     "provenance",
     "interpreter",
+    "native_runtime",
 ];
+
 const CANDIDATE_KEYS: &[&str] = &[
     "name",
     "version_or_commit",
     "build_profile",
     "identity_hash",
     "interpreter",
+    "native_runtime",
 ];
+
+const RUNTIME_CLOSURE_KEYS: &[&str] = &["schema_version", "cid", "interp", "components"];
+const RUNTIME_COMPONENT_KEYS: &[&str] = &["path", "sha256"];
 const INTERPRETER_KEYS: &[&str] = &[
     "kernel_interpreter",
     "shebang_argument_bytes",
@@ -440,9 +470,9 @@ const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v16" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v17" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v16",
+            "schema_version is {:?}, expected frf-receipt-v17",
             rec["schema_version"]
         ));
     }
@@ -924,6 +954,66 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             v.push(format!(
                 "capture bound cgroup_cpu_max must be the kernel's `quota period` pair within 1,000,000 us each, got {v_str:?}"
             ));
+        }
+    }
+
+    // v17: the native runtime closure. An artifact is a script (interpreter
+    // chain) OR a native ELF (runtime closure), never both; the closure, when
+    // present, must be self-authenticating (its cid rederives) and carry
+    // well-formed component hashes.
+    for (who, artifact) in [
+        ("authority", &rec["authority"]),
+        ("candidate", &rec["candidate"]),
+    ] {
+        let has_interp = artifact
+            .get("interpreter")
+            .map(|i| !i.is_null())
+            .unwrap_or(false);
+        let has_native = artifact
+            .get("native_runtime")
+            .map(|n| !n.is_null())
+            .unwrap_or(false);
+        if has_interp && has_native {
+            v.push(format!(
+                "the {who} artifact carries BOTH an interpreter chain and a native runtime closure — an artifact is a script OR a native ELF, never both"
+            ));
+        }
+        if let Some(closure) = artifact.get("native_runtime").filter(|n| !n.is_null()) {
+            if as_str(&closure["schema_version"]) != "frf-runtime-closure-v1" {
+                v.push(format!(
+                    "the {who} runtime closure has unsupported schema_version {:?}",
+                    closure["schema_version"]
+                ));
+            }
+            let expected = crate::rederive::runtime_closure_identity(closure);
+            if expected != as_str(&closure["cid"]) {
+                v.push(format!(
+                    "the {who} runtime closure cid does not rederive ({} != {})",
+                    &expected[..16],
+                    &as_str(&closure["cid"])[..16]
+                ));
+            }
+            for what in ["interp"] {
+                let comp = &closure[what];
+                let sha = as_str(&comp["sha256"]);
+                if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    v.push(format!(
+                        "the {who} runtime closure {what} {} carries a malformed hash",
+                        as_str(&comp["path"])
+                    ));
+                }
+            }
+            if let Some(comps) = closure["components"].as_array() {
+                for comp in comps {
+                    let sha = as_str(&comp["sha256"]);
+                    if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                        v.push(format!(
+                            "the {who} runtime closure component {} carries a malformed hash",
+                            as_str(&comp["path"])
+                        ));
+                    }
+                }
+            }
         }
     }
 

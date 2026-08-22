@@ -1434,9 +1434,15 @@ pub fn run_once(
         host::ExecImage::seal(&candidate_bytes, &candidate_sha256, &candidate_snapshot)?;
 
     // Scripts execute under an interpreter; bind it for the exact-artifact
-    // claim (binaries yield None).
+    // claim (binaries yield None). A NATIVE (ELF) artifact binds its runtime
+    // closure instead: the dynamic loader + the resolved dependency closure,
+    // hashed at observation time (executable hash is not executable
+    // semantics — spec/execution-profile.md). The closure is resolved for
+    // the SNAPSHOT path the side actually executes.
     let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
+    let authority_native = crate::native::runtime_closure(&authority_snapshot, &authority_bytes)?;
     let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
+    let candidate_native = crate::native::runtime_closure(&candidate_snapshot, &candidate_bytes)?;
 
     // -- identities, bound NOW (observation time) ----------------------------
     // Two questions, answered separately: WHAT question was asked (semantic
@@ -1505,6 +1511,7 @@ pub fn run_once(
                         path: rel_to_root(&snapshot),
                         sha256: impl_hash.clone(),
                         interpreter,
+                        native_runtime: crate::native::runtime_closure(&snapshot, &bytes)?,
                     };
                     external_hosts.push(Some(ExternalHost {
                         artifact: artifact.clone(),
@@ -2340,11 +2347,13 @@ pub fn run_once(
             path: rel_to_root(&authority_snapshot),
             sha256: authority_sha256,
             interpreter: authority_interpreter,
+            native_runtime: authority_native,
         },
         candidate_artifact: ArtifactIdentity {
             path: rel_to_root(&candidate_snapshot),
             sha256: candidate_sha256,
             interpreter: candidate_interpreter,
+            native_runtime: candidate_native,
         },
         court_semantic_identity,
         execution_profile: profile.as_str().to_string(),
