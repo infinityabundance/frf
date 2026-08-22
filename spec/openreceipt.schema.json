@@ -364,12 +364,13 @@
         "timezone",
         "umask",
         "cwd",
+        "environment",
         "digest"
       ],
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "frf-environment-v2"
+          "const": "frf-environment-v3"
         },
         "os": {
           "type": "string"
@@ -391,6 +392,13 @@
         },
         "cwd": {
           "type": "string"
+        },
+        "environment": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The DECLARED execution environment the sides ran under, sorted by key — the exact map the harness spawned them with; the ambient host environment is never recorded"
         },
         "digest": {
           "type": "string",

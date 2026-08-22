@@ -23,6 +23,20 @@ court:
     id: malformed-path.conf
     path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
     arguments: ["--strict", "{fixture}"]
+  # The DECLARED execution environment: the sides run under EXACTLY this
+  # environment (the ambient host environment is never inherited — it is
+  # not evidence). The scripts use only shell builtins, so the base
+  # environment is empty; the environment axis coordinates below are
+  # declared, content-addressed evidence.
+  environment_points:
+    machine-a:
+      HOSTNAME: machine-a
+    machine-b:
+      HOSTNAME: machine-b
+    machine-c:
+      HOSTNAME: machine-c
+    machine-d:
+      HOSTNAME: machine-d
   admissibility_envelope:
     fixture_family: malformed-input
     platforms: ["x86_64-linux"]

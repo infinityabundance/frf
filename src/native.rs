@@ -107,7 +107,12 @@ fn resolve_dependencies(loader: &str, executable: &Path) -> Result<Vec<String>> 
         "--list".to_string(),
         executable.to_string_lossy().into_owned(),
     ];
-    let out = host::run_process(&image, &args, host::ExecProfile::LinuxV1)?;
+    let out = host::run_process(
+        &image,
+        &args,
+        host::ExecProfile::LinuxV1,
+        &host::minimal_execution_environment(),
+    )?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "the dynamic loader {loader} refused to resolve {} (exit {}): the native runtime closure cannot be bound",

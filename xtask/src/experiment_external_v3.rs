@@ -62,11 +62,6 @@ const ENVIRONMENT_MATRIX: [(&str, &str, &str); 3] = [
     ("tokyo", "TZ=Asia/Tokyo", "LANG=ja_JP.UTF-8"),
 ];
 
-/// The Shellshock trigger: a function import whose trailing code executes
-/// on the vulnerable release. The env var is part of the OBSERVATION (the
-/// court's ambient environment), exactly as in the historical exploit.
-const SHELLSHOCK_TRIGGER: &str = "x=() { :;}; echo PWNED";
-
 pub(crate) enum Expectation {
     Observed,
     Absent,
@@ -97,8 +92,10 @@ pub(crate) struct CleanControl {
     pub residual_count: usize,
 }
 
-/// Run frf with an explicit ambient environment (the environment matrix
-/// points the court captures; the Shellshock trigger rides the same path).
+/// The per-case environment coordinates are DECLARED in each case manifest's
+/// `environment_points`; the Shellshock trigger is a DECLARED environment
+/// variable in the shellshock manifest (evidence, not orchestration) — a new
+/// execution engine reproduces the observation from the evidence alone.
 pub(crate) fn run_frf_env(
     frf: &Path,
     cwd: &Path,
@@ -279,16 +276,6 @@ fn check_trajectory(
     }
 }
 
-/// The per-case trigger environment (empty for cases without an ambient
-/// trigger, the Shellshock import variable otherwise).
-pub(crate) fn trigger_env(case: &Value) -> Vec<&'static str> {
-    if as_str(&case["trigger"]) == "env" {
-        vec![SHELLSHOCK_TRIGGER]
-    } else {
-        Vec::new()
-    }
-}
-
 /// The staged evidence of one case: the work tree with builds/, fixtures/,
 /// the three rendered manifests, and the admitted authority versions.
 pub(crate) struct StagedCase {
@@ -299,9 +286,6 @@ pub(crate) struct StagedCase {
     pub manifest_defect: String,
     pub manifest_clean: String,
     pub manifest_clean_defect: String,
-    /// The ambient trigger environment (`TZ=`/`LANG=`-style pairs), empty
-    /// for cases without an ambient trigger.
-    pub trigger: Vec<&'static str>,
 }
 
 /// The run ids the four shared experiments produced — the handles the v4
@@ -331,35 +315,53 @@ pub(crate) fn stage_case(frf: &Path, corpus: &Path, work: &Path, case: &Value) -
     let side_fixed = as_str(&meta["sides"]["fixed"]);
     let fixture_defect = as_str(&meta["fixtures"]["defect"]);
     let fixture_clean = as_str(&meta["fixtures"]["clean"]);
-    let trigger = trigger_env(&meta);
 
     // Stage the corpus: builds/ + fixtures/ are copied verbatim; the
-    // three manifests are rendered from the template.
+    // three manifests are rendered from the template. An ambient-trigger
+    // case (Shellshock) declares the malicious function-import variable in
+    // its manifest via the `x: "{trigger}"` placeholder: the defect
+    // manifests receive the real trigger (declared environment = evidence),
+    // and the CLEAN CONTROL manifest has the line REMOVED (the vulnerable
+    // side without the trigger must produce zero residuals).
     copy_tree(&case_src.join("builds"), &case_work.join("builds"));
     copy_tree(&case_src.join("fixtures"), &case_work.join("fixtures"));
     let template = std::fs::read_to_string(case_src.join("manifest.yaml"))
         .unwrap_or_else(|e| panic!("cannot read the manifest for {id}: {e}"));
-    let staged = |candidate: &str, fixture: &str| {
-        template
+    let trigger_line = "  x: \"{trigger}\"";
+    let trigger_value = "() { :;}; echo PWNED";
+    let staged = |candidate: &str, fixture: &str, trigger: bool| {
+        let t = template
             .replace("{candidate}", candidate)
-            .replace("fixtures/{fixture}", &format!("fixtures/{fixture}"))
+            .replace("fixtures/{fixture}", &format!("fixtures/{fixture}"));
+        if t.contains(trigger_line) {
+            if trigger {
+                t.replace(trigger_line, &format!("  x: \"{trigger_value}\""))
+            } else {
+                // The clean control runs WITHOUT the trigger: the line is
+                // removed (an empty YAML line is inert).
+                t.replace(trigger_line, "")
+            }
+        } else {
+            t
+        }
     };
+    let ambient_trigger = as_str(&meta["trigger"]) == "env";
     write_bytes(
         &case_work,
         &format!("courts/{id}/manifest-defect.yaml"),
-        staged(side_vuln, fixture_defect).as_bytes(),
+        staged(side_vuln, fixture_defect, ambient_trigger).as_bytes(),
         false,
     );
     write_bytes(
         &case_work,
         &format!("courts/{id}/manifest-clean.yaml"),
-        staged(side_vuln, fixture_clean).as_bytes(),
+        staged(side_vuln, fixture_clean, false).as_bytes(),
         false,
     );
     write_bytes(
         &case_work,
         &format!("courts/{id}/manifest-clean-defect.yaml"),
-        staged(side_fixed, fixture_defect).as_bytes(),
+        staged(side_fixed, fixture_defect, ambient_trigger).as_bytes(),
         false,
     );
 
@@ -376,7 +378,6 @@ pub(crate) fn stage_case(frf: &Path, corpus: &Path, work: &Path, case: &Value) -
         manifest_defect: format!("courts/{id}/manifest-defect.yaml"),
         manifest_clean: format!("courts/{id}/manifest-clean.yaml"),
         manifest_clean_defect: format!("courts/{id}/manifest-clean-defect.yaml"),
-        trigger,
     }
 }
 
@@ -399,23 +400,22 @@ pub(crate) fn run_case_experiments(
     let fixed_version = as_str(&meta["authority_fixed_version"]);
     let side_vuln = as_str(&meta["sides"]["vulnerable"]);
     let side_fixed = as_str(&meta["sides"]["fixed"]);
-    let trigger = &staged.trigger;
 
     // -- 1. the version ladder: buggy release -> fixed release ----------
-    let (ok, out, err) = run_frf_env(
-        frf,
-        case_work,
-        &[
-            "--root",
-            "ev",
-            "court",
-            "run",
-            &staged.manifest_defect,
-            "--candidate-revisions",
-            &format!("{side_vuln},{side_fixed}"),
-        ],
-        trigger,
-    );
+    // An ambient-trigger case (Shellshock) has the trigger DECLARED in the
+    // defect manifest's environment (evidence, not orchestration); the
+    // ladder, authority transitions, and clean control all run plain.
+    let revisions = format!("{side_vuln},{side_fixed}");
+    let ladder_args: Vec<&str> = vec![
+        "--root",
+        "ev",
+        "court",
+        "run",
+        &staged.manifest_defect,
+        "--candidate-revisions",
+        &revisions,
+    ];
+    let (ok, out, err) = run_frf_env(frf, case_work, &ladder_args, &[]);
     let mut ladder_runs: Vec<String> = Vec::new();
     if !ok {
         failures.push(format!("{id}/ladder: run failed: {err}"));
@@ -487,7 +487,7 @@ pub(crate) fn run_case_experiments(
                 frf,
                 case_work,
                 &["--root", "ev", "replay", buggy_run, "--policy", "exact"],
-                trigger,
+                &[],
             );
             if !(rok && rout.contains("reproduced")) {
                 failures.push(format!("{id}/ladder: replay did not reproduce"));
@@ -496,11 +496,12 @@ pub(crate) fn run_case_experiments(
     }
 
     // -- 2. the environment matrix: the defect at every coordinate ------
+    // The coordinates are DECLARED in each case manifest's
+    // `environment_points` (TZ/LANG are evidence, not orchestration), and the
+    // Shellshock trigger rides the manifest's declared `environment` — a new
+    // execution engine reproduces the observation from the evidence alone.
     let mut env_runs: Vec<String> = Vec::new();
-    for (label, tz, lang) in ENVIRONMENT_MATRIX {
-        let mut envs: Vec<&str> = trigger.clone();
-        envs.push(tz);
-        envs.push(lang);
+    for (label, _tz, _lang) in ENVIRONMENT_MATRIX {
         let (ok, out, err) = run_frf_env(
             frf,
             case_work,
@@ -513,7 +514,7 @@ pub(crate) fn run_case_experiments(
                 "--environment-point",
                 label,
             ],
-            &envs,
+            &[],
         );
         if !ok {
             failures.push(format!("{id}/env:{label}: run failed: {err}"));
@@ -569,21 +570,19 @@ pub(crate) fn run_case_experiments(
     // -- 3. the authority transition: the oracle gets fixed -------------
     // The BUGGY candidate: matching the pre-fix oracle (no divergence)
     // and diverging from the fixed one — the defect becomes observable
-    // exactly when the oracle was fixed (onset at the end).
-    let (ok, _out, err) = run_frf_env(
-        frf,
-        case_work,
-        &[
-            "--root",
-            "ev",
-            "court",
-            "run",
-            &staged.manifest_defect,
-            "--authority-versions",
-            &format!("pre-fix,{fixed_version}"),
-        ],
-        trigger,
-    );
+    // exactly when the oracle was fixed (onset at the end). The defect
+    // manifest carries the declared trigger for an ambient-trigger case.
+    let versions = format!("pre-fix,{fixed_version}");
+    let auth_args: Vec<&str> = vec![
+        "--root",
+        "ev",
+        "court",
+        "run",
+        &staged.manifest_defect,
+        "--authority-versions",
+        &versions,
+    ];
+    let (ok, _out, err) = run_frf_env(frf, case_work, &auth_args, &[]);
     if !ok {
         failures.push(format!("{id}/authority-buggy: run failed: {err}"));
     } else {
@@ -616,21 +615,20 @@ pub(crate) fn run_case_experiments(
     }
     // The FIXED candidate on the DEFECT fixture: stricter than the
     // pre-fix oracle (it refuses the tampered input the old oracle
-    // accepted) and matching the fixed one — a cessation at the start.
-    let (ok, _out, err) = run_frf_env(
-        frf,
-        case_work,
-        &[
-            "--root",
-            "ev",
-            "court",
-            "run",
-            &staged.manifest_clean_defect,
-            "--authority-versions",
-            &format!("pre-fix,{fixed_version}"),
-        ],
-        trigger,
-    );
+    // accepted) and matching the fixed one — a cessation at the start. The
+    // defect manifest carries the declared trigger for an ambient-trigger
+    // case.
+    let versions_clean = format!("pre-fix,{fixed_version}");
+    let auth_clean_args: Vec<&str> = vec![
+        "--root",
+        "ev",
+        "court",
+        "run",
+        &staged.manifest_clean_defect,
+        "--authority-versions",
+        &versions_clean,
+    ];
+    let (ok, _out, err) = run_frf_env(frf, case_work, &auth_clean_args, &[]);
     if !ok {
         failures.push(format!("{id}/authority-clean: run failed: {err}"));
     } else {

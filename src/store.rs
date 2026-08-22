@@ -2070,6 +2070,7 @@ impl Store {
                 raw: None,
                 compared: None,
                 profile: crate::host::ExecProfile::parse(&resolution.execution_profile)?,
+                env: &resolution.environment.environment,
             };
             let evaluation =
                 crate::comparators::evaluate(self, &plan, &reference, &candidate, &context)?;

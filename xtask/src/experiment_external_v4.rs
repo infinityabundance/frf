@@ -269,6 +269,22 @@ fn compile_claim(frf: &Path, work: &Path, receipt: &str) -> (bool, String, Optio
     (true, String::new(), Some(id))
 }
 
+/// The Shellshock trigger variable: the BARE baselines are not FRF runs —
+/// they execute the raw binary with the ambient process environment, so the
+/// malicious import variable must be supplied explicitly there. (FRF courts
+/// declare it in the manifest's environment — evidence, not orchestration.)
+const SHELLSHOCK_TRIGGER: &str = "x=() { :;}; echo PWNED";
+
+/// The per-case ambient trigger for the BARE baselines (empty for cases
+/// without an ambient trigger, the Shellshock import variable otherwise).
+fn bare_trigger_env(meta: &Value) -> Vec<&str> {
+    if as_str(&meta["trigger"]) == "env" {
+        vec![SHELLSHOCK_TRIGGER]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The per-case measurement study, attached AFTER the four shared
 /// experiments (the universe then contains every run the claims scan).
 #[allow(clippy::too_many_lines)]
@@ -281,7 +297,7 @@ fn case_study(
     let id = &staged.id;
     let work = &staged.case_work;
     let meta = &staged.meta;
-    let trigger = &staged.trigger;
+    let trigger = bare_trigger_env(meta);
     let side_vuln = as_str(&meta["sides"]["vulnerable"]);
     let side_fixed = as_str(&meta["sides"]["fixed"]);
     let fixture_defect = as_str(&meta["fixtures"]["defect"]);
@@ -307,7 +323,7 @@ fn case_study(
                 frf,
                 work,
                 &["--root", "ev", "replay", r, "--policy", "exact"],
-                trigger,
+                &[],
             );
             rok && rout.contains("reproduced")
         })
@@ -331,7 +347,7 @@ fn case_study(
             "--repeat",
             "5",
         ],
-        trigger,
+        &[],
     );
     let repeat_ms = start.elapsed().as_millis();
     if !ok {
@@ -454,12 +470,8 @@ fn case_study(
         let residual_ids = residual_ids(work, run);
         if let Some(rid) = residual_ids.first() {
             let start = Instant::now();
-            let (min_ok, min_out, min_err) = run_frf_env(
-                frf,
-                work,
-                &["--root", "ev", "court", "minimize", rid],
-                trigger,
-            );
+            let (min_ok, min_out, min_err) =
+                run_frf_env(frf, work, &["--root", "ev", "court", "minimize", rid], &[]);
             minimize_ms = start.elapsed().as_millis();
             if !min_ok {
                 minimization = json!({
@@ -730,16 +742,30 @@ fn case_study(
                 .filter(|a| open_axes.contains(*a))
                 .cloned()
                 .collect();
-            for a in &blocked_axes {
-                prevented_axes.push(format!("{id}:{a} (cross-run)"));
-            }
             claims["clean_claim"] = json!({
                 "compiled": compiled,
                 "refusal": refusal,
                 "universe_open_axes": open_axes.into_iter().collect::<Vec<_>>(),
-                "blocked_axes": blocked_axes,
+                "blocked_axes": blocked_axes.clone(),
             });
-            if compiled {
+            // An ambient-trigger case (Shellshock) declares the trigger in
+            // the defect environment: the clean control runs under a
+            // DIFFERENT declared environment (no trigger), so the clean
+            // claim's surface is genuinely separate from the defect
+            // residuals' surface — the universe blocker correctly does NOT
+            // cross the environment boundary, and the clean claim compiling
+            // is the correct measurement (the environment boundary IS the
+            // evidence). For a fixture-trigger case the environments are
+            // identical, so the cross-run blocker MUST refuse the clean
+            // claim.
+            let environment_boundary = as_str(&meta["trigger"]) == "env";
+            if environment_boundary {
+                if !compiled {
+                    failures.push(format!(
+                        "{id}/claims: the clean claim was refused although it runs under a different declared environment than every defect residual (no trigger) — the universe blocker must respect the environment boundary"
+                    ));
+                }
+            } else if compiled {
                 failures.push(format!(
                     "{id}/claims: the clean claim compiled although an open residual about its surface is in the universe — the cross-run blocker did not fire"
                 ));
@@ -747,6 +773,12 @@ fn case_study(
                 failures.push(format!(
                     "{id}/claims: the clean claim was refused for a reason other than the cross-run blocker: {refusal}"
                 ));
+            } else {
+                // The cross-run blocker fired: the same-surface axes it
+                // protected are the inflation-prevented surfaces.
+                for a in &blocked_axes {
+                    prevented_axes.push(format!("{id}:{a} (cross-run)"));
+                }
             }
         }
     }
@@ -770,8 +802,8 @@ fn case_study(
     claims["claim_inflation_prevented"] = json!(prevented_axes);
 
     // -- 9. conventional baselines: golden, differential, unit (BARE) -----
-    let vuln_defect = bare_run(work, side_vuln, fixture_defect, trigger, id);
-    let fixed_defect = bare_run(work, side_fixed, fixture_defect, trigger, id);
+    let vuln_defect = bare_run(work, side_vuln, fixture_defect, &trigger, id);
+    let fixed_defect = bare_run(work, side_fixed, fixture_defect, &trigger, id);
     let vuln_clean = bare_run(work, side_vuln, fixture_clean, &[], id);
     let fixed_clean = bare_run(work, side_fixed, fixture_clean, &[], id);
     let golden_fixed = json!({

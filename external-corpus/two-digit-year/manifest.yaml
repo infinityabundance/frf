@@ -15,6 +15,16 @@ court:
     id: date.conf
     path: fixtures/{fixture}
     arguments: ["{fixture}"]
+  environment_points:
+    utc:
+      TZ: UTC
+      LANG: C
+    new-york:
+      TZ: America/New_York
+      LANG: en_US.UTF-8
+    tokyo:
+      TZ: Asia/Tokyo
+      LANG: ja_JP.UTF-8
   admissibility_envelope:
     fixture_family: date-parsing
     platforms: ["x86_64-linux"]

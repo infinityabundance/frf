@@ -239,7 +239,12 @@ FRF/RUNTIME-CLOSURE/v1 {
 Exact replay requires:
 
 - the same execution profile and the same applied capture bounds;
-- the same environment digest (os, arch, kernel, locale, timezone, umask);
+- the same environment digest — the FRF/ENVIRONMENT/v2 formula over the
+  host strata (os, arch, kernel, umask) AND the DECLARED execution
+  environment the sides ran under (the exact map the harness spawned them
+  with; replay re-spawns with that map, so the declared environment is
+  reproduced byte-for-byte from the evidence — the ambient host
+  environment is never inherited and never part of the observation);
 - the same working directory;
 - every artifact's interpreter chain re-resolving to the recorded
   identities (kernel interpreter, downstream interpreter, shebang

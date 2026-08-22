@@ -218,8 +218,10 @@ corpus is `conformance/invalid-semantic/`, one document per violated rule
    carries neither.
 6. **Verdict consistency.** `verdict: residual` iff a residual exists on the
    axis; `verdict: pass` excludes one.
-7. **Environment digest rederives** as
-   `sha256("os={os}\narch={arch}\nkernel={kernel}")`.
+7. **Environment digest rederives** as the FRF/ENVIRONMENT/v2 canonical-JSON
+   formula over the host strata (os, arch, kernel, locale, timezone, umask)
+   AND the declared execution environment map (the exact environment the
+   sides ran under — a declared variable is content-addressed input).
 8. **Court semantic identity rederives** from the document (declared
    arguments, authority artifact hash, fixture, envelope, comparators).
 9. **Replay target.** `program == "frf"`, `expected_run_identity == run`,

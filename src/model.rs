@@ -185,8 +185,13 @@ pub const CLAIM_POLICIES: &[&str] = &[
 /// Environment identity block recorded in every capture at court time. v2
 /// expands the strata the digest covers: os, architecture, kernel release,
 /// effective locale, timezone, and umask (the dimensions that actually move
-/// side output), plus the recorded working directory.
-pub const SCHEMA_ENVIRONMENT: &str = "frf-environment-v2";
+/// side output), plus the recorded working directory. v3 records the
+/// DECLARED EXECUTION ENVIRONMENT: the exact environment every program the
+/// court executed ran under (built from scratch — the host's ambient
+/// environment is never inherited and never recorded), and the digest is the
+/// FRF/ENVIRONMENT/v2 canonical-JSON formula over the host strata AND the
+/// declared environment map.
+pub const SCHEMA_ENVIRONMENT: &str = "frf-environment-v3";
 /// Observation provenance block (runner + comparator + normalizer + adapter
 /// implementations). v3 records the normalizer and capture-adapter
 /// implementations that applied to the compared streams/observations.
@@ -1788,6 +1793,25 @@ pub struct CourtSpec {
     /// requires a writable cgroup v2 subtree and refuses without one.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub execution_profile: Option<String>,
+    /// The DECLARED EXECUTION ENVIRONMENT: the exact environment every
+    /// program this court executes (both sides and every extension program)
+    /// runs under — built from scratch, the host's ambient environment is
+    /// never inherited (it is not evidence; inheriting it would leak secrets
+    /// and make observations non-reproducible). Absent = the empty
+    /// environment. The map is content-addressed into the observation: the
+    /// capture's environment identity records it, and a new execution engine
+    /// can reproduce the observation from the evidence alone.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub environment: Option<std::collections::BTreeMap<String, String>>,
+    /// The DECLARED environment COORDINATES for the `--environment-point
+    /// LABEL` axis: label → the env vars that define that coordinate. The
+    /// point's effective environment is the court's declared `environment`
+    /// with the coordinate's vars applied (coordinate wins). A label that is
+    /// not declared here is refused — a coordinate label is not evidence
+    /// unless the environment it names is.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub environment_points:
+        Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
 }
 
 /// The produced-artifact clause. v0: one output directory per side,
@@ -2059,6 +2083,17 @@ pub struct ObservationProvenance {
 /// (`cwd` is recorded, not digested: it is an invocation property, and the
 /// observation's own bytes already capture its effects; exact replay gates
 /// on it separately).
+///
+/// v3: the DECLARED EXECUTION ENVIRONMENT. The court declares the exact
+/// environment its programs run under (the ambient host environment is
+/// never inherited — it is not evidence); the sides and every extension
+/// program are spawned with that environment and nothing else. `environment`
+/// records the effective declared map (sorted by key), `locale`/`timezone`
+/// derive from it when declared, and the digest is the FRF/ENVIRONMENT/v2
+/// canonical-JSON formula over the host strata AND the declared map — a
+/// declared variable is content-addressed input, so a new execution engine
+/// can reproduce the observation from the evidence alone (the Shellshock
+/// trigger, PATH, TZ, LD_PRELOAD, … are all explicit or absent).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentIdentity {
@@ -2066,17 +2101,24 @@ pub struct EnvironmentIdentity {
     pub os: String,
     pub architecture: String,
     pub kernel_release: String,
-    /// The effective locale the sides ran under: `LC_ALL` / `LC_CTYPE` /
-    /// `LANG`, or `C`.
+    /// The effective locale the sides ran under: the declared `LC_ALL` /
+    /// `LC_CTYPE` / `LANG`, or `C` when none is declared.
     pub locale: String,
-    /// The timezone the sides ran under: `TZ`, or the resolved system zone
-    /// (from /etc/localtime), or `unknown`.
+    /// The timezone the sides ran under: the declared `TZ`, or the resolved
+    /// system zone (from /etc/localtime), or `unknown`.
     pub timezone: String,
     /// The umask at observation time, as octal digits (e.g. `0022`).
     pub umask: String,
     /// The working directory the sides ran under (recorded provenance; exact
     /// replay requires the same cwd).
     pub cwd: String,
+    /// The DECLARED execution environment the sides ran under, sorted by
+    /// key — the exact map the harness spawned them with. The ambient host
+    /// environment is never recorded.
+    pub environment: std::collections::BTreeMap<String, String>,
+    /// SHA-256 of the FRF/ENVIRONMENT/v2 canonical-JSON preimage over the
+    /// host strata (os, architecture, kernel release, effective locale,
+    /// timezone, umask) AND the declared environment map.
     pub digest: String,
 }
 

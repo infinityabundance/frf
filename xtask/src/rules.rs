@@ -431,6 +431,10 @@ const ENVIRONMENT_KEYS: &[&str] = &[
     "timezone",
     "umask",
     "cwd",
+    // v3: the DECLARED execution environment the sides ran under (the exact
+    // map the harness spawned them with; the ambient host environment is
+    // never recorded).
+    "environment",
     "digest",
 ];
 const FIXTURE_KEYS: &[&str] = &["id", "hash", "arguments", "declared_arguments"];
@@ -920,6 +924,7 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         as_str(&env["locale"]),
         as_str(&env["timezone"]),
         as_str(&env["umask"]),
+        &env["environment"],
     ) != as_str(&env["digest"])
     {
         v.push("the environment digest does not rederive".to_string());

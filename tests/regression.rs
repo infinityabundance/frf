@@ -11,6 +11,94 @@ use common::*;
 
 use std::fs;
 
+/// The declared execution environment is evidence: the sides are spawned
+/// with EXACTLY the court's declared map (content-addressed into the
+/// capture — a new execution engine reproduces the observation from the
+/// evidence alone), and the ambient host environment is never inherited
+/// (it would leak secrets and make the observation non-reproducible).
+#[test]
+fn declared_environment_is_evidence_and_ambient_is_not_inherited() {
+    let work = Workdir::new("declared-env");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // The candidate prints a declared variable and probes for an ambient one
+    // (a hook variable set on the frf process itself).
+    work.write_candidate(
+        "#!/bin/sh\nprintf 'declared=[%s]\\n' \"$TRIGGER\"\nprintf 'ambient=[%s]\\n' \"$FRF_EXEC_TIMEOUT_MS\"\n",
+    );
+    let manifest = "env-test.yaml";
+    fs::write(
+        work.path(manifest),
+        r#"court:
+  id: cli-malformed-input
+  question: q
+  falsifier: f
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: "0.1.0"
+    build_profile: debug
+    path: golden/candidate.sh
+  fixture:
+    id: malformed-path.conf
+    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf
+    arguments: ["--strict", "{fixture}"]
+  environment:
+    TRIGGER: "() { :;}; echo PWNED"
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [stdout, exit]
+    normalizers: []
+    replay_scope: single-run
+"#,
+    )
+    .unwrap();
+    // Run with an ambient hook override set: the side must NOT see it.
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", manifest],
+        &[("FRF_EXEC_TIMEOUT_MS", "9999")],
+    );
+    assert_success(&out, "court run (declared env)");
+    let run = stdout(&out);
+
+    // The capture records the declared environment (content-addressed
+    // input) — and nothing else.
+    let cap: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cap["environment"]["environment"]["TRIGGER"],
+        "() { :;}; echo PWNED"
+    );
+    assert_eq!(
+        cap["environment"]["environment"]["FRF_EXEC_TIMEOUT_MS"],
+        serde_json::Value::Null,
+        "the ambient host environment must never be recorded"
+    );
+
+    // The side SAW the declared variable and did NOT see the ambient one.
+    let cand =
+        fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/candidate.stdout"))).unwrap();
+    assert!(cand.contains("declared=[() { :;}; echo PWNED]"));
+    assert!(
+        cand.contains("ambient=[]"),
+        "the ambient host environment must not be inherited by the side: {cand:?}"
+    );
+
+    // Replay reproduces the observation: the same declared environment is
+    // re-spawned (exact replay also gates the environment digest and the
+    // effective capture bounds — the ambient override the court ran under).
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "replay", &run, "--policy", "exact"],
+        &[("FRF_EXEC_TIMEOUT_MS", "9999")],
+    );
+    assert_success(&out, "replay with the declared env");
+}
+
 /// The immutable observation record.
 fn raw_residual(work: &Workdir, id: &str) -> serde_json::Value {
     serde_json::from_str(

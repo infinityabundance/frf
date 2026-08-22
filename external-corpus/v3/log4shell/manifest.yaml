@@ -16,6 +16,22 @@ court:
     id: message.conf
     path: fixtures/{fixture}
     arguments: ["{fixture}"]
+  # The DECLARED execution environment: the sides run under EXACTLY this
+  # environment (the ambient host environment is never inherited — it is
+  # not evidence). PATH resolves `java` for the launcher; the
+  # environment-matrix coordinates are declared below.
+  environment:
+    PATH: /usr/bin:/bin
+  environment_points:
+    utc:
+      TZ: UTC
+      LANG: C
+    new-york:
+      TZ: America/New_York
+      LANG: en_US.UTF-8
+    tokyo:
+      TZ: Asia/Tokyo
+      LANG: ja_JP.UTF-8
   admissibility_envelope:
     fixture_family: jndi
     platforms: ["x86_64-linux"]

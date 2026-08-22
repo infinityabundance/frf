@@ -298,8 +298,11 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
         }
 
         // -- 2. the environment matrix: the defect at every coordinate ------
+        // The coordinates are DECLARED in each case manifest's
+        // `environment_points` — the coordinate's TZ/LANG are evidence, not
+        // orchestration (the ambient host environment is never inherited).
         let mut env_runs: Vec<String> = Vec::new();
-        for (label, tz, lang) in ENVIRONMENT_MATRIX {
+        for (label, _tz, _lang) in ENVIRONMENT_MATRIX {
             let (ok, out, err) = run_frf_env(
                 &frf,
                 &case_work,
@@ -312,7 +315,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
                     "--environment-point",
                     label,
                 ],
-                &[tz, lang],
+                &[],
             );
             if !ok {
                 failures.push(format!("{id}/env:{label}: run failed: {err}"));

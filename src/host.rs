@@ -734,8 +734,9 @@ pub fn run_process(
     image: &ExecImage,
     args: &[String],
     profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, None, None, profile)
+    run_impl(image, args, None, None, profile, env)
 }
 
 /// [`run_process`] with a declared working directory: the side runs from
@@ -747,8 +748,9 @@ pub fn run_process_in(
     args: &[String],
     cwd: &Path,
     profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, None, Some(cwd), profile)
+    run_impl(image, args, None, Some(cwd), profile, env)
 }
 
 /// Execute `image` with `args` and the given bytes on stdin (used by the
@@ -762,8 +764,9 @@ pub fn run_process_with_stdin(
     args: &[String],
     stdin: &[u8],
     profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, Some(stdin), None, profile)
+    run_impl(image, args, Some(stdin), None, profile, env)
 }
 
 /// [`run_process_with_stdin`] with a declared working directory (bundle
@@ -774,8 +777,9 @@ pub fn run_process_with_stdin_in(
     stdin: &[u8],
     cwd: &Path,
     profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProcessOutcome> {
-    run_impl(image, args, Some(stdin), Some(cwd), profile)
+    run_impl(image, args, Some(stdin), Some(cwd), profile, env)
 }
 
 fn run_impl(
@@ -784,6 +788,7 @@ fn run_impl(
     stdin: Option<&[u8]>,
     cwd: Option<&Path>,
     profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<ProcessOutcome> {
     // The program name the process observes (argv[0]) is the materialized
     // snapshot path — a sealed execution must not silently change argv[0]
@@ -799,6 +804,15 @@ fn run_impl(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
+    // The DECLARED execution environment: the child is spawned with EXACTLY
+    // the declared map — the host's ambient environment is never inherited.
+    // The ambient environment is not evidence (it would leak secrets and
+    // make the observation non-reproducible); the declared environment is
+    // content-addressed into the capture, so replay re-spawns the exact
+    // same environment and a new execution engine can reproduce the
+    // observation from the evidence alone.
+    command.env_clear();
+    command.envs(env);
     command
         .args(args)
         .stdin(if stdin.is_some() {
@@ -1118,9 +1132,12 @@ pub fn set_permissions(path: &Path, mode: u32) -> Result<()> {
 
 /// The environment digest: the one formula, shared by capture (at
 /// observation time) and OpenReceipt semantic verification (rederived from
-/// the receipt's own environment fields). Covers the strata that actually
-/// move side output: os, architecture, kernel release, the effective locale,
-/// the timezone, and the umask.
+/// the receipt's own environment fields). `FRF/ENVIRONMENT/v2` over the
+/// canonical-JSON document of the host strata that actually move side output
+/// (os, architecture, kernel release, the effective locale, the timezone,
+/// the umask) AND the DECLARED execution environment map — a declared
+/// variable is content-addressed input, so two observations under different
+/// declared environments are different observations.
 pub fn environment_digest(
     os: &str,
     architecture: &str,
@@ -1128,33 +1145,44 @@ pub fn environment_digest(
     locale: &str,
     timezone: &str,
     umask: &str,
+    environment: &std::collections::BTreeMap<String, String>,
 ) -> String {
-    sha256_bytes(
-        format!(
-            "os={os}\narch={architecture}\nkernel={kernel_release}\nlocale={locale}\ntimezone={timezone}\numask={umask}"
-        )
-        .as_bytes(),
-    )
+    let doc = serde_json::json!({
+        "os": os,
+        "architecture": architecture,
+        "kernel_release": kernel_release,
+        "locale": locale,
+        "timezone": timezone,
+        "umask": umask,
+        "environment": environment,
+    });
+    let canonical = crate::canon::canonical(&doc)
+        .expect("the environment identity document is protocol-canonicalizable");
+    sha256_bytes(format!("FRF/ENVIRONMENT/v2\n{canonical}").as_bytes())
 }
 
-/// The effective locale the sides run under: `LC_ALL`, else `LC_CTYPE`, else
-/// `LANG`, else `C` (the POSIX default that applies when none is set).
-pub fn effective_locale() -> String {
-    std::env::var("LC_ALL")
-        .ok()
+/// The effective locale the sides run under: the DECLARED `LC_ALL`, else
+/// `LC_CTYPE`, else `LANG`, else `C` (the POSIX default that applies when
+/// none is declared). The side's environment is the court's declared
+/// environment — the ambient host locale is irrelevant to the observation.
+pub fn effective_locale(environment: &std::collections::BTreeMap<String, String>) -> String {
+    environment
+        .get("LC_ALL")
         .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var("LC_CTYPE").ok().filter(|v| !v.is_empty()))
-        .or_else(|| std::env::var("LANG").ok().filter(|v| !v.is_empty()))
+        .or_else(|| environment.get("LC_CTYPE").filter(|v| !v.is_empty()))
+        .or_else(|| environment.get("LANG").filter(|v| !v.is_empty()))
+        .cloned()
         .unwrap_or_else(|| "C".to_string())
 }
 
-/// The timezone the sides run under: `TZ` when set, else the resolved system
-/// zone (when /etc/localtime is a symlink into zoneinfo, its tail — e.g.
-/// `Europe/London`), else a digest of the zone file's bytes, else `unknown`.
-pub fn timezone() -> String {
-    if let Ok(tz) = std::env::var("TZ") {
+/// The timezone the sides run under: the DECLARED `TZ`, else the resolved
+/// system zone (when /etc/localtime is a symlink into zoneinfo, its tail —
+/// e.g. `Europe/London`), else a digest of the zone file's bytes, else
+/// `unknown`.
+pub fn timezone(environment: &std::collections::BTreeMap<String, String>) -> String {
+    if let Some(tz) = environment.get("TZ") {
         if !tz.is_empty() {
-            return tz;
+            return tz.clone();
         }
     }
     if let Ok(canonical) = std::fs::canonicalize("/etc/localtime") {
@@ -1189,17 +1217,34 @@ pub fn umask() -> String {
     }
 }
 
+/// The minimal execution environment: the deterministic baseline used where
+/// no court declaration exists (standalone extension invocations such as
+/// witness attestation). The ambient host environment is never inherited —
+/// it is not evidence — so a standalone program sees exactly this fixed
+/// map: a PATH that resolves the standard system utilities (the env(1)
+/// resolver needs it for `#!/usr/bin/env` shebangs), and nothing else.
+pub fn minimal_execution_environment() -> std::collections::BTreeMap<String, String> {
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    env
+}
+
 /// The environment an observation happens in, captured at court time: os,
-/// architecture, kernel release, locale, timezone, umask, the working
-/// directory the sides ran under, and the digest over the output-moving
-/// strata. The receipt copies this identity verbatim — it never asks its own
-/// host what environment an old court ran under.
-pub fn environment_identity() -> EnvironmentIdentity {
+/// architecture, kernel release, locale, timezone, umask, the DECLARED
+/// execution environment the sides ran under (the exact map the harness
+/// spawned them with — the ambient host environment is never inherited and
+/// never recorded), the working directory, and the digest over the
+/// output-moving strata AND the declared environment. The receipt copies
+/// this identity verbatim — it never asks its own host what environment an
+/// old court ran under.
+pub fn environment_identity(
+    environment: &std::collections::BTreeMap<String, String>,
+) -> EnvironmentIdentity {
     let os = std::env::consts::OS.to_string();
     let architecture = std::env::consts::ARCH.to_string();
     let kernel_release = kernel_release();
-    let locale = effective_locale();
-    let timezone = timezone();
+    let locale = effective_locale(environment);
+    let timezone = timezone(environment);
     let umask = umask();
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
@@ -1211,6 +1256,7 @@ pub fn environment_identity() -> EnvironmentIdentity {
         &locale,
         &timezone,
         &umask,
+        environment,
     );
     EnvironmentIdentity {
         schema_version: crate::model::SCHEMA_ENVIRONMENT.to_string(),
@@ -1221,6 +1267,7 @@ pub fn environment_identity() -> EnvironmentIdentity {
         timezone,
         umask,
         cwd,
+        environment: environment.clone(),
         digest,
     }
 }
@@ -1344,6 +1391,15 @@ mod tests {
         std::env::temp_dir().join(format!("frf-{tag}-{}-{nanos}.sh", std::process::id()))
     }
 
+    /// The DECLARED execution environment for tests: a minimal map with a
+    /// PATH (scripts that invoke external utilities — cat, etc. — need it;
+    /// the ambient host environment is never inherited by a spawned child).
+    fn test_env() -> std::collections::BTreeMap<String, String> {
+        let mut e = std::collections::BTreeMap::new();
+        e.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        e
+    }
+
     /// Runs `body` with the given environment overrides set, restoring (or
     /// removing) the prior values afterwards. Test threads share the process
     /// environment, so hook-dependent tests must isolate themselves with this
@@ -1404,7 +1460,13 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        let out = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+        let out = run_process(
+            &ExecImage::from_path(&script),
+            &[],
+            ExecProfile::LinuxV1,
+            &test_env(),
+        )
+        .unwrap();
         assert_eq!(out.exit, "7");
         assert_eq!(out.stdout, b"out\n");
         assert_eq!(out.stderr, b"err\n");
@@ -1424,7 +1486,7 @@ mod tests {
         let hash_a = sha256_bytes(&bytes_a);
         let image = ExecImage::seal(&bytes_a, &hash_a, &materialized).unwrap();
 
-        let out = run_process(&image, &[], ExecProfile::LinuxV1).unwrap();
+        let out = run_process(&image, &[], ExecProfile::LinuxV1, &test_env()).unwrap();
         assert_eq!(out.exit, "0");
         assert_eq!(out.stdout, b"sealed-A\n", "the sealed bytes must run");
         assert_eq!(
@@ -1437,7 +1499,7 @@ mod tests {
         // and BEFORE execution. A path-based exec would run the tampered
         // bytes; the sealed image still runs the verified bytes.
         std::fs::write(&materialized, b"#!/bin/sh\necho TAMPERED\n").unwrap();
-        let out2 = run_process(&image, &[], ExecProfile::LinuxV1).unwrap();
+        let out2 = run_process(&image, &[], ExecProfile::LinuxV1, &test_env()).unwrap();
         assert_eq!(
             out2.stdout, b"sealed-A\n",
             "the executed image must be the sealed verified bytes, not the mutated pathname"
@@ -1497,7 +1559,13 @@ echo "zero=$0 one=$1"
         std::fs::write(&materialized, &bytes).unwrap();
         let hash = sha256_bytes(&bytes);
         let image = ExecImage::seal(&bytes, &hash, &materialized).unwrap();
-        let out = run_process(&image, &["argX".to_string()], ExecProfile::LinuxV1).unwrap();
+        let out = run_process(
+            &image,
+            &["argX".to_string()],
+            ExecProfile::LinuxV1,
+            &test_env(),
+        )
+        .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stdout = stdout.trim();
         assert!(
@@ -1547,9 +1615,14 @@ echo "zero=$0 one=$1"
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         with_env(&[("FRF_CGROUP2_ROOT", "none")], || {
-            let err = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2)
-                .unwrap_err()
-                .0;
+            let err = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV2,
+                &test_env(),
+            )
+            .unwrap_err()
+            .0;
             assert!(
                 err.contains("no writable cgroup v2 subtree"),
                 "error: {err}"
@@ -1573,9 +1646,14 @@ echo "zero=$0 one=$1"
         with_env(
             &[("FRF_CGROUP2_ROOT", not_a_root.to_str().unwrap())],
             || {
-                let err = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2)
-                    .unwrap_err()
-                    .0;
+                let err = run_process(
+                    &ExecImage::from_path(&script),
+                    &[],
+                    ExecProfile::LinuxV2,
+                    &test_env(),
+                )
+                .unwrap_err()
+                .0;
                 assert!(err.contains("not a cgroup v2 root"), "error: {err}");
             },
         );
@@ -1606,8 +1684,21 @@ echo "zero=$0 one=$1"
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         with_env(&[("FRF_CGROUP2_ROOT", root.to_str().unwrap())], || {
-            let out =
-                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV2).unwrap();
+            // The child also needs the hook root IN ITS OWN declared
+            // environment: the ambient host environment is never inherited,
+            // and the fake root path travels as a declared variable.
+            let mut env = test_env();
+            env.insert(
+                "FRF_CGROUP2_ROOT".to_string(),
+                root.to_str().unwrap().to_string(),
+            );
+            let out = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV2,
+                &env,
+            )
+            .unwrap();
             assert_eq!(out.exit, "0");
             let text = String::from_utf8_lossy(&out.stdout);
             let mut my_pid = "";
@@ -1671,6 +1762,7 @@ echo "zero=$0 one=$1"
             &ExecImage::from_path(Path::new("/nonexistent/frf-nope")),
             &[],
             ExecProfile::LinuxV1,
+            &test_env(),
         )
         .unwrap_err();
         assert!(err.0.contains("failed to execute"));
@@ -1693,8 +1785,13 @@ echo "zero=$0 one=$1"
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         with_default_hooks(|| {
-            let out =
-                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+            let out = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV1,
+                &test_env(),
+            )
+            .unwrap();
             assert_eq!(out.exit, "0");
             let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
             assert_eq!(
@@ -1714,7 +1811,13 @@ echo "zero=$0 one=$1"
         std::fs::write(&script, "#!/bin/sh\nkill -TERM $$\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+        let out = run_process(
+            &ExecImage::from_path(&script),
+            &[],
+            ExecProfile::LinuxV1,
+            &test_env(),
+        )
+        .unwrap();
         assert_eq!(out.exit, "signal(15)");
         let _ = std::fs::remove_file(&script);
     }
@@ -1735,8 +1838,13 @@ echo "zero=$0 one=$1"
             .open(&script)
             .unwrap();
         let start = Instant::now();
-        let err =
-            run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap_err();
+        let err = run_process(
+            &ExecImage::from_path(&script),
+            &[],
+            ExecProfile::LinuxV1,
+            &test_env(),
+        )
+        .unwrap_err();
         drop(held);
         assert!(err.0.contains("ETXTBSY"), "error: {}", err.0);
         assert!(
@@ -1764,8 +1872,13 @@ echo "zero=$0 one=$1"
         // the RUN, not the lock wait.
         let _ = with_default_hooks(|| {
             let start = Instant::now();
-            let out =
-                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+            let out = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV1,
+                &test_env(),
+            )
+            .unwrap();
             assert_eq!(out.exit, "0");
             assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
             assert!(
@@ -1796,8 +1909,13 @@ echo "zero=$0 one=$1"
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             }
             let start = Instant::now();
-            let err =
-                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap_err();
+            let err = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV1,
+                &test_env(),
+            )
+            .unwrap_err();
             assert!(
                 err.0.contains("capture cap")
                     && err.0.contains("refusing to record truncated output"),
@@ -1833,8 +1951,13 @@ echo "zero=$0 one=$1"
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
                 let start = Instant::now();
-                let out =
-                    run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+                let out = run_process(
+                    &ExecImage::from_path(&script),
+                    &[],
+                    ExecProfile::LinuxV1,
+                    &test_env(),
+                )
+                .unwrap();
                 assert!(
                     out.exit.starts_with("signal("),
                     "the CPU limit must terminate the side by signal, got {:?}",
@@ -1875,8 +1998,13 @@ echo "zero=$0 one=$1"
             .unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-            let out =
-                run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
+            let out = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV1,
+                &test_env(),
+            )
+            .unwrap();
             let text = String::from_utf8_lossy(&out.stdout);
             let line = text
                 .lines()
@@ -1915,7 +2043,12 @@ echo "zero=$0 one=$1"
                 let start = Instant::now();
                 // The side is bounded (its forks fail) and the harness returns
                 // at the wall-clock deadline at the latest.
-                let _ = run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1);
+                let _ = run_process(
+                    &ExecImage::from_path(&script),
+                    &[],
+                    ExecProfile::LinuxV1,
+                    &test_env(),
+                );
                 assert!(
                     start.elapsed() < Duration::from_secs(8),
                     "a fork bomb must not outlive the profile's wall-clock bound (took {:?})",
@@ -1964,14 +2097,18 @@ echo "zero=$0 one=$1"
     }
 
     #[test]
-    fn environment_identity_records_the_expanded_strata() {
-        // The digest covers locale/timezone/umask on top of os/arch/kernel,
-        // and the cwd is recorded (not digested — an invocation property).
-        let env = environment_identity();
+    fn environment_identity_records_the_declared_strata() {
+        // The digest covers locale/timezone/umask on top of os/arch/kernel
+        // AND the DECLARED execution environment; the cwd is recorded (not
+        // digested — an invocation property); the ambient host environment
+        // is never inherited and never recorded.
+        let empty = std::collections::BTreeMap::new();
+        let env = environment_identity(&empty);
         assert_eq!(env.schema_version, crate::model::SCHEMA_ENVIRONMENT);
-        assert_eq!(env.locale, effective_locale());
-        assert_eq!(env.timezone, timezone());
+        assert_eq!(env.locale, effective_locale(&empty));
+        assert_eq!(env.timezone, timezone(&empty));
         assert_eq!(env.umask, umask());
+        assert!(env.environment.is_empty());
         assert!(!env.cwd.is_empty());
         let expected = environment_digest(
             &env.os,
@@ -1980,28 +2117,23 @@ echo "zero=$0 one=$1"
             &env.locale,
             &env.timezone,
             &env.umask,
+            &empty,
         );
         assert_eq!(env.digest, expected);
-        // A different locale moves the digest. The "other" locale is chosen
-        // to be guaranteed different from the effective one (CI runners set
-        // C.UTF-8): the point is that changing the locale changes the
-        // digest, not that any particular locale is "other".
-        let other = if env.locale == "C.UTF-8" {
-            "C"
-        } else {
-            "C.UTF-8"
-        };
-        assert_ne!(
-            expected,
-            environment_digest(
-                &env.os,
-                &env.architecture,
-                &env.kernel_release,
-                other,
-                &env.timezone,
-                &env.umask
-            )
-        );
+
+        // A declared variable moves the digest, and the declared
+        // locale/timezone are what the SIDE sees (never the ambient host's).
+        let mut declared = std::collections::BTreeMap::new();
+        declared.insert("LANG".to_string(), "C.UTF-8".to_string());
+        declared.insert("TZ".to_string(), "Asia/Tokyo".to_string());
+        declared.insert("x".to_string(), "() { :;}; echo PWNED".to_string());
+        let env2 = environment_identity(&declared);
+        assert_eq!(env2.locale, "C.UTF-8");
+        assert_eq!(env2.timezone, "Asia/Tokyo");
+        assert_eq!(env2.environment, declared);
+        assert_ne!(env2.digest, env.digest);
+        // The same declared map is deterministic.
+        assert_eq!(env2.digest, environment_identity(&declared).digest);
     }
 
     #[cfg(unix)]

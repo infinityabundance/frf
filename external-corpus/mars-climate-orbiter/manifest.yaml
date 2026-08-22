@@ -15,6 +15,16 @@ court:
     id: telemetry.conf
     path: fixtures/{fixture}
     arguments: ["{fixture}"]
+  environment_points:
+    utc:
+      TZ: UTC
+      LANG: C
+    new-york:
+      TZ: America/New_York
+      LANG: en_US.UTF-8
+    tokyo:
+      TZ: Asia/Tokyo
+      LANG: ja_JP.UTF-8
   admissibility_envelope:
     fixture_family: thruster-command
     platforms: ["x86_64-linux"]

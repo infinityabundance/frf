@@ -142,14 +142,18 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
         "rlimit_nofile": "1024",
         "rlimit_nproc": "4096",
     });
-    // The expanded environment strata; recompute the digest from them unless
-    // the fixture's violation IS the digest.
+    // The expanded environment strata + the DECLARED execution environment
+    // (v3: the corpus courts declare the empty environment); recompute the
+    // digest from them unless the fixture's violation IS the digest.
     let env = &mut doc["environment"];
-    env["schema_version"] = json!("frf-environment-v2");
+    env["schema_version"] = json!("frf-environment-v3");
     env["locale"] = json!(CORPUS_LOCALE);
     env["timezone"] = json!(CORPUS_TIMEZONE);
     env["umask"] = json!(CORPUS_UMASK);
     env["cwd"] = json!(CORPUS_CWD);
+    if env.get("environment").is_none() {
+        env["environment"] = json!({});
+    }
     if fix_env_digest {
         env["digest"] = json!(crate::rederive::env_digest(
             env["os"].as_str().unwrap_or_default(),
@@ -158,6 +162,7 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
             CORPUS_LOCALE,
             CORPUS_TIMEZONE,
             CORPUS_UMASK,
+            &env["environment"],
         ));
     }
     if fix_semantic_identity {

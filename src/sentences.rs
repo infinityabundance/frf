@@ -165,6 +165,7 @@ mod tests {
             timezone: "Etc/UTC".into(),
             umask: "0022".into(),
             cwd: "frf".into(),
+            environment: Default::default(),
             digest: "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899".into(),
         }
     }
