@@ -22,6 +22,29 @@ fn s(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
+/// The identity of a native runtime closure: `FRF/RUNTIME-CLOSURE/v1` over
+/// the canonical document minus the `cid`, with the components sorted by
+/// path — the closure is a deterministic function of the resolved SET.
+pub fn runtime_closure_identity(closure: &Value) -> String {
+    let mut components: Vec<&Value> = closure["components"]
+        .as_array()
+        .map(|cs| cs.iter().collect())
+        .unwrap_or_default();
+    components.sort_by(|a, b| s(&a["path"]).cmp(&s(&b["path"])));
+    let doc = json!({
+        "schema_version": s(&closure["schema_version"]),
+        "interp": {
+            "path": s(&closure["interp"]["path"]),
+            "sha256": s(&closure["interp"]["sha256"]),
+        },
+        "components": components.iter().map(|c| json!({
+            "path": s(&c["path"]),
+            "sha256": s(&c["sha256"]),
+        })).collect::<Vec<_>>(),
+    });
+    preimage("FRF/RUNTIME-CLOSURE/v1", &doc)
+}
+
 /// The protocol identifier grammar: lowercase letter first, then lowercase
 /// letters, digits, `.`, `_`, `-`; 1..=64 characters. Mirrors the reference
 /// engine's ObservableId/ResidualKind validation.

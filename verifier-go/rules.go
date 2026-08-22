@@ -92,12 +92,14 @@ var provenanceKeys = []string{"schema_version", "runner", "comparator_implementa
 var runnerKeys = []string{"schema_version", "frf_version", "frf_executable_hash"}
 var comparatorImplKeys = []string{"id", "implementation_hash", "runner_hash", "artifact"}
 var extensionImplKeys = []string{"id", "implementation_hash", "runner_hash", "artifact"}
-var artifactKeys = []string{"path", "sha256", "interpreter"}
+var artifactKeys = []string{"path", "sha256", "interpreter", "native_runtime"}
 var normalizerSemanticKeys = []string{"id", "relation_id", "applies_to", "relation_version", "specification_hash"}
 var adapterSemanticKeys = []string{"id", "relation_id", "relation_version", "specification_hash"}
 var comparatorSemanticKeys = []string{"id", "relation_id", "extractor", "residual_classifier", "relation_version", "specification_hash"}
-var authorityKeys = []string{"name", "kind", "version", "identity_hash", "provenance", "interpreter"}
-var candidateKeys = []string{"name", "version_or_commit", "build_profile", "identity_hash", "interpreter"}
+var authorityKeys = []string{"name", "kind", "version", "identity_hash", "provenance", "interpreter", "native_runtime"}
+var candidateKeys = []string{"name", "version_or_commit", "build_profile", "identity_hash", "interpreter", "native_runtime"}
+var runtimeClosureKeys = []string{"schema_version", "cid", "interp", "components"}
+var runtimeComponentKeys = []string{"path", "sha256"}
 var interpreterKeys = []string{"kernel_interpreter", "shebang_argument_bytes", "resolver", "downstream_interpreter"}
 var interpreterExecKeys = []string{"path", "sha256"}
 var resolverKeys = []string{"kind", "path", "sha256", "path_digest"}
@@ -125,8 +127,8 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v16" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v16", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v17" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v17", str(o, "schema_version")))
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
@@ -246,20 +248,34 @@ func structuralViolations(doc jcs.Value) []string {
 	}
 	for _, who := range []string{"authority", "candidate"} {
 		interp := objKeys(objKeys(o, who), "interpreter")
-		if interp == nil {
-			continue
-		}
-		for _, k := range unknownKeys(interp, interpreterKeys) {
-			push(&v, fmt.Sprintf("unknown property %q on %s.interpreter", k, who))
-		}
-		if res := objKeys(interp, "resolver"); res != nil {
-			for _, k := range unknownKeys(res, resolverKeys) {
-				push(&v, fmt.Sprintf("unknown property %q on %s.interpreter.resolver", k, who))
+		if interp != nil {
+			for _, k := range unknownKeys(interp, interpreterKeys) {
+				push(&v, fmt.Sprintf("unknown property %q on %s.interpreter", k, who))
+			}
+			if res := objKeys(interp, "resolver"); res != nil {
+				for _, k := range unknownKeys(res, resolverKeys) {
+					push(&v, fmt.Sprintf("unknown property %q on %s.interpreter.resolver", k, who))
+				}
+			}
+			for _, part := range []string{"kernel_interpreter", "downstream_interpreter"} {
+				for _, k := range unknownKeys(objKeys(interp, part), interpreterExecKeys) {
+					push(&v, fmt.Sprintf("unknown property %q on %s.interpreter.%s", k, who, part))
+				}
 			}
 		}
-		for _, part := range []string{"kernel_interpreter", "downstream_interpreter"} {
-			for _, k := range unknownKeys(objKeys(interp, part), interpreterExecKeys) {
-				push(&v, fmt.Sprintf("unknown property %q on %s.interpreter.%s", k, who, part))
+		if closure := objKeys(objKeys(o, who), "native_runtime"); closure != nil {
+			for _, k := range unknownKeys(closure, runtimeClosureKeys) {
+				push(&v, fmt.Sprintf("unknown property %q on %s.native_runtime", k, who))
+			}
+			for _, k := range unknownKeys(objKeys(closure, "interp"), runtimeComponentKeys) {
+				push(&v, fmt.Sprintf("unknown property %q on %s.native_runtime.interp", k, who))
+			}
+			if comps, ok := closure.Get("components"); ok {
+				for i, c := range arr(comps) {
+					for _, k := range unknownKeys(obj(c), runtimeComponentKeys) {
+						push(&v, fmt.Sprintf("unknown property %q on %s.native_runtime.components[%d]", k, who, i))
+					}
+				}
 			}
 		}
 	}
@@ -322,8 +338,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v16" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v16", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v17" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v17", str(o, "schema_version")))
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -674,22 +690,50 @@ func semanticViolations(rec jcs.Value) []string {
 
 	for _, who := range []string{"authority", "candidate"} {
 		interp := objKeys(objKeys(o, who), "interpreter")
-		if interp == nil {
-			continue
+		if interp != nil {
+			resolver := objKeys(interp, "resolver")
+			if resolver != nil {
+				if str(resolver, "kind") != "env" {
+					push(&v, fmt.Sprintf("%s interpreter resolver kind must be \"env\"", who))
+				}
+				if str(resolver, "path") != str(objKeys(interp, "kernel_interpreter"), "path") {
+					push(&v, fmt.Sprintf("%s interpreter resolver path must be the kernel interpreter path", who))
+				}
+			} else {
+				kernel := objKeys(interp, "kernel_interpreter")
+				down := objKeys(interp, "downstream_interpreter")
+				if kernel == nil || down == nil || str(kernel, "path") != str(down, "path") || str(kernel, "sha256") != str(down, "sha256") {
+					push(&v, fmt.Sprintf("%s interpreter: without a resolver the kernel must BE the downstream interpreter", who))
+				}
+			}
 		}
-		resolver := objKeys(interp, "resolver")
-		if resolver != nil {
-			if str(resolver, "kind") != "env" {
-				push(&v, fmt.Sprintf("%s interpreter resolver kind must be \"env\"", who))
+		closure := objKeys(objKeys(o, who), "native_runtime")
+		if closure != nil {
+			// An artifact is a script OR a native ELF, never both.
+			if interp != nil {
+				push(&v, fmt.Sprintf("%s artifact carries BOTH an interpreter chain and a native runtime closure", who))
 			}
-			if str(resolver, "path") != str(objKeys(interp, "kernel_interpreter"), "path") {
-				push(&v, fmt.Sprintf("%s interpreter resolver path must be the kernel interpreter path", who))
+			if str(closure, "schema_version") != "frf-runtime-closure-v1" {
+				push(&v, fmt.Sprintf("%s runtime closure has unsupported schema_version %v", who, str(closure, "schema_version")))
 			}
-		} else {
-			kernel := objKeys(interp, "kernel_interpreter")
-			down := objKeys(interp, "downstream_interpreter")
-			if kernel == nil || down == nil || str(kernel, "path") != str(down, "path") || str(kernel, "sha256") != str(down, "sha256") {
-				push(&v, fmt.Sprintf("%s interpreter: without a resolver the kernel must BE the downstream interpreter", who))
+			expected := runtimeClosureIdentity(closure)
+			if expected != str(closure, "cid") {
+				push(&v, fmt.Sprintf("%s runtime closure cid does not rederive", who))
+			}
+			for _, comp := range []*jcs.Object{objKeys(closure, "interp")} {
+				if comp == nil {
+					continue
+				}
+				sh := str(comp, "sha256")
+				if len(sh) != 64 || !hex64(sh) {
+					push(&v, fmt.Sprintf("%s runtime closure interp %s carries a malformed hash", who, str(comp, "path")))
+				}
+			}
+			for _, c := range arr(recVal(closure, "components")) {
+				sh := str(obj(c), "sha256")
+				if len(sh) != 64 || !hex64(sh) {
+					push(&v, fmt.Sprintf("%s runtime closure component %s carries a malformed hash", who, str(obj(c), "path")))
+				}
 			}
 		}
 	}

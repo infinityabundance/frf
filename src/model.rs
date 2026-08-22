@@ -87,7 +87,7 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// v15: the execution profile adds the per-side process-count limit
 /// (`rlimit_nproc`, RLIMIT_NPROC) — the capture bounds record the complete
 /// resource contract the observation was made under.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v16";
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v17";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -223,6 +223,8 @@ pub const SCHEMA_MUTATION_REQUEST: &str = "frf-mutation-request-v1";
 pub const SCHEMA_MUTATION_RESPONSE: &str = "frf-mutation-response-v1";
 pub const SCHEMA_MUTATION_INVOCATION: &str = "frf-mutation-invocation-v1";
 pub const SCHEMA_MUTATION_RESULT: &str = "frf-mutation-result-v1";
+
+pub const SCHEMA_RUNTIME_CLOSURE: &str = "frf-runtime-closure-v1";
 
 /// The capture bounds that actually applied to a court's executions — the
 /// execution profile's parameters as enforced (the profile's defaults, or
@@ -2034,6 +2036,13 @@ pub struct InterpreterIdentity {
 /// materialized under `objects/sha256/<H>` BEFORE execution, so hashing and
 /// executing can never observe different bytes (no TOCTOU window). Objects
 /// are verified on every use and sealed read-only after materialization.
+///
+/// v17: a NATIVE (ELF) artifact additionally binds its runtime closure — the
+/// dynamic loader (`PT_INTERP`), the resolved `DT_NEEDED` closure, and the
+/// hash of every loaded component. For native software, `executable hash` is
+/// not `executable semantics`; the closure is what the artifact actually
+/// loaded, resolved by the system loader under the observation environment.
+/// A script artifact carries the interpreter chain instead (never both).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactIdentity {
@@ -2043,6 +2052,49 @@ pub struct ArtifactIdentity {
     /// Present when the artifact is a script with a resolvable shebang.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpreter: Option<InterpreterIdentity>,
+    /// Present when the artifact is a native ELF executable: the dynamic
+    /// loader + resolved dependency closure, content-addressed (v17).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_runtime: Option<NativeRuntimeClosure>,
+}
+
+/// One component of a native runtime closure: a loaded executable or dynamic
+/// library, by the path the system loader resolved and the SHA-256 of its
+/// bytes at observation time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeComponent {
+    /// The resolved filesystem path (the loader's own resolution — its
+    /// search configuration, cache, and the effective LD_LIBRARY_PATH apply).
+    pub path: String,
+    /// SHA-256 of the component's bytes at observation time.
+    pub sha256: String,
+}
+
+/// The native runtime closure of an ELF executable — `executable hash` is not
+/// `executable semantics`: the artifact's behavior depends on its dynamic
+/// loader, its dependency closure, and the loader search configuration that
+/// resolved them. This object binds all of it, resolved by the SYSTEM loader
+/// under the observation environment and hashed at observation time. The
+/// identity is `FRF/RUNTIME-CLOSURE/v1` over the canonical document minus
+/// the cid (the components are sorted by name, so the closure is a
+/// deterministic function of the resolved set).
+///
+/// High-assurance admission requires the closure for every native premise
+/// artifact: without it, a native artifact could not name what it actually
+/// loaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeRuntimeClosure {
+    pub schema_version: String,
+    /// Content address: `FRF/RUNTIME-CLOSURE/v1` over the canonical document
+    /// minus the cid.
+    pub cid: String,
+    /// The dynamic loader (`PT_INTERP` of the executable).
+    pub interp: NativeRuntimeComponent,
+    /// The resolved dependency closure (the executable's `DT_NEEDED`, and
+    /// transitively theirs), sorted by name.
+    pub components: Vec<NativeRuntimeComponent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3491,6 +3543,10 @@ pub struct ReceiptAuthority {
     /// The interpreter the authority's script executed under, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpreter: Option<InterpreterIdentity>,
+    /// The authority's native runtime closure (v17): present exactly when
+    /// the artifact is a native ELF executable (no interpreter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_runtime: Option<NativeRuntimeClosure>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3505,6 +3561,10 @@ pub struct ReceiptCandidate {
     /// The interpreter the candidate's script executed under, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interpreter: Option<InterpreterIdentity>,
+    /// The candidate's native runtime closure (v17): present exactly when
+    /// the artifact is a native ELF executable (no interpreter).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_runtime: Option<NativeRuntimeClosure>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

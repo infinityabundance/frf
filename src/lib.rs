@@ -16,6 +16,7 @@ pub mod host;
 pub mod kappa;
 pub mod model;
 pub mod mutation;
+pub mod native;
 pub mod normalizers;
 pub mod produced;
 pub mod render;

@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,48 @@ func hashPreimage(kind string, doc jcs.Value) (string, error) {
 		return "", err
 	}
 	return jcs.Sha256Hex(append([]byte(kind+"\n"), []byte(json)...)), nil
+}
+
+// runtimeClosureIdentity: FRF/RUNTIME-CLOSURE/v1 over the closure's fields
+// minus the cid, with the components sorted by path — the closure is a
+// deterministic function of the resolved SET.
+func runtimeClosureIdentity(closure *jcs.Object) string {
+	var comps []jcs.Value
+	for _, c := range arr(recVal(closure, "components")) {
+		comps = append(comps, c)
+	}
+	sort.Slice(comps, func(i, j int) bool {
+		return str(obj(comps[i]), "path") < str(obj(comps[j]), "path")
+	})
+	var sorted []jcs.Value
+	for _, c := range comps {
+		sorted = append(sorted, &jcs.Object{
+			Keys:   []string{"path", "sha256"},
+			Values: []jcs.Value{str(obj(c), "path"), str(obj(c), "sha256")},
+		})
+	}
+	doc := &jcs.Object{
+		Keys: []string{"schema_version", "interp", "components"},
+		Values: []jcs.Value{
+			str(closure, "schema_version"),
+			&jcs.Object{
+				Keys:   []string{"path", "sha256"},
+				Values: []jcs.Value{str(objKeys(closure, "interp"), "path"), str(objKeys(closure, "interp"), "sha256")},
+			},
+			sorted,
+		},
+	}
+	return mustPreimage("FRF/RUNTIME-CLOSURE/v1", doc)
+}
+
+// mustPreimage: hashPreimage that cannot fail (the document is already
+// constructed from strings/arrays).
+func mustPreimage(kind string, doc jcs.Value) string {
+	h, err := hashPreimage(kind, doc)
+	if err != nil {
+		panic("cannot canonicalize " + kind + ": " + err.Error())
+	}
+	return h
 }
 
 // recordContentIdentity: SHA-256 of the canonical serialization of a record's

@@ -214,9 +214,9 @@ mod tests {
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
                 rlimit_nproc: "512".into(),
-            cgroup_pids_max: None,
-            cgroup_memory_max: None,
-            cgroup_cpu_max: None,
+                cgroup_pids_max: None,
+                cgroup_memory_max: None,
+                cgroup_cpu_max: None,
             },
             authority: ReceiptAuthority {
                 name: "ref-cli".into(),
@@ -225,6 +225,7 @@ mod tests {
                 identity_hash: "0".repeat(64),
                 provenance: "file:golden/reference.sh".into(),
                 interpreter: None,
+                native_runtime: None,
             },
             candidate: ReceiptCandidate {
                 name: "cand-cli".into(),
@@ -232,6 +233,7 @@ mod tests {
                 build_profile: "debug".into(),
                 identity_hash: "c".repeat(64),
                 interpreter: None,
+                native_runtime: None,
             },
             environment: env(),
             fixtures: vec![ReceiptFixture {

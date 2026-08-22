@@ -38,6 +38,34 @@ pub fn hash_preimage(kind: &str, doc: &Value) -> Result<String> {
     Ok(host::sha256_bytes(format!("{kind}\n{json}").as_bytes()))
 }
 
+/// The content address of a native runtime closure: `FRF/RUNTIME-CLOSURE/v1`
+/// over the canonical document minus the `cid` (the components are SORTED BY
+/// NAME inside the identity, so the closure is a deterministic function of
+/// the resolved SET — two loaders that resolve the same closure agree on one
+/// identity, whatever order they collected it in).
+pub fn runtime_closure_identity(closure: &NativeRuntimeClosure) -> Result<String> {
+    let mut sorted: Vec<&NativeRuntimeComponent> = closure.components.iter().collect();
+    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut value = serde_json::to_value(closure)
+        .map_err(|e| FrfError::new(format!("cannot serialize the closure: {e}")))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("cid");
+        if let Some(comps) = obj
+            .get_mut("components")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            *comps = sorted
+                .into_iter()
+                .map(|c| {
+                    serde_json::to_value(c)
+                        .map_err(|e| FrfError::new(format!("cannot serialize a component: {e}")))
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
+    }
+    hash_preimage("FRF/RUNTIME-CLOSURE/v1", &value)
+}
+
 // ---------------------------------------------------------------------------
 // Extension-protocol specification hashes. One formula everywhere: a
 // domain-separated canonical JSON document whose SHA-256 is the semantic
@@ -1317,11 +1345,13 @@ mod tests {
                 path: "p".into(),
                 sha256: auth_sha.into(),
                 interpreter: None,
+                native_runtime: None,
             },
             candidate_artifact: ArtifactIdentity {
                 path: "p".into(),
                 sha256: "0".repeat(64),
                 interpreter: None,
+                native_runtime: None,
             },
             court_semantic_identity: "0".repeat(64),
             execution_profile: crate::model::EXECUTION_PROFILE_LINUX.into(),

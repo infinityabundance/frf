@@ -570,6 +570,27 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
                     "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile) — an FRF_EXEC_* override can never redefine the reference bounds",
                 )));
             }
+            // Native artifacts must bind their runtime closure: for native
+            // software, executable hash is not executable semantics — a
+            // high-assurance premise must name what its artifacts actually
+            // loaded (the dynamic loader + the resolved dependency closure).
+            for (who, artifact) in [
+                (
+                    "authority",
+                    (&r.authority.interpreter, &r.authority.native_runtime),
+                ),
+                (
+                    "candidate",
+                    (&r.candidate.interpreter, &r.candidate.native_runtime),
+                ),
+            ] {
+                if artifact.0.is_none() && artifact.1.is_none() {
+                    return Err(FrfError::new(format!(
+                        "claim refused under policy {policy:?}: the premise {} is a NATIVE artifact whose runtime closure is not bound — high-assurance native evidence must name the dynamic loader and the resolved dependency closure (re-run the court to bind it)",
+                        who
+                    )));
+                }
+            }
         }
         EXECUTION_PROFILE_LINUX.to_string()
     } else {
