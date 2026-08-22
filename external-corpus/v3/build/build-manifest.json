@@ -1,8 +1,8 @@
 {
   "about": "Provenance of the committed v3 corpus artifacts: pinned upstream sources, the hermetic container toolchain, the compat patches, and the SHA-256 of every produced artifact. Rebuilding with build/build-all.sh from these exact inputs reproduces the committed bytes.",
   "artifacts": {
-    "heartbleed/builds/hb-1.0.1f": "4566303ac42ed95e4af6511b5596fe6afd6b3878eafaaf8dfd7b83164d5b2ff2",
-    "heartbleed/builds/hb-1.0.1g": "0ffd0a1110e212b20521feae9e48417bf6b972065744428993d11e528cd33656",
+    "heartbleed/builds/hb-1.0.1f": "30e94f20d4741d19d9bbcc14e4c1783f6e565e2d0c844483b264f16a4fd4023b",
+    "heartbleed/builds/hb-1.0.1g": "8002b2682bebb0735c5fa4768f60a8f96bb607a9da85748afad44c2ae89679f6",
     "log4shell/builds/lib/log4j-api-2.14.1.jar": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
     "log4shell/builds/lib/log4j-api-2.17.1.jar": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
     "log4shell/builds/lib/log4j-core-2.14.1.jar": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",

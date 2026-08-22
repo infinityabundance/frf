@@ -24,6 +24,21 @@
  * This probe executes only its own sockets; it never reads a file, so the
  * court's fixture is a marker file the probe does not need (the argv slot
  * keeps the court's declared-arguments contract uniform).
+ *
+ * LOAD ROBUSTNESS: the handshake is a fork/accept/connect race over a
+ * loopback socket with a client-side receive timeout. On a co-tenanted CI
+ * runner a single side's server flight can be stalled long enough that a
+ * tight timeout fires on ONE side and not the other — fabricating a
+ * divergence where the two builds are actually identical (exactly what
+ * broke the heartbleed clean control on GitHub Actions). The probe
+ * therefore retries the whole flow silently (bounded attempts, each with a
+ * generous receive timeout that still fits the harness's own wall-clock
+ * bound), and ignores SIGPIPE so a write-race with a reaped server child
+ * cannot kill the probe with a signal exit. Retries print NOTHING to the
+ * observed streams: the exit/stderr/stdout surface is the same whether the
+ * flow completed on attempt 1 or attempt 3. A library that genuinely
+ * cannot complete a handshake still fails every attempt and exits 2
+ * ("indeterminate"), which is never counted as a pass.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,6 +170,14 @@ static void die(const char *what) {
     exit(2);
 }
 
+/* The client-side receive timeout, per attempt. Generous enough that a
+ * co-tenanted CI runner cannot stall a side past it, yet bounded so the
+ * worst case (3 attempts x this) fits comfortably inside the harness's own
+ * wall-clock execution bound. A stalled socket read burns no CPU, so the
+ * harness's CPU-time limit is not a factor. */
+#define RCVTIMEO_SEC 15
+#define MAX_ATTEMPTS 3
+
 int main(int argc, char **argv) {
     /* The fixture selects the probe mode: "handshake" (the clean control)
      * performs the TLS handshake and sends NO heartbeat at all — both
@@ -208,155 +231,205 @@ int main(int argc, char **argv) {
     if (listen(lfd, 1) != 0)
         die("listen");
 
-    /* The handshake needs both roles to run CONCURRENTLY (each waits for
-     * the other's messages). Fork: the server role runs in the child, the
-     * client role in the parent. */
-    pid_t pid = fork();
-    if (pid < 0)
-        die("fork");
+    /* SIGPIPE off: the client writes (ClientHello / heartbeat) race the
+     * server child's lifetime; a reaped child must yield EPIPE on the
+     * write — a retry — never a signal death that fabricates a divergence
+     * on the exit axis with an empty stderr. */
+    signal(SIGPIPE, SIG_IGN);
 
-    if (pid == 0) {
-        /* ---- SERVER role (the side under test) ---- */
-        int sfd = accept(lfd, NULL, NULL);
-        if (sfd < 0)
-            _exit(2);
-        SSL *sssl = SSL_new(sctx);
-        if (!sssl)
-            _exit(2);
-        SSL_set_accept_state(sssl);
-        SSL_set_fd(sssl, sfd);
-        /* SSL_read drives the handshake internally: it reads the
-         * ClientHello, writes the ServerHello + Certificate +
-         * ServerHelloDone flight, then reads the next record — the
-         * malformed heartbeat — which the linked library processes inside
-         * ssl3_read_bytes (the vulnerable library echoes the leak here; a
-         * fixed library silently discards it). After processing, SSL_read
-         * reports WANT_READ (the dispatch asks the application to read
-         * again); the child KEEPS WAITING until the client is done, so the
-         * socket stays open while the client collects the response. The
-         * client kills the child at the end. */
-        char sink[1024];
-        int rn;
-        for (;;) {
-            rn = SSL_read(sssl, sink, sizeof sink);
-            if (rn > 0)
-                continue;
-            int err = SSL_get_error(sssl, rn);
-            if (err == SSL_ERROR_WANT_READ)
-                continue;
-            break;
-        }
-        _exit(0);
-    }
-
-    /* ---- CLIENT role (the probe) ---- */
-    int cfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (cfd < 0)
-        die("client socket");
-    if (connect(cfd, (struct sockaddr *)&addr, sizeof addr) != 0)
-        die("connect");
-    struct timeval tv;
-    tv.tv_sec = 3;
-    tv.tv_usec = 0;
-    if (setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0)
-        die("rcvtimeo");
-
-    if (write(cfd, CLIENT_HELLO, sizeof CLIENT_HELLO) != (ssize_t)sizeof CLIENT_HELLO)
-        die("write ClientHello");
-
-    /* Read the server flight until ServerHelloDone (handshake type 0x0e). */
-    unsigned char payload[65536];
-    size_t plen = 0;
-    int sent_hb = 0;
+    /* The observed streams are fixed up front; failures of the flow below
+     * are retried SILENTLY (nothing may appear on stdout/stderr until the
+     * outcome is decided), so the observed surface is identical whether the
+     * flow completed on attempt 1 or attempt 3. */
+    const char *last_failure = "no server response";
     int status = 0;
-    for (;;) {
-        int type = read_record(cfd, payload, sizeof payload, &plen);
-        if (type < 0)
-            die("no ServerHelloDone");
-        if (type == 22 && plen >= 1 && payload[0] == 0x0e) {
-            if (clean) {
-                /* The clean control ends here: the handshake completed
-                 * identically on both builds. Report it and stop. */
-                fprintf(stdout,
-                        "hb: clean control (TLS handshake completed, no heartbeat)\n");
-                fflush(stdout);
-                kill(pid, SIGKILL);
-                waitpid(pid, &status, 0);
-                return 0;
+    int attempt;
+    for (attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        /* ---- SERVER role (the side under test) ---- */
+        /* The handshake needs both roles to run CONCURRENTLY (each waits
+         * for the other's messages). Fork: the server role runs in the
+         * child, the client role in the parent. A FRESH child per attempt:
+         * the previous one is reaped before the next connection. */
+        pid_t pid = fork();
+        if (pid < 0)
+            die("fork");
+
+        if (pid == 0) {
+            int sfd = accept(lfd, NULL, NULL);
+            if (sfd < 0)
+                _exit(2);
+            SSL *sssl = SSL_new(sctx);
+            if (!sssl)
+                _exit(2);
+            SSL_set_accept_state(sssl);
+            SSL_set_fd(sssl, sfd);
+            /* SSL_read drives the handshake internally: it reads the
+             * ClientHello, writes the ServerHello + Certificate +
+             * ServerHelloDone flight, then reads the next record — the
+             * malformed heartbeat — which the linked library processes
+             * inside ssl3_read_bytes (the vulnerable library echoes the
+             * leak here; a fixed library silently discards it). After
+             * processing, SSL_read reports WANT_READ (the dispatch asks
+             * the application to read again); the child KEEPS WAITING
+             * until the client is done, so the socket stays open while
+             * the client collects the response. The client kills the
+             * child at the end. */
+            char sink[1024];
+            int rn;
+            for (;;) {
+                rn = SSL_read(sssl, sink, sizeof sink);
+                if (rn > 0)
+                    continue;
+                int err = SSL_get_error(sssl, rn);
+                if (err == SSL_ERROR_WANT_READ)
+                    continue;
+                break;
             }
-            /* The historical moment: the read cipher is not yet active, so
-             * the plaintext heartbeat is processed as-is. */
-            if (write(cfd, HEARTBEAT, sizeof HEARTBEAT)
-                != (ssize_t)sizeof HEARTBEAT)
-                die("write heartbeat");
-            sent_hb = 1;
-            break;
+            _exit(0);
         }
-        if (type == 21) {
-            /* The server refused the handshake outright. */
-            die("server alert during handshake");
+
+        /* ---- CLIENT role (the probe) ---- */
+        int cfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (cfd < 0)
+            die("client socket");
+        if (connect(cfd, (struct sockaddr *)&addr, sizeof addr) != 0)
+            die("connect");
+        struct timeval tv;
+        tv.tv_sec = RCVTIMEO_SEC;
+        tv.tv_usec = 0;
+        if (setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) != 0)
+            die("rcvtimeo");
+
+        if (write(cfd, CLIENT_HELLO, sizeof CLIENT_HELLO)
+            != (ssize_t)sizeof CLIENT_HELLO) {
+            close(cfd);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            continue; /* transient: retry silently */
         }
-    }
 
-    /* Collect the response. A vulnerable server echoes up to 16 KiB of its
-     * memory; a fixed server sends a fatal alert and closes. */
-    size_t total = 0;
-    int got_type = -1;
-    for (;;) {
-        int type = read_record(cfd, payload + total, sizeof payload - total,
-                               &plen);
-        if (type < 0)
-            break;
-        got_type = type;
-        total += plen;
-        if (total >= sizeof payload)
-            break;
-        if (type == 21)
-            break; /* alert: the fixed server's answer */
-    }
+        /* Read the server flight until ServerHelloDone (handshake type
+         * 0x0e). */
+        unsigned char payload[65536];
+        size_t plen = 0;
+        int sent_hb = 0;
+        int handshake_failed = 0;
+        for (;;) {
+            int type = read_record(cfd, payload, sizeof payload, &plen);
+            if (type < 0) {
+                last_failure = "no ServerHelloDone";
+                handshake_failed = 1;
+                break;
+            }
+            if (type == 22 && plen >= 1 && payload[0] == 0x0e) {
+                if (clean) {
+                    /* The clean control ends here: the handshake
+                     * completed identically on both builds. Report it and
+                     * stop. */
+                    fprintf(stdout,
+                            "hb: clean control (TLS handshake completed, no heartbeat)\n");
+                    fflush(stdout);
+                    kill(pid, SIGKILL);
+                    waitpid(pid, &status, 0);
+                    return 0;
+                }
+                /* The historical moment: the read cipher is not yet
+                 * active, so the plaintext heartbeat is processed as-is. */
+                if (write(cfd, HEARTBEAT, sizeof HEARTBEAT)
+                    != (ssize_t)sizeof HEARTBEAT) {
+                    last_failure = "heartbeat write failed";
+                    handshake_failed = 1;
+                    break;
+                }
+                sent_hb = 1;
+                break;
+            }
+            if (type == 21) {
+                /* The server refused the handshake outright. */
+                last_failure = "server alert during handshake";
+                handshake_failed = 1;
+                break;
+            }
+        }
+        if (handshake_failed) {
+            close(cfd);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            continue; /* transient: retry silently */
+        }
 
-    /* The server child is done. Reap it with a short bound. */
-    for (int w = 0; w < 10; w++) {
-        if (waitpid(pid, &status, WNOHANG) == pid)
-            break;
-        usleep(50000);
-    }
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
+        /* Collect the response. A vulnerable server echoes up to 16 KiB of
+         * its memory; a fixed server sends a fatal alert and closes. */
+        size_t total = 0;
+        int got_type = -1;
+        for (;;) {
+            int type = read_record(cfd, payload + total, sizeof payload - total,
+                                   &plen);
+            if (type < 0)
+                break;
+            got_type = type;
+            total += plen;
+            if (total >= sizeof payload)
+                break;
+            if (type == 21)
+                break; /* alert: the fixed server's answer */
+        }
 
-    if (!sent_hb) {
-        die("heartbeat never sent");
-    }
-    if (got_type == 24) {
-        /* A heartbeat RESPONSE record. With the malformed trigger, a
-         * vulnerable library echoes 16 KiB of process memory; anything
-         * beyond the honest echo (> 256 bytes) is the leak. */
-        if (total > 256) {
-            fprintf(stderr,
-                    "HEARTBLEED: the linked libssl leaked %zu bytes in the heartbeat response\n",
+        /* The server child is done. Reap it with a short bound. */
+        for (int w = 0; w < 10; w++) {
+            if (waitpid(pid, &status, WNOHANG) == pid)
+                break;
+            usleep(50000);
+        }
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        close(cfd);
+
+        if (!sent_hb) {
+            continue; /* cannot happen; retry rather than misclassify */
+        }
+        if (got_type == 24) {
+            /* A heartbeat RESPONSE record. With the malformed trigger, a
+             * vulnerable library echoes 16 KiB of process memory; anything
+             * beyond the honest echo (> 256 bytes) is the leak. */
+            if (total > 256) {
+                fprintf(stderr,
+                        "HEARTBLEED: the linked libssl leaked %zu bytes in the heartbeat response\n",
+                        total);
+                return 1;
+            }
+            fprintf(stdout, "hb: no leak (small %zu-byte heartbeat response)\n",
                     total);
-            return 1;
+            return 0;
         }
-        fprintf(stdout, "hb: no leak (small %zu-byte heartbeat response)\n",
-                total);
+        if (got_type == 21) {
+            /* A fatal alert: the malformed heartbeat was refused. */
+            fprintf(stdout, "hb: no leak (alert response)\n");
+            return 0;
+        }
+        if (got_type < 0 && total == 0) {
+            /* The handshake succeeded and the heartbeat was sent, yet
+             * nothing came back: the fixed behavior is to SILENTLY
+             * DISCARD a malformed heartbeat (RFC 6520 §4 — the 1.0.1g fix
+             * returns without a response). A vulnerable library always
+             * answers. A timeout or EOF after a completed handshake is
+             * therefore the fixed outcome, not an indeterminate one. */
+            fprintf(stdout,
+                    "hb: no leak (malformed heartbeat silently discarded)\n");
+            return 0;
+        }
+        if (got_type < 0 && total > 0) {
+            /* A response started but stalled mid-read: transient load.
+             * Retry the whole flow; the leak/no-leak verdict is
+             * deterministic, so a retry converges. */
+            last_failure = "truncated response";
+            continue;
+        }
+        fprintf(stdout,
+                "hb: no leak (connection closed without a heartbeat response)\n");
         return 0;
     }
-    if (got_type == 21) {
-        /* A fatal alert: the malformed heartbeat was refused. */
-        fprintf(stdout, "hb: no leak (alert response)\n");
-        return 0;
-    }
-    if (got_type < 0 && total == 0) {
-        /* The handshake succeeded and the heartbeat was sent, yet nothing
-         * came back: the fixed behavior is to SILENTLY DISCARD a malformed
-         * heartbeat (RFC 6520 §4 — the 1.0.1g fix returns without a
-         * response). A vulnerable library always answers. A timeout or EOF
-         * after a completed handshake is therefore the fixed outcome, not
-         * an indeterminate one. */
-        fprintf(stdout, "hb: no leak (malformed heartbeat silently discarded)\n");
-        return 0;
-    }
-    fprintf(stdout,
-            "hb: no leak (connection closed without a heartbeat response)\n");
-    return 0;
+
+    /* Every attempt stalled: the probe itself failed. Never a pass. */
+    die(last_failure);
 }
