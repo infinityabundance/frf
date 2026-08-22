@@ -32,20 +32,27 @@
 //!   authority transition (buggy):     [absent, observed]      boundary-localized/abrupt/end
 //!   authority transition (fixed):     [observed, absent]      boundary-localized/abrupt/start
 //!
+//! The per-case staging and the four experiments are SHARED with the v4
+//! measurement study (`experiment_external_v4`): v4 runs the same staged
+//! corpus through the same gates and attaches its own measurements
+//! (repeat-probe determinism, challenge sensitivity, minimization, claims,
+//! conventional baselines, storage/runtime/localization overhead). There is
+//! ONE implementation of the four experiments.
+//!
 //! `--check` (default) exits non-zero on any misclassification, any lost
 //! defect, any replay that did not reproduce, or any clean control that
 //! diverged.
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::experiment::{dir_size, frf_bin};
 use super::experiment_external::{admit, write_bytes};
 use crate::load_evidence;
 
-fn as_str(v: &Value) -> &str {
+pub(crate) fn as_str(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
@@ -60,7 +67,7 @@ const ENVIRONMENT_MATRIX: [(&str, &str, &str); 3] = [
 /// court's ambient environment), exactly as in the historical exploit.
 const SHELLSHOCK_TRIGGER: &str = "x=() { :;}; echo PWNED";
 
-enum Expectation {
+pub(crate) enum Expectation {
     Observed,
     Absent,
 }
@@ -73,26 +80,31 @@ impl Clone for Expectation {
     }
 }
 
-struct TrajectoryMeasurement {
-    experiment: String,
-    case: String,
-    axis: String,
-    lineage: String,
-    pattern: Vec<bool>,
-    expected_drift: &'static str,
-    expected_slew: &'static str,
-    expected_localization: &'static str,
-    evidence_bytes: u64,
+pub(crate) struct TrajectoryMeasurement {
+    pub experiment: String,
+    pub case: String,
+    pub axis: String,
+    pub lineage: String,
+    pub pattern: Vec<bool>,
+    pub expected_drift: &'static str,
+    pub expected_slew: &'static str,
+    pub expected_localization: &'static str,
+    pub evidence_bytes: u64,
 }
 
-struct CleanControl {
-    case: String,
-    residual_count: usize,
+pub(crate) struct CleanControl {
+    pub case: String,
+    pub residual_count: usize,
 }
 
 /// Run frf with an explicit ambient environment (the environment matrix
 /// points the court captures; the Shellshock trigger rides the same path).
-fn run_frf_env(frf: &Path, cwd: &Path, args: &[&str], envs: &[&str]) -> (bool, String, String) {
+pub(crate) fn run_frf_env(
+    frf: &Path,
+    cwd: &Path,
+    args: &[&str],
+    envs: &[&str],
+) -> (bool, String, String) {
     let mut cmd = Command::new(frf);
     cmd.args(args).current_dir(cwd);
     for e in envs {
@@ -140,7 +152,10 @@ fn copy_tree(src: &Path, dst: &Path) {
 /// Read the derived trajectories of one axis, grouped by lineage (same
 /// selector as v2: with several experiments per axis, the caller picks the
 /// record whose observed pattern matches its expectation).
-fn read_axis_trajectories(case_work: &Path, coordinate_system: &str) -> Vec<(String, Vec<Value>)> {
+pub(crate) fn read_axis_trajectories(
+    case_work: &Path,
+    coordinate_system: &str,
+) -> Vec<(String, Vec<Value>)> {
     let dir = case_work.join("ev/trajectories");
     let mut by_lineage: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     if !dir.is_dir() {
@@ -166,7 +181,10 @@ fn read_axis_trajectories(case_work: &Path, coordinate_system: &str) -> Vec<(Str
 
 /// Select the trajectory record whose observed pattern matches the expected
 /// pattern point by point.
-fn select_by_pattern<'a>(records: &'a [Value], expected: &[Expectation]) -> Option<&'a Value> {
+pub(crate) fn select_by_pattern<'a>(
+    records: &'a [Value],
+    expected: &[Expectation],
+) -> Option<&'a Value> {
     records.iter().find(|r| {
         let pattern: Vec<bool> = r["observations"]
             .as_array()
@@ -263,11 +281,440 @@ fn check_trajectory(
 
 /// The per-case trigger environment (empty for cases without an ambient
 /// trigger, the Shellshock import variable otherwise).
-fn trigger_env(case: &Value) -> Vec<&str> {
+pub(crate) fn trigger_env(case: &Value) -> Vec<&'static str> {
     if as_str(&case["trigger"]) == "env" {
         vec![SHELLSHOCK_TRIGGER]
     } else {
         Vec::new()
+    }
+}
+
+/// The staged evidence of one case: the work tree with builds/, fixtures/,
+/// the three rendered manifests, and the admitted authority versions.
+pub(crate) struct StagedCase {
+    pub id: String,
+    pub case_work: PathBuf,
+    /// The case metadata (`case.json`): sides, fixtures, authority name.
+    pub meta: Value,
+    pub manifest_defect: String,
+    pub manifest_clean: String,
+    pub manifest_clean_defect: String,
+    /// The ambient trigger environment (`TZ=`/`LANG=`-style pairs), empty
+    /// for cases without an ambient trigger.
+    pub trigger: Vec<&'static str>,
+}
+
+/// The run ids the four shared experiments produced — the handles the v4
+/// measurement study needs to attach replays, claims, and reductions.
+pub(crate) struct CaseEvidence {
+    /// The ladder's observed run ids (the buggy revision first).
+    pub ladder_runs: Vec<String>,
+    /// The environment matrix's run ids, in coordinate order.
+    pub env_runs: Vec<String>,
+    /// The clean control's run id.
+    pub clean_run: Option<String>,
+}
+
+/// Stage one case: copy the corpus builds/ + fixtures/ into the work tree,
+/// render the three manifests from the template, and admit the two authority
+/// versions (the fixed release, and the vulnerable release as `pre-fix`).
+pub(crate) fn stage_case(frf: &Path, corpus: &Path, work: &Path, case: &Value) -> StagedCase {
+    let id = as_str(&case["id"]);
+    let case_src = corpus.join(id);
+    let case_work = work.join(id);
+    std::fs::create_dir_all(&case_work).unwrap();
+    // The per-case metadata (authority identity, sides, fixtures).
+    let meta = crate::load_json(&case_src.join("case.json"));
+    let name = as_str(&meta["authority_name"]);
+    let fixed_version = as_str(&meta["authority_fixed_version"]);
+    let side_vuln = as_str(&meta["sides"]["vulnerable"]);
+    let side_fixed = as_str(&meta["sides"]["fixed"]);
+    let fixture_defect = as_str(&meta["fixtures"]["defect"]);
+    let fixture_clean = as_str(&meta["fixtures"]["clean"]);
+    let trigger = trigger_env(&meta);
+
+    // Stage the corpus: builds/ + fixtures/ are copied verbatim; the
+    // three manifests are rendered from the template.
+    copy_tree(&case_src.join("builds"), &case_work.join("builds"));
+    copy_tree(&case_src.join("fixtures"), &case_work.join("fixtures"));
+    let template = std::fs::read_to_string(case_src.join("manifest.yaml"))
+        .unwrap_or_else(|e| panic!("cannot read the manifest for {id}: {e}"));
+    let staged = |candidate: &str, fixture: &str| {
+        template
+            .replace("{candidate}", candidate)
+            .replace("fixtures/{fixture}", &format!("fixtures/{fixture}"))
+    };
+    write_bytes(
+        &case_work,
+        &format!("courts/{id}/manifest-defect.yaml"),
+        staged(side_vuln, fixture_defect).as_bytes(),
+        false,
+    );
+    write_bytes(
+        &case_work,
+        &format!("courts/{id}/manifest-clean.yaml"),
+        staged(side_vuln, fixture_clean).as_bytes(),
+        false,
+    );
+    write_bytes(
+        &case_work,
+        &format!("courts/{id}/manifest-clean-defect.yaml"),
+        staged(side_fixed, fixture_defect).as_bytes(),
+        false,
+    );
+
+    // Admit the FIXED release as the reference authority, and the
+    // VULNERABLE release as its pre-fix version (the historical oracle
+    // transition).
+    admit(frf, &case_work, side_fixed, name, fixed_version);
+    admit(frf, &case_work, side_vuln, name, "pre-fix");
+
+    StagedCase {
+        id: id.to_string(),
+        case_work,
+        meta,
+        manifest_defect: format!("courts/{id}/manifest-defect.yaml"),
+        manifest_clean: format!("courts/{id}/manifest-clean.yaml"),
+        manifest_clean_defect: format!("courts/{id}/manifest-clean-defect.yaml"),
+        trigger,
+    }
+}
+
+/// Drive the four shared experiments over one staged case — the version
+/// ladder, the environment matrix, both authority transitions, and the clean
+/// control — pushing every measurement and failure, and returning the run
+/// ids the later measurements need. This is the ONE implementation of the
+/// four experiments; v3's runner and the v4 measurement study both use it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_case_experiments(
+    frf: &Path,
+    staged: &StagedCase,
+    measurements: &mut Vec<TrajectoryMeasurement>,
+    clean_controls: &mut Vec<CleanControl>,
+    failures: &mut Vec<String>,
+) -> CaseEvidence {
+    let id = &staged.id;
+    let case_work = &staged.case_work;
+    let meta = &staged.meta;
+    let fixed_version = as_str(&meta["authority_fixed_version"]);
+    let side_vuln = as_str(&meta["sides"]["vulnerable"]);
+    let side_fixed = as_str(&meta["sides"]["fixed"]);
+    let trigger = &staged.trigger;
+
+    // -- 1. the version ladder: buggy release -> fixed release ----------
+    let (ok, out, err) = run_frf_env(
+        frf,
+        case_work,
+        &[
+            "--root",
+            "ev",
+            "court",
+            "run",
+            &staged.manifest_defect,
+            "--candidate-revisions",
+            &format!("{side_vuln},{side_fixed}"),
+        ],
+        trigger,
+    );
+    let mut ladder_runs: Vec<String> = Vec::new();
+    if !ok {
+        failures.push(format!("{id}/ladder: run failed: {err}"));
+    } else {
+        ladder_runs = out.lines().map(|l| l.to_string()).collect();
+        let mut ceased = 0usize;
+        let axis_trajectories = read_axis_trajectories(case_work, "candidate_revision");
+        for (lineage, records) in &axis_trajectories {
+            match select_by_pattern(records, &[Expectation::Observed, Expectation::Absent]) {
+                Some(t) => {
+                    measurements.push(check_trajectory(
+                        case_work,
+                        "ladder",
+                        id,
+                        "candidate_revision",
+                        lineage,
+                        t,
+                        &[Expectation::Observed, Expectation::Absent],
+                        "boundary-localized",
+                        "abrupt",
+                        "start",
+                        failures,
+                    ));
+                    ceased += 1;
+                }
+                None => {
+                    // A lineage that did not cease: its classification
+                    // must still rederive from its own pattern.
+                    for t in records {
+                        let pattern: Vec<bool> = t["observations"]
+                            .as_array()
+                            .map(|a| {
+                                a.iter()
+                                    .map(|o| o["observed"].as_bool().unwrap_or(false))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let (drift, slew, loc, _, _) = crate::rederive::classify(
+                            &pattern,
+                            "candidate_revision",
+                            &vec![None; pattern.len()],
+                            "none",
+                        );
+                        if drift != as_str(&t["derivation"]["drift"])
+                            || slew != as_str(&t["derivation"]["slew"])
+                            || loc != as_str(&t["derivation"]["localization"])
+                        {
+                            failures.push(format!(
+                                "{id}/ladder: lineage {lineage} classification does not rederive"
+                            ));
+                        }
+                        eprintln!(
+                            "note: {id}/ladder lineage {} persists across the ladder",
+                            &lineage[..16]
+                        );
+                    }
+                }
+            }
+        }
+        if ceased == 0 {
+            failures.push(format!(
+                "{id}/ladder: NO lineage ceased at the fixed release — the historical defect did not fix"
+            ));
+        }
+        // Replay stability of the ladder's observed buggy run (under
+        // the same trigger environment).
+        if let Some(buggy_run) = ladder_runs.first() {
+            let (rok, rout, _) = run_frf_env(
+                frf,
+                case_work,
+                &["--root", "ev", "replay", buggy_run, "--policy", "exact"],
+                trigger,
+            );
+            if !(rok && rout.contains("reproduced")) {
+                failures.push(format!("{id}/ladder: replay did not reproduce"));
+            }
+        }
+    }
+
+    // -- 2. the environment matrix: the defect at every coordinate ------
+    let mut env_runs: Vec<String> = Vec::new();
+    for (label, tz, lang) in ENVIRONMENT_MATRIX {
+        let mut envs: Vec<&str> = trigger.clone();
+        envs.push(tz);
+        envs.push(lang);
+        let (ok, out, err) = run_frf_env(
+            frf,
+            case_work,
+            &[
+                "--root",
+                "ev",
+                "court",
+                "run",
+                &staged.manifest_defect,
+                "--environment-point",
+                label,
+            ],
+            &envs,
+        );
+        if !ok {
+            failures.push(format!("{id}/env:{label}: run failed: {err}"));
+            continue;
+        }
+        let run_id = out.lines().last().unwrap_or_default().to_string();
+        env_runs.push(run_id.clone());
+        let cap = load_evidence(
+            &case_work
+                .join("ev/captures")
+                .join(&run_id)
+                .join("capture.json"),
+        );
+        if cap["residuals"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(true)
+        {
+            failures.push(format!(
+                "{id}/env:{label}: the defect was NOT observed at this environment coordinate"
+            ));
+        }
+    }
+    if env_runs.len() == ENVIRONMENT_MATRIX.len() {
+        let axis_trajectories = read_axis_trajectories(case_work, "environment");
+        for (lineage, records) in &axis_trajectories {
+            let observed_all = &[Expectation::Observed; ENVIRONMENT_MATRIX.len()];
+            match select_by_pattern(records, observed_all) {
+                Some(t) => {
+                    measurements.push(check_trajectory(
+                        case_work,
+                        "environment-matrix",
+                        id,
+                        "environment",
+                        lineage,
+                        t,
+                        observed_all,
+                        "persistent",
+                        "stable",
+                        "none",
+                        failures,
+                    ));
+                }
+                None => {
+                    failures.push(format!(
+                        "{id}/environment-matrix: lineage {lineage} has no fully-observed head snapshot"
+                    ));
+                }
+            }
+        }
+    }
+
+    // -- 3. the authority transition: the oracle gets fixed -------------
+    // The BUGGY candidate: matching the pre-fix oracle (no divergence)
+    // and diverging from the fixed one — the defect becomes observable
+    // exactly when the oracle was fixed (onset at the end).
+    let (ok, _out, err) = run_frf_env(
+        frf,
+        case_work,
+        &[
+            "--root",
+            "ev",
+            "court",
+            "run",
+            &staged.manifest_defect,
+            "--authority-versions",
+            &format!("pre-fix,{fixed_version}"),
+        ],
+        trigger,
+    );
+    if !ok {
+        failures.push(format!("{id}/authority-buggy: run failed: {err}"));
+    } else {
+        let axis_trajectories = read_axis_trajectories(case_work, "authority_version");
+        let expected = &[Expectation::Absent, Expectation::Observed];
+        for (lineage, records) in &axis_trajectories {
+            match select_by_pattern(records, expected) {
+                Some(t) => {
+                    measurements.push(check_trajectory(
+                        case_work,
+                        "authority-transition",
+                        id,
+                        "authority_version",
+                        lineage,
+                        t,
+                        expected,
+                        "boundary-localized",
+                        "abrupt",
+                        "end",
+                        failures,
+                    ));
+                }
+                None => {
+                    failures.push(format!(
+                        "{id}/authority-buggy: lineage {lineage} has no onset-into-fixed-oracle record"
+                    ));
+                }
+            }
+        }
+    }
+    // The FIXED candidate on the DEFECT fixture: stricter than the
+    // pre-fix oracle (it refuses the tampered input the old oracle
+    // accepted) and matching the fixed one — a cessation at the start.
+    let (ok, _out, err) = run_frf_env(
+        frf,
+        case_work,
+        &[
+            "--root",
+            "ev",
+            "court",
+            "run",
+            &staged.manifest_clean_defect,
+            "--authority-versions",
+            &format!("pre-fix,{fixed_version}"),
+        ],
+        trigger,
+    );
+    if !ok {
+        failures.push(format!("{id}/authority-clean: run failed: {err}"));
+    } else {
+        let axis_trajectories = read_axis_trajectories(case_work, "authority_version");
+        let expected = &[Expectation::Observed, Expectation::Absent];
+        let mut ceased = 0usize;
+        for (lineage, records) in &axis_trajectories {
+            match select_by_pattern(records, expected) {
+                Some(t) => {
+                    measurements.push(check_trajectory(
+                        case_work,
+                        "authority-transition",
+                        id,
+                        "authority_version",
+                        lineage,
+                        t,
+                        expected,
+                        "boundary-localized",
+                        "abrupt",
+                        "start",
+                        failures,
+                    ));
+                    ceased += 1;
+                }
+                None => {
+                    eprintln!(
+                        "note: {id}/authority-clean lineage {} persists across the authority transition",
+                        &lineage[..16]
+                    );
+                }
+            }
+        }
+        if ceased == 0 {
+            failures.push(format!(
+                "{id}/authority-clean: NO lineage ceased when the oracle was fixed"
+            ));
+        }
+    }
+
+    // -- 4. the CLEAN CONTROL (v3): the vulnerable side without the
+    //    trigger must not diverge from the fixed authority ---------------
+    // The divergence is the historical defect, not a spurious difference
+    // between two real builds: without the trigger, EVERY declared axis
+    // must pass.
+    let mut clean_run: Option<String> = None;
+    let (ok, out, err) = run_frf_env(
+        frf,
+        case_work,
+        &["--root", "ev", "court", "run", &staged.manifest_clean],
+        &[],
+    );
+    if !ok {
+        failures.push(format!("{id}/clean-control: run failed: {err}"));
+    } else {
+        let run_id = out.lines().last().unwrap_or_default().to_string();
+        clean_run = Some(run_id.clone());
+        let cap = load_evidence(
+            &case_work
+                .join("ev/captures")
+                .join(&run_id)
+                .join("capture.json"),
+        );
+        let residuals = cap["residuals"].as_array().cloned().unwrap_or_default();
+        if !residuals.is_empty() {
+            failures.push(format!(
+                "{id}/clean-control: the vulnerable side diverged WITHOUT the trigger ({} residual(s): {})",
+                residuals.len(),
+                residuals
+                    .iter()
+                    .map(|r| as_str(&r["id"]).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        clean_controls.push(CleanControl {
+            case: id.to_string(),
+            residual_count: residuals.len(),
+        });
+    }
+
+    CaseEvidence {
+        ladder_runs,
+        env_runs,
+        clean_run,
     }
 }
 
@@ -284,373 +731,34 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
     let manifest = crate::load_json(&corpus.join("manifest.json"));
     let cases = manifest["cases"].as_array().cloned().unwrap_or_default();
 
+    // The Log4j case needs a JVM (the launcher execs `java`); without one it
+    // is recorded as skipped and the gates apply to the executed cases only
+    // (the report says exactly what ran).
+    let java = Command::new("java")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
     let mut measurements: Vec<TrajectoryMeasurement> = Vec::new();
     let mut clean_controls: Vec<CleanControl> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
+    let mut skipped_cases: Vec<String> = Vec::new();
 
     for case in &cases {
         let id = as_str(&case["id"]);
-        let case_src = corpus.join(id);
-        let case_work = work.join(id);
-        std::fs::create_dir_all(&case_work).unwrap();
-        // The per-case metadata (authority identity, sides, fixtures).
-        let meta = crate::load_json(&case_src.join("case.json"));
-        let name = as_str(&meta["authority_name"]);
-        let fixed_version = as_str(&meta["authority_fixed_version"]);
-        let side_vuln = as_str(&meta["sides"]["vulnerable"]);
-        let side_fixed = as_str(&meta["sides"]["fixed"]);
-        let fixture_defect = as_str(&meta["fixtures"]["defect"]);
-        let fixture_clean = as_str(&meta["fixtures"]["clean"]);
-        let trigger = trigger_env(&meta);
-
-        // Stage the corpus: builds/ + fixtures/ are copied verbatim; the
-        // three manifests are rendered from the template.
-        copy_tree(&case_src.join("builds"), &case_work.join("builds"));
-        copy_tree(&case_src.join("fixtures"), &case_work.join("fixtures"));
-        let template = std::fs::read_to_string(case_src.join("manifest.yaml"))
-            .unwrap_or_else(|e| panic!("cannot read the manifest for {id}: {e}"));
-        let staged = |candidate: &str, fixture: &str| {
-            template
-                .replace("{candidate}", candidate)
-                .replace("fixtures/{fixture}", &format!("fixtures/{fixture}"))
-        };
-        write_bytes(
-            &case_work,
-            &format!("courts/{id}/manifest-defect.yaml"),
-            staged(side_vuln, fixture_defect).as_bytes(),
-            false,
-        );
-        write_bytes(
-            &case_work,
-            &format!("courts/{id}/manifest-clean.yaml"),
-            staged(side_vuln, fixture_clean).as_bytes(),
-            false,
-        );
-        write_bytes(
-            &case_work,
-            &format!("courts/{id}/manifest-clean-defect.yaml"),
-            staged(side_fixed, fixture_defect).as_bytes(),
-            false,
-        );
-
-        // Admit the FIXED release as the reference authority, and the
-        // VULNERABLE release as its pre-fix version (the historical oracle
-        // transition).
-        admit(&frf, &case_work, side_fixed, name, fixed_version);
-        admit(&frf, &case_work, side_vuln, name, "pre-fix");
-
-        // -- 1. the version ladder: buggy release -> fixed release ----------
-        let (ok, out, err) = run_frf_env(
+        if id == "log4shell" && !java {
+            skipped_cases.push(id.to_string());
+            continue;
+        }
+        let staged = stage_case(&frf, &corpus, &work, case);
+        let _evidence = run_case_experiments(
             &frf,
-            &case_work,
-            &[
-                "--root",
-                "ev",
-                "court",
-                "run",
-                &format!("courts/{id}/manifest-defect.yaml"),
-                "--candidate-revisions",
-                &format!("{side_vuln},{side_fixed}"),
-            ],
-            &trigger,
+            &staged,
+            &mut measurements,
+            &mut clean_controls,
+            &mut failures,
         );
-        if !ok {
-            failures.push(format!("{id}/ladder: run failed: {err}"));
-        } else {
-            let ladder_runs: Vec<String> = out.lines().map(|l| l.to_string()).collect();
-            let mut ceased = 0usize;
-            let axis_trajectories = read_axis_trajectories(&case_work, "candidate_revision");
-            for (lineage, records) in &axis_trajectories {
-                match select_by_pattern(records, &[Expectation::Observed, Expectation::Absent]) {
-                    Some(t) => {
-                        measurements.push(check_trajectory(
-                            &case_work,
-                            "ladder",
-                            id,
-                            "candidate_revision",
-                            lineage,
-                            t,
-                            &[Expectation::Observed, Expectation::Absent],
-                            "boundary-localized",
-                            "abrupt",
-                            "start",
-                            &mut failures,
-                        ));
-                        ceased += 1;
-                    }
-                    None => {
-                        // A lineage that did not cease: its classification
-                        // must still rederive from its own pattern.
-                        for t in records {
-                            let pattern: Vec<bool> = t["observations"]
-                                .as_array()
-                                .map(|a| {
-                                    a.iter()
-                                        .map(|o| o["observed"].as_bool().unwrap_or(false))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            let (drift, slew, loc, _, _) = crate::rederive::classify(
-                                &pattern,
-                                "candidate_revision",
-                                &vec![None; pattern.len()],
-                                "none",
-                            );
-                            if drift != as_str(&t["derivation"]["drift"])
-                                || slew != as_str(&t["derivation"]["slew"])
-                                || loc != as_str(&t["derivation"]["localization"])
-                            {
-                                failures.push(format!(
-                                    "{id}/ladder: lineage {lineage} classification does not rederive"
-                                ));
-                            }
-                            eprintln!(
-                                "note: {id}/ladder lineage {} persists across the ladder",
-                                &lineage[..16]
-                            );
-                        }
-                    }
-                }
-            }
-            if ceased == 0 {
-                failures.push(format!(
-                    "{id}/ladder: NO lineage ceased at the fixed release — the historical defect did not fix"
-                ));
-            }
-            // Replay stability of the ladder's observed buggy run (under
-            // the same trigger environment).
-            if let Some(buggy_run) = ladder_runs.first() {
-                let (rok, rout, _) = run_frf_env(
-                    &frf,
-                    &case_work,
-                    &["--root", "ev", "replay", buggy_run, "--policy", "exact"],
-                    &trigger,
-                );
-                if !(rok && rout.contains("reproduced")) {
-                    failures.push(format!("{id}/ladder: replay did not reproduce"));
-                }
-            }
-        }
-
-        // -- 2. the environment matrix: the defect at every coordinate ------
-        let mut env_runs: Vec<String> = Vec::new();
-        for (label, tz, lang) in ENVIRONMENT_MATRIX {
-            let mut envs: Vec<&str> = trigger.clone();
-            envs.push(tz);
-            envs.push(lang);
-            let (ok, out, err) = run_frf_env(
-                &frf,
-                &case_work,
-                &[
-                    "--root",
-                    "ev",
-                    "court",
-                    "run",
-                    &format!("courts/{id}/manifest-defect.yaml"),
-                    "--environment-point",
-                    label,
-                ],
-                &envs,
-            );
-            if !ok {
-                failures.push(format!("{id}/env:{label}: run failed: {err}"));
-                continue;
-            }
-            let run_id = out.lines().last().unwrap_or_default().to_string();
-            env_runs.push(run_id.clone());
-            let cap = load_evidence(
-                &case_work
-                    .join("ev/captures")
-                    .join(&run_id)
-                    .join("capture.json"),
-            );
-            if cap["residuals"]
-                .as_array()
-                .map(|a| a.is_empty())
-                .unwrap_or(true)
-            {
-                failures.push(format!(
-                    "{id}/env:{label}: the defect was NOT observed at this environment coordinate"
-                ));
-            }
-        }
-        if env_runs.len() == ENVIRONMENT_MATRIX.len() {
-            let axis_trajectories = read_axis_trajectories(&case_work, "environment");
-            for (lineage, records) in &axis_trajectories {
-                let observed_all = &[Expectation::Observed; ENVIRONMENT_MATRIX.len()];
-                match select_by_pattern(records, observed_all) {
-                    Some(t) => {
-                        measurements.push(check_trajectory(
-                            &case_work,
-                            "environment-matrix",
-                            id,
-                            "environment",
-                            lineage,
-                            t,
-                            observed_all,
-                            "persistent",
-                            "stable",
-                            "none",
-                            &mut failures,
-                        ));
-                    }
-                    None => {
-                        failures.push(format!(
-                            "{id}/environment-matrix: lineage {lineage} has no fully-observed head snapshot"
-                        ));
-                    }
-                }
-            }
-        }
-
-        // -- 3. the authority transition: the oracle gets fixed -------------
-        // The BUGGY candidate: matching the pre-fix oracle (no divergence)
-        // and diverging from the fixed one — the defect becomes observable
-        // exactly when the oracle was fixed (onset at the end).
-        let (ok, _out, err) = run_frf_env(
-            &frf,
-            &case_work,
-            &[
-                "--root",
-                "ev",
-                "court",
-                "run",
-                &format!("courts/{id}/manifest-defect.yaml"),
-                "--authority-versions",
-                &format!("pre-fix,{fixed_version}"),
-            ],
-            &trigger,
-        );
-        if !ok {
-            failures.push(format!("{id}/authority-buggy: run failed: {err}"));
-        } else {
-            let axis_trajectories = read_axis_trajectories(&case_work, "authority_version");
-            let expected = &[Expectation::Absent, Expectation::Observed];
-            for (lineage, records) in &axis_trajectories {
-                match select_by_pattern(records, expected) {
-                    Some(t) => {
-                        measurements.push(check_trajectory(
-                            &case_work,
-                            "authority-transition",
-                            id,
-                            "authority_version",
-                            lineage,
-                            t,
-                            expected,
-                            "boundary-localized",
-                            "abrupt",
-                            "end",
-                            &mut failures,
-                        ));
-                    }
-                    None => {
-                        failures.push(format!(
-                            "{id}/authority-buggy: lineage {lineage} has no onset-into-fixed-oracle record"
-                        ));
-                    }
-                }
-            }
-        }
-        // The FIXED candidate on the DEFECT fixture: stricter than the
-        // pre-fix oracle (it refuses the tampered input the old oracle
-        // accepted) and matching the fixed one — a cessation at the start.
-        let (ok, _out, err) = run_frf_env(
-            &frf,
-            &case_work,
-            &[
-                "--root",
-                "ev",
-                "court",
-                "run",
-                &format!("courts/{id}/manifest-clean-defect.yaml"),
-                "--authority-versions",
-                &format!("pre-fix,{fixed_version}"),
-            ],
-            &trigger,
-        );
-        if !ok {
-            failures.push(format!("{id}/authority-clean: run failed: {err}"));
-        } else {
-            let axis_trajectories = read_axis_trajectories(&case_work, "authority_version");
-            let expected = &[Expectation::Observed, Expectation::Absent];
-            let mut ceased = 0usize;
-            for (lineage, records) in &axis_trajectories {
-                match select_by_pattern(records, expected) {
-                    Some(t) => {
-                        measurements.push(check_trajectory(
-                            &case_work,
-                            "authority-transition",
-                            id,
-                            "authority_version",
-                            lineage,
-                            t,
-                            expected,
-                            "boundary-localized",
-                            "abrupt",
-                            "start",
-                            &mut failures,
-                        ));
-                        ceased += 1;
-                    }
-                    None => {
-                        eprintln!(
-                            "note: {id}/authority-clean lineage {} persists across the authority transition",
-                            &lineage[..16]
-                        );
-                    }
-                }
-            }
-            if ceased == 0 {
-                failures.push(format!(
-                    "{id}/authority-clean: NO lineage ceased when the oracle was fixed"
-                ));
-            }
-        }
-
-        // -- 4. the CLEAN CONTROL (v3): the vulnerable side without the
-        //    trigger must not diverge from the fixed authority ---------------
-        // The divergence is the historical defect, not a spurious difference
-        // between two real builds: without the trigger, EVERY declared axis
-        // must pass.
-        let (ok, out, err) = run_frf_env(
-            &frf,
-            &case_work,
-            &[
-                "--root",
-                "ev",
-                "court",
-                "run",
-                &format!("courts/{id}/manifest-clean.yaml"),
-            ],
-            &[],
-        );
-        if !ok {
-            failures.push(format!("{id}/clean-control: run failed: {err}"));
-        } else {
-            let run_id = out.lines().last().unwrap_or_default().to_string();
-            let cap = load_evidence(
-                &case_work
-                    .join("ev/captures")
-                    .join(&run_id)
-                    .join("capture.json"),
-            );
-            let residuals = cap["residuals"].as_array().cloned().unwrap_or_default();
-            if !residuals.is_empty() {
-                failures.push(format!(
-                    "{id}/clean-control: the vulnerable side diverged WITHOUT the trigger ({} residual(s): {})",
-                    residuals.len(),
-                    residuals
-                        .iter()
-                        .map(|r| as_str(&r["id"]).to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            clean_controls.push(CleanControl {
-                case: id.to_string(),
-                residual_count: residuals.len(),
-            });
-        }
     }
 
     // -- metrics -------------------------------------------------------------
@@ -672,10 +780,13 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
         .filter(|m| m.experiment == "authority-transition")
         .count();
 
+    let skipped_count = skipped_cases.len();
     let report = json!({
         "schema_version": "frf-external-experiment-v3",
         "corpus": "external-corpus/v3 (frf-external-corpus-v3: ACTUAL upstream vulnerable + fixed releases)",
         "cases": cases_count.to_string(),
+        "cases_executed": (cases_count - skipped_cases.len()).to_string(),
+        "skipped_cases": skipped_cases,
         "trajectory_measurements": {
             "total": measurements.len().to_string(),
             "ladder": ladder_count.to_string(),
@@ -712,8 +823,9 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
     std::fs::write(out_path, &out_text)
         .unwrap_or_else(|e| panic!("cannot write the v3 report to {}: {e}", out_path.display()));
     println!(
-        "external-experiment-v3: {} case(s), {} trajectory measurement(s) ({} ladder, {} environment, {} authority), {} clean control(s), evidence {} bytes",
+        "external-experiment-v3: {} case(s), {} skipped, {} trajectory measurement(s) ({} ladder, {} environment, {} authority), {} clean control(s), evidence {} bytes",
         cases_count,
+        skipped_count,
         measurements.len(),
         ladder_count,
         env_count,

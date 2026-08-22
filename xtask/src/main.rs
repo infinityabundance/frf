@@ -30,6 +30,7 @@ mod experiment;
 mod experiment_external;
 mod experiment_external_v2;
 mod experiment_external_v3;
+mod experiment_external_v4;
 mod jcs;
 mod rederive;
 mod regen;
@@ -1833,7 +1834,8 @@ fn main() {
                cargo xtask experiment [OUT.json] [--no-check]\n\
                cargo xtask external-experiment [OUT.json] [--no-check]\n\
                cargo xtask external-experiment-v2 [OUT.json] [--no-check]\n\
-               cargo xtask external-experiment-v3 [OUT.json] [--no-check]\n"
+               cargo xtask external-experiment-v3 [OUT.json] [--no-check]\n\
+               cargo xtask external-experiment-v4 [OUT.json] [--no-check]\n"
         );
         std::process::exit(2);
     }
@@ -1954,6 +1956,30 @@ fn main() {
                 }
             }
             experiment_external_v3::run(repo_root, &out, check);
+        }
+        "external-experiment-v4" => {
+            // The EXTERNAL empirical program v4: the comparative measurement
+            // study over the ACTUAL upstream corpus — the metric table of the
+            // empirical-program review (defects, false positives, version and
+            // environment boundaries, nondeterminism, challenge sensitivity,
+            // minimization, claim inflation, replay, storage and runtime
+            // overhead, localization, human investigation cost) measured
+            // against golden, differential, and unit baselines executed BARE.
+            // The log4shell case is skipped (and reported) when no JVM is
+            // available (--no-check disables the gates).
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let mut out = repo_root
+                .join("golden")
+                .join("work")
+                .join("external-experiment-v4.json");
+            let mut check = true;
+            for a in &args[2..] {
+                match a.as_str() {
+                    "--no-check" => check = false,
+                    other => out = PathBuf::from(other),
+                }
+            }
+            experiment_external_v4::run(repo_root, &out, check);
         }
         other => {
             eprintln!("unknown mode {other:?}");

@@ -105,6 +105,12 @@ jobs:
       - name: The external empirical program v2 — version ladders, environment matrices, authority transitions
         run: |
           cargo xtask external-experiment-v2 golden/work/external-experiment-v2.json
+      - name: The external empirical program v3 — real upstream releases
+        run: |
+          cargo xtask external-experiment-v3 golden/work/external-experiment-v3.json
+      - name: The external empirical program v4 — the comparative measurement study
+        run: |
+          cargo xtask external-experiment-v4 golden/work/external-experiment-v4.json
 
   go-verifier:
     name: "Go verifier: the third triangle point"

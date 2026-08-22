@@ -185,3 +185,82 @@ of every committed artifact. Rebuilding from these exact inputs reproduces
 the committed bytes. The native runtime closure (spec/execution-profile.md
 § native runtime closure) binds what the real binaries loaded at
 observation time.
+
+## The comparative measurement study (v4)
+
+`cargo xtask external-experiment-v4` (Phase 12) is the full measurement
+study the empirical-program review called for: for every v3 case it drives
+the SAME staged corpus through the same four experiments (the shared
+implementation in `xtask/src/experiment_external_v3.rs` — one
+implementation of the four experiments) and attaches the metric table,
+comparing FRF against conventional suites executed BARE on the same bytes.
+The `log4shell` case requires a JVM; without `java` on PATH it is recorded
+in `skipped_cases` and the gates apply to the executed cases only (the
+report says exactly what ran). The report
+(`golden/work/external-experiment-v4.json`, schema
+`frf-external-experiment-v4`) is canonical JSON.
+
+Per case:
+
+1. **defects detected** — the ladder: the defect lineage must cease at the
+   fixed release (`boundary-localized`/`abrupt`/`start`).
+2. **false positives** — the clean control: the vulnerable side without the
+   trigger must produce ZERO residuals.
+3. **version boundaries found** — the ladder + both authority transitions
+   classify the exact releases the defect appeared and disappeared at.
+4. **environment boundaries found** — the defect at three deterministic
+   TZ/LANG coordinates must be `persistent`/`stable` (no boundary).
+5. **nondeterminism exposed** — the repeat probe: the defect court
+   re-observed five times; a corpus declared hermetic must collapse to ONE
+   content-addressed run (the first repeat must REUSE the ladder's run; any
+   second distinct run is nondeterminism exposed), and the repeat
+   trajectory must observe the lineage at every point.
+6. **challenge sensitivity (FRF + challenge)** — the court challenge: the
+   court must demonstrate it can SEE each declared defect class on its axis
+   and nothing else (the seeded-mutant arm of the study).
+7. **minimum reproducer size (FRF + minimization)** — ddmin on the ladder's
+   defect residual, with the reduction record's attempts, line/byte counts,
+   ratio, and minimality proof (the corpus fixtures are single-line
+   markers, so the honest measurement is one-minimal at line granularity
+   with ratio 1.00 — the v1 program measured real multi-line reductions).
+8. **claim inflation prevented** — the claim compiler on the buggy ladder
+   run's receipt never covers a defect axis (the premise itself observed
+   the divergence; a receipt with no clean axis is refused); the FIXED-side
+   receipt's claimable surface GROWS to the full declared surface across
+   the boundary, and its knowledge-snapshot universe COMMITS the buggy
+   residual (the negative search is as portable as the premises); the CLEAN
+   receipt's full-surface claim is REFUSED by the cross-run universe
+   blocker — an open residual about the same surface (same candidate
+   artifact, fixture identity, fixture family, environment, authority
+   version, and axis) recorded by another run blocks the claim wherever it
+   was recorded. Claim admission is relative to the committed evidence
+   universe; the study measures it.
+9. **replay stability** — exact replay of the ladder's buggy run.
+10. **conventional baselines, executed BARE** — golden testing pinned to the
+    FIXED release (detect/false-positive), golden testing pinned to the
+    VULNERABLE release (the historical snapshot: the fix LOOKS like a
+    regression — the boundary is invisible to a suite that pins current
+    behavior), differential testing (vuln vs fixed: detects the divergence
+    but cannot attribute it to a side or classify the boundary), and the
+    unit suite asserting fixed behavior (the same verdict as the
+    fixed-pinned golden on these fixtures).
+11. **storage overhead** — the full evidence store, the evidence records
+    alone, the raw captured output bytes, and the pass/fail baseline bytes
+    (one short line per executed court run), with ratios.
+12. **runtime overhead** — bare side execution vs the FRF per-run cost
+    (measured across the repeat probe's five fresh executions).
+13. **localization cost** — court evaluations from first observation to the
+    verified minimal reproducer, and the wall time of the extra steps.
+14. **human investigation cost** — the evidence-object inventory (files and
+    bytes per evidence directory) an investigator must open.
+
+The aggregate is the review's comparison table: golden/differential/unit
+baselines vs FRF court / +challenge / +trajectory / +minimization, over
+defects detected, false positives, version and environment boundaries,
+nondeterminism, claim inflation prevented, minimum reproducer sizes,
+replay stability, storage and runtime overhead, localization, and human
+investigation cost. `--check` (default) exits non-zero on any lost defect,
+false positive, unexplained residual survival, exposed nondeterminism,
+inflated claim, clean claim that was NOT refused by the universe blocker,
+fixed-side claim that missed a declared axis or did not commit the defect
+residual, insensitive court, failed replay, or failed minimization.
