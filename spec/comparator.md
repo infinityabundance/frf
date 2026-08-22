@@ -206,3 +206,47 @@ served axis it:
 Replay writes nothing. A comparator whose outcome drifts — or whose
 instrument bytes were lost — is a failed replay, not a silent re-derivation
 with the built-in logic.
+
+## 7. The residual kind is a protocol object
+
+Every divergence an axis records is classified into a RESIDUAL KIND — the
+comparator's declared `residual_classifier`, which is part of the relation's
+semantic identity (the specification hash), so the kind is part of the
+question. The kind vocabulary is itself a registered protocol object
+(`FRF/KIND/v1`):
+
+```text
+KindRecord {
+    schema_version    "frf-kind-v1"
+    id                the kind id (e.g. "exit", "text", "wire", "latency")
+    meaning           what the kind means
+    surface_grammar   the surface the raw projections are drawn from
+    comparator_family the relation family that classifies into the kind
+    identity          SHA-256("FRF/KIND/v1\n" || JCS({id, meaning,
+                      surface_grammar, comparator_family}))
+}
+```
+
+The records are pinned in the conformance corpus (`conformance/kinds/`) and
+re-derived by every verifier from the record's own fields — a kind is an
+identity-bearing protocol object like every other evidentiary vocabulary
+member, not a string an implementation happens to recognize. The rule is
+fail closed and enforced on both sides of the boundary:
+
+- a residual whose kind is NOT a registered protocol kind is invalid
+  evidence (a protocol this engine does not know cannot be interpreted);
+- a comparator whose `residual_classifier` is not a registered kind is
+  equally invalid (the classifier NAMES the kind every residual on that
+  axis is classified into);
+- a residual whose kind disagrees with its axis's comparator's declared
+  classifier is inconsistent evidence.
+
+The reference engine ships four registered kinds — `exit` (exit-class
+divergences), `text` (compared text projections), `wire` (compared byte
+streams), and `latency` (envelope divergences) — but the vocabulary is
+open by record, never by silence: a new kind is a new `KindRecord` in the
+engine's table, the registry, and the corpus, and the residual id, κ token,
+fingerprint, and lineage all carry the kind as an opaque id. A domain
+observable like `timing.latency` served by an external comparator thus
+introduces its own residual class end to end — the conformance fixture
+`06-timing-latency.json` pins exactly that.

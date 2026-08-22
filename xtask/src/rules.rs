@@ -468,6 +468,33 @@ const TOKEN_KEYS: &[&str] = &["residual_id", "token", "next_court", "blocks_clai
 const CLAIMS_KEYS: &[&str] = &["positive", "non_claims", "blocked_by_open_residuals"];
 const REPLAY_KEYS: &[&str] = &["program", "evidence_root", "argv", "expected_run_identity"];
 
+/// The registered residual-kind vocabulary (FRF/KIND/v1) — the mirror of the
+/// reference engine's KIND_SCHEMAS table. The records themselves are pinned
+/// in the conformance corpus (`conformance/kinds/`); this table is the
+/// protocol vocabulary every residual kind in evidence is checked against
+/// (fail closed: an unregistered kind is a protocol this implementation does
+/// not know).
+pub const REGISTERED_KINDS: &[&str] = &["exit", "text", "wire", "latency"];
+
+/// `FRF/KIND/v1` over the four semantic fields of a kind record — the same
+/// preimage for any caller holding the fields (the record's derived
+/// `identity` field must equal this).
+pub fn kind_identity_parts(
+    id: &str,
+    meaning: &str,
+    surface_grammar: &str,
+    comparator_family: &str,
+) -> String {
+    let doc = json!({
+        "id": id,
+        "meaning": meaning,
+        "surface_grammar": surface_grammar,
+        "comparator_family": comparator_family,
+    });
+    let canonical = crate::jcs::encode(&doc).expect("the kind record canonicalizes");
+    crate::sha256_bytes(format!("FRF/KIND/v1\n{canonical}").as_bytes())
+}
+
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
     if as_str(&rec["schema_version"]) != "frf-receipt-v17" {
@@ -566,6 +593,14 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         if expected != as_str(&c["specification_hash"]) {
             v.push(format!(
                 "comparator semantic {id}: the specification_hash does not rederive from its own fields"
+            ));
+        }
+        // The classifier NAMES a residual kind: it must be a registered
+        // protocol kind (FRF/KIND/v1).
+        if !REGISTERED_KINDS.contains(&as_str(&c["residual_classifier"])) {
+            v.push(format!(
+                "comparator semantic {id}: residual classifier {:?} is not a registered protocol kind",
+                c["residual_classifier"]
             ));
         }
     }
@@ -700,6 +735,18 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                 r["kind"],
                 as_str(&r["axis"]),
                 classifier.unwrap_or_else(|| "<none>".to_string())
+            ));
+        }
+        // The kind must be a REGISTERED protocol kind (FRF/KIND/v1): an
+        // unregistered kind is a protocol this implementation does not know,
+        // and evidence classified into it cannot be interpreted — fail
+        // closed. The vocabulary mirrors the reference engine's
+        // KIND_SCHEMAS; the records themselves are pinned in the conformance
+        // corpus (`conformance/kinds/`).
+        if !REGISTERED_KINDS.contains(&as_str(&r["kind"])) {
+            v.push(format!(
+                "residual {rid} kind {:?} is not a registered protocol kind",
+                r["kind"]
             ));
         }
         let d = as_str(&r["disposition"]).to_string();

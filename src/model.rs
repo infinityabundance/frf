@@ -1211,7 +1211,67 @@ impl ResidualKind {
     pub fn domain_prefix(&self) -> &'static str {
         "cli"
     }
+
+    /// The REGISTERED protocol record of this kind, if the kind is part of
+    /// the protocol vocabulary ([`KIND_SCHEMAS`]). A residual whose kind has
+    /// no record is evidence of a protocol this engine does not know — the
+    /// semantic validator refuses it (fail closed).
+    pub fn schema(&self) -> Option<&'static KindSchema> {
+        KIND_SCHEMAS.iter().find(|s| s.id == self.0)
+    }
 }
+
+/// The protocol record of one residual kind: what the kind MEANS, what its
+/// surface grammar is, and which comparator family classifies residuals into
+/// it. A residual kind is an identity-bearing protocol object like every
+/// other evidentiary vocabulary member — the record's canonical identity is
+/// [`crate::semantics::kind_identity`] (`FRF/KIND/v1`), so two
+/// implementations that agree on the record agree on the kind. The records
+/// are pinned in the conformance corpus (`conformance/kinds/`); the
+/// reference engine's table is the registry the corpus pins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KindSchema {
+    pub id: &'static str,
+    pub meaning: &'static str,
+    pub surface_grammar: &'static str,
+    pub comparator_family: &'static str,
+}
+
+/// The registered residual-kind vocabulary. The built-in comparators
+/// classify into `exit` and `text`; the externally served `wire` and
+/// `latency` axes (conformance corpus, the timing court) classify into
+/// `wire` and `latency`. A future protocol kind is a new record here, in
+/// `protocol/registry.json`, and in the corpus — never a silent
+/// reinterpretation of an existing id.
+pub const KIND_SCHEMAS: &[KindSchema] = &[
+    KindSchema {
+        id: "exit",
+        meaning: "the candidate's exit class diverged from the reference's",
+        surface_grammar: "exit code",
+        comparator_family: "eq",
+    },
+    KindSchema {
+        id: "text",
+        meaning: "the candidate's compared text projection diverged from the reference's",
+        surface_grammar: "the comparator's first-line projection",
+        comparator_family: "eq",
+    },
+    KindSchema {
+        id: "wire",
+        meaning: "the candidate's compared byte-stream projection diverged from the reference's",
+        surface_grammar: "the compared byte stream",
+        comparator_family: "eq",
+    },
+    KindSchema {
+        id: "latency",
+        meaning: "the candidate's latency projection fell outside the declared envelope",
+        surface_grammar: "latency ratio or parse outcome",
+        comparator_family: "within-2x",
+    },
+];
+
+/// The schema version of a kind protocol record (`conformance/kinds/`).
+pub const SCHEMA_KIND: &str = "frf-kind-v1";
 
 impl fmt::Display for ResidualKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -1808,6 +1808,38 @@ fn verify_corpus(dir: &Path) {
         }
         count += 1;
     }
+    // The kind protocol records (FRF/KIND/v1): each registered kind is
+    // pinned byte-for-byte, and its derived identity rederives from the
+    // record's own semantic fields.
+    for name in sorted_names(&dir.join("kinds")) {
+        let doc = load_json(&dir.join("kinds").join(&name));
+        let canonical = encode(&doc).unwrap_or_else(|e| panic!("kinds/{name}: {e}"));
+        let expected = String::from_utf8(read(&dir.join("canonical/kinds").join(&name)))
+            .expect("kind canonical pin must be utf-8");
+        if canonical != expected {
+            panic!("kinds/{name}: canonical bytes drifted");
+        }
+        let digest = sha256_bytes(canonical.as_bytes());
+        let stem = name.strip_suffix(".json").unwrap_or(&name);
+        let pinned = String::from_utf8(read(
+            &dir.join("hashes").join(format!("{stem}.kind.sha256")),
+        ))
+        .expect("kind hash pin must be utf-8");
+        if digest != pinned.trim() {
+            panic!("kinds/{name}: digest drifted");
+        }
+        // The identity field rederives from the record's own semantic fields.
+        let rederived = kind_identity_parts(
+            as_str(&doc["id"]),
+            as_str(&doc["meaning"]),
+            as_str(&doc["surface_grammar"]),
+            as_str(&doc["comparator_family"]),
+        );
+        if rederived != as_str(&doc["identity"]) {
+            panic!("kinds/{name}: the identity does not rederive from its own fields");
+        }
+        count += 1;
+    }
     println!("corpus {}: {count} fixture(s) passed", dir.display());
 }
 

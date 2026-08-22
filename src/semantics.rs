@@ -9,6 +9,7 @@
 //!   FRF/COURT/v2               court semantic identity (the question)
 //!   FRF/COMPARATOR-SPEC/v2     comparator relation specification
 //!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
+//!   FRF/KIND/v1                residual-kind protocol record
 //!
 //! The court semantic identity answers ONLY "what question was asked?":
 //! question, falsifier, authority ARTIFACT identity, fixture identity,
@@ -64,6 +65,41 @@ pub fn runtime_closure_identity(closure: &NativeRuntimeClosure) -> Result<String
         }
     }
     hash_preimage("FRF/RUNTIME-CLOSURE/v1", &value)
+}
+
+/// The identity of a residual-kind protocol record: `FRF/KIND/v1` over the
+/// record's own fields. The kind vocabulary is a protocol object like every
+/// other — the canonical identity is deterministic, the records are pinned in
+/// the conformance corpus (`conformance/kinds/`), and the reference engine's
+/// [`KIND_SCHEMAS`] table is the registry the corpus pins. A residual's kind
+/// id is validated against the registered vocabulary by every verifier
+/// (fail closed: an unregistered kind is a protocol the engine does not
+/// know).
+pub fn kind_identity(schema: &KindSchema) -> Result<String> {
+    kind_identity_parts(
+        schema.id,
+        schema.meaning,
+        schema.surface_grammar,
+        schema.comparator_family,
+    )
+}
+
+/// The `FRF/KIND/v1` preimage over the four semantic fields — the same
+/// formula for any caller holding the fields (the corpus record's derived
+/// `identity` field must equal this).
+pub fn kind_identity_parts(
+    id: &str,
+    meaning: &str,
+    surface_grammar: &str,
+    comparator_family: &str,
+) -> Result<String> {
+    let doc = json!({
+        "id": id,
+        "meaning": meaning,
+        "surface_grammar": surface_grammar,
+        "comparator_family": comparator_family,
+    });
+    hash_preimage("FRF/KIND/v1", &doc)
 }
 
 // ---------------------------------------------------------------------------
