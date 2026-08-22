@@ -160,6 +160,19 @@ func independenceIdentity(record *jcs.Object) (string, error) {
 	return hashPreimage("FRF/INDEPENDENCE/v1", doc)
 }
 
+// fixtureIdentity: FRF/FIXTURE/v1 over the canonical document of the
+// fixture's semantic id, content SHA-256, and declared arguments — claim
+// scopes and residual surfaces carry this identity in their `fixtures`
+// dimension, so two different files that share a fixture id are different
+// exact inputs.
+func fixtureIdentity(semanticID, contentSHA256 string, declaredArguments jcs.Value) string {
+	doc := &jcs.Object{
+		Keys:   []string{"semantic_id", "content_sha256", "declared_arguments"},
+		Values: []jcs.Value{semanticID, contentSHA256, declaredArguments},
+	}
+	return mustPreimage("FRF/FIXTURE/v1", doc)
+}
+
 // envDigest: FRF/ENVIRONMENT/v2 over the canonical-JSON document of the host
 // strata (os/arch/kernel/locale/timezone/umask) AND the declared execution
 // environment map — a declared variable is content-addressed input. The one

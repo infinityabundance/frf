@@ -181,6 +181,24 @@ pub fn capture_adapter_spec_hash(id: &str, relation: &str, relation_version: &st
     )
 }
 
+/// The exact fixture input identity: `FRF/FIXTURE/v1` over the canonical
+/// document of the fixture's semantic id, content SHA-256, and declared
+/// arguments — claim scopes and residual surfaces carry this identity in
+/// their `fixtures` dimension, so two different files that share a fixture
+/// id are different exact inputs.
+pub fn fixture_identity(
+    semantic_id: &str,
+    content_sha256: &str,
+    declared_arguments: &Value,
+) -> String {
+    let doc = json!({
+        "semantic_id": semantic_id,
+        "content_sha256": content_sha256,
+        "declared_arguments": declared_arguments.clone(),
+    });
+    preimage("FRF/FIXTURE/v1", &doc)
+}
+
 /// Environment digest: FRF/ENVIRONMENT/v2 over the canonical-JSON document
 /// of the host strata (os/arch/kernel/locale/timezone/umask) AND the
 /// declared execution environment map — a declared variable is

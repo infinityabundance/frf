@@ -302,6 +302,11 @@
       "status": "active"
     },
     {
+      "domain": "FRF/FIXTURE/v1",
+      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments — claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
+      "status": "active"
+    },
+    {
       "domain": "FRF/COURT/v2",
       "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
       "status": "active"

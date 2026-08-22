@@ -15,12 +15,27 @@ use crate::model::*;
 /// The executed surface of a receipt's run: the full region the premises
 /// observed. A claim compiled from this receipt can never exceed it — the
 /// compiler checks `premise_scope.contains(&k_scope)` literally.
+///
+/// The `fixtures` dimension carries the EXACT fixture input identity
+/// (FRF/FIXTURE/v1 over semantic id + content hash + declared arguments),
+/// never the human label alone: two different files that share a fixture
+/// id are different inputs, and the named role stays a separate
+/// (`fixture_family`) dimension.
 pub fn premise_scope(r: &Receipt) -> ClaimScope {
     let envelope = &r.court.admissibility_envelope;
     ClaimScope {
         authority: vec![format!("{}-{}", r.authority.name, r.authority.version)],
         candidate: vec![r.candidate.identity_hash.clone()],
-        fixtures: r.fixtures.iter().map(|f| f.id.clone()).collect(),
+        fixtures: r
+            .fixtures
+            .iter()
+            .map(|f| {
+                crate::semantics::fixture_identity(&f.id, &f.hash, &f.declared_arguments)
+                    .unwrap_or_else(|e| {
+                        panic!("the receipt's fixture identity must be protocol-computable: {e}")
+                    })
+            })
+            .collect(),
         fixture_family: envelope.fixture_family.clone(),
         observables: envelope.observables.clone(),
         environments: vec![r.environment.digest.clone()],
@@ -48,17 +63,26 @@ pub fn claim_scope(r: &Receipt) -> ClaimScope {
 /// The surface of a residual: where the divergence was observed. Derived from
 /// the immutable observation record and its run's capture — never from a
 /// label a human could edit. The authority version comes from the admitted
-/// authority record (the capture's envelope does not carry it).
+/// authority record (the capture's envelope does not carry it). The
+/// `fixtures` dimension carries the run's EXACT fixture input identity
+/// (FRF/FIXTURE/v1) — an unexplained residual about exact input bytes, and
+/// the claim surface it can block, are the same exact surface.
 pub fn residual_scope(
     record: &ResidualRecord,
     capture: &CaptureManifest,
     authority_version: &str,
 ) -> ClaimScope {
     let envelope = &capture.court_spec.admissibility_envelope;
+    let fixture = crate::semantics::fixture_identity(
+        &capture.fixture,
+        &capture.fixture_sha256,
+        &capture.court_spec.fixture.arguments,
+    )
+    .unwrap_or_else(|e| panic!("the capture's fixture identity must be protocol-computable: {e}"));
     ClaimScope {
         authority: vec![record.authority.clone()],
         candidate: vec![record.candidate_sha256.clone()],
-        fixtures: vec![capture.fixture.clone()],
+        fixtures: vec![fixture],
         fixture_family: envelope.fixture_family.clone(),
         observables: vec![record.axis.as_str().to_string()],
         environments: vec![capture.environment.digest.clone()],

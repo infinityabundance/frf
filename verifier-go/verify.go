@@ -563,7 +563,8 @@ func claimScope(rec *jcs.Object) *jcs.Object {
 	}
 	var fixtures []string
 	for _, f := range arr(recVal(rec, "fixtures")) {
-		fixtures = append(fixtures, str(obj(f), "id"))
+		fo := obj(f)
+		fixtures = append(fixtures, fixtureIdentity(str(fo, "id"), str(fo, "hash"), recVal(fo, "declared_arguments")))
 	}
 	var versions []string
 	for _, v := range arrStr(recVal(envelope, "authority_versions")) {
@@ -587,12 +588,15 @@ func claimScope(rec *jcs.Object) *jcs.Object {
 
 func residualScope(record, cap, authority *jcs.Object) *jcs.Object {
 	env := objKeys(objKeys(cap, "court_spec"), "admissibility_envelope")
+	courtSpec := obj(recVal(cap, "court_spec"))
+	fixtureDecl := obj(recVal(courtSpec, "fixture"))
+	fixture := fixtureIdentity(str(cap, "fixture"), str(cap, "fixture_sha256"), recVal(fixtureDecl, "arguments"))
 	return &jcs.Object{
 		Keys: []string{"authority", "candidate", "fixtures", "fixture_family", "observables", "environments", "versions", "temporal"},
 		Values: []jcs.Value{
 			[]jcs.Value{str(record, "authority")},
 			[]jcs.Value{str(record, "candidate_sha256")},
-			[]jcs.Value{str(cap, "fixture")},
+			[]jcs.Value{fixture},
 			str(env, "fixture_family"),
 			[]jcs.Value{str(record, "axis")},
 			[]jcs.Value{str(obj(recVal(cap, "environment")), "digest")},

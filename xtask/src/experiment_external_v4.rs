@@ -687,10 +687,18 @@ fn case_study(
             }
         }
     }
-    // -- the clean receipt: the cross-run blocker refuses the full surface -
-    // The vulnerable candidate observed the divergence in the ladder; an
-    // open residual about the SAME surface blocks the claim even from this
-    // passing run (claim admission is relative to the committed universe).
+    // -- the clean receipt: the exact-fixture rule separates the surfaces ---
+    // The clean control observes the vulnerable candidate against the CLEAN
+    // fixture (different exact bytes from the DEFECT fixture every defect
+    // residual is about). The claim scope's `fixtures` dimension carries the
+    // EXACT fixture input identity (FRF/FIXTURE/v1 — semantic id + content
+    // hash + declared arguments), never the human label: an unexplained
+    // divergence about the defect fixture's bytes does NOT block a claim
+    // about the clean fixture's bytes — that was the fixture-coordinate
+    // aliasing the old metric (clean claims refused 3/3) measured. The
+    // clean claim must COMPILE, and the exact-surface rule is verified by
+    // asserting the claim's fixture identity differs from every universe
+    // residual's fixture identity (same candidate, different exact input).
     if let Some(clean_run) = &evidence.clean_run {
         let (rok, rerr, receipt) = {
             let (ok, out, err) = run_frf_env(
@@ -707,20 +715,22 @@ fn case_study(
             ));
         } else {
             let (compiled, refusal, _claim_id) = compile_claim(frf, work, &receipt);
-            // The axes with an OPEN residual about the same surface in the
-            // universe (same candidate artifact, fixture identity, family,
-            // environment, version): the surfaces the cross-run rule
-            // protects.
-            let clean_candidate = {
-                let cap = load_evidence(
-                    &work
-                        .join("ev/captures")
-                        .join(clean_run)
-                        .join("capture.json"),
-                );
-                as_str(&cap["candidate_artifact"]["sha256"]).to_string()
-            };
-            let mut open_axes: BTreeSet<String> = BTreeSet::new();
+            let clean_cap = load_evidence(
+                &work
+                    .join("ev/captures")
+                    .join(clean_run)
+                    .join("capture.json"),
+            );
+            let clean_candidate = as_str(&clean_cap["candidate_artifact"]["sha256"]).to_string();
+            // The clean claim's exact fixture identity.
+            let clean_fixture = crate::rederive::fixture_identity(
+                as_str(&clean_cap["fixture"]),
+                as_str(&clean_cap["fixture_sha256"]),
+                &clean_cap["court_spec"]["fixture"]["arguments"],
+            );
+            // Every universe residual about the same candidate, with its
+            // run's exact fixture identity.
+            let mut universe_fixtures: Vec<String> = Vec::new();
             let res_dir = work.join("ev/residuals");
             if let Ok(entries) = std::fs::read_dir(&res_dir) {
                 for entry in entries.flatten() {
@@ -728,57 +738,42 @@ fn case_study(
                     if !path.is_file() || !path.extension().map(|x| x == "json").unwrap_or(false) {
                         continue;
                     }
-                    // Every residual in this universe is OPEN (nothing was
-                    // disposed in the study; the head disposition of a
-                    // residual with no disposition event is `open`).
                     let rec = load_evidence(&path);
-                    if as_str(&rec["candidate_sha256"]) == clean_candidate {
-                        open_axes.insert(as_str(&rec["axis"]).to_string());
+                    if as_str(&rec["candidate_sha256"]) != clean_candidate {
+                        continue;
                     }
+                    let rcap = load_evidence(
+                        &work
+                            .join("ev/captures")
+                            .join(as_str(&rec["run"]))
+                            .join("capture.json"),
+                    );
+                    universe_fixtures.push(crate::rederive::fixture_identity(
+                        as_str(&rcap["fixture"]),
+                        as_str(&rcap["fixture_sha256"]),
+                        &rcap["court_spec"]["fixture"]["arguments"],
+                    ));
                 }
             }
-            let blocked_axes: Vec<String> = declared
-                .iter()
-                .filter(|a| open_axes.contains(*a))
-                .cloned()
-                .collect();
+            let same_fixture = universe_fixtures.contains(&clean_fixture);
             claims["clean_claim"] = json!({
                 "compiled": compiled,
                 "refusal": refusal,
-                "universe_open_axes": open_axes.into_iter().collect::<Vec<_>>(),
-                "blocked_axes": blocked_axes.clone(),
+                "clean_fixture_identity": clean_fixture,
+                "universe_same_candidate_fixtures": universe_fixtures,
+                "universe_has_same_exact_fixture": same_fixture,
             });
-            // An ambient-trigger case (Shellshock) declares the trigger in
-            // the defect environment: the clean control runs under a
-            // DIFFERENT declared environment (no trigger), so the clean
-            // claim's surface is genuinely separate from the defect
-            // residuals' surface — the universe blocker correctly does NOT
-            // cross the environment boundary, and the clean claim compiling
-            // is the correct measurement (the environment boundary IS the
-            // evidence). For a fixture-trigger case the environments are
-            // identical, so the cross-run blocker MUST refuse the clean
-            // claim.
-            let environment_boundary = as_str(&meta["trigger"]) == "env";
-            if environment_boundary {
-                if !compiled {
-                    failures.push(format!(
-                        "{id}/claims: the clean claim was refused although it runs under a different declared environment than every defect residual (no trigger) — the universe blocker must respect the environment boundary"
-                    ));
-                }
-            } else if compiled {
+            // The exact-fixture rule: a residual about the DEFECT fixture's
+            // bytes must not block a claim about the CLEAN fixture's bytes.
+            if !compiled {
                 failures.push(format!(
-                    "{id}/claims: the clean claim compiled although an open residual about its surface is in the universe — the cross-run blocker did not fire"
+                    "{id}/claims: the clean claim was refused although no universe residual is about its EXACT fixture bytes (different input, different surface): {refusal}"
                 ));
-            } else if !refusal.contains("blocking residual") {
+            }
+            if same_fixture {
                 failures.push(format!(
-                    "{id}/claims: the clean claim was refused for a reason other than the cross-run blocker: {refusal}"
+                    "{id}/claims: a universe residual about the SAME exact fixture bytes as the clean claim exists, yet the claim compiled — the exact-surface rule failed"
                 ));
-            } else {
-                // The cross-run blocker fired: the same-surface axes it
-                // protected are the inflation-prevented surfaces.
-                for a in &blocked_axes {
-                    prevented_axes.push(format!("{id}:{a} (cross-run)"));
-                }
             }
         }
     }
@@ -1040,18 +1035,14 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
                 .unwrap_or(false)
         })
         .count();
-    // The clean claim must be REFUSED by the cross-run universe blocker: an
-    // open divergence about the same surface blocks the claim even from a
-    // passing run (the review's universe-relative admission, measured).
-    let clean_refused: usize = per_case
+    // The clean claim must COMPILE under the exact-fixture rule: an open
+    // divergence about the DEFECT fixture's exact bytes does not block a
+    // claim about the CLEAN fixture's exact bytes (different input, different
+    // surface — the fixtures dimension carries the FRF/FIXTURE/v1 exact
+    // input identity, never the shared human label).
+    let clean_admitted_exact_fixture: usize = per_case
         .iter()
-        .filter(|c| {
-            c["claims"]["clean_claim"]["compiled"] == false
-                && c["claims"]["clean_claim"]["refusal"]
-                    .as_str()
-                    .map(|r| r.contains("blocking residual"))
-                    .unwrap_or(false)
-        })
+        .filter(|c| c["claims"]["clean_claim"]["compiled"] == true)
         .count();
     // The fixed-side claim is admitted over a universe that commits the
     // buggy residual: the negative search is as portable as the premises.
@@ -1192,7 +1183,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             "environment_boundaries_found": environment_boundaries.to_string(),
             "claim_inflation_prevented_axes": inflation_prevented.to_string(),
             "inflated_claims": inflated.to_string(),
-            "clean_claims_refused_by_universe_blocker": format!("{clean_refused}/{executed}"),
+            "clean_claims_admitted_under_exact_fixture_rule": format!("{clean_admitted_exact_fixture}/{executed}"),
             "fixed_claims_universe_commit_defect_residual": format!("{universe_commits}/{executed}"),
             "challenge_operators_demonstrated": challenge_ops.to_string(),
             "replay_stability": format!("{replays_ok}/{executed}"),

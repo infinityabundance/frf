@@ -3873,8 +3873,11 @@ pub struct ClaimScope {
     /// The EXACT candidate artifact hashes the claim is about (labels are
     /// distrustful; the admitted bytes are not).
     pub candidate: Vec<String>,
-    /// Fixture ids actually executed — the claim never covers a fixture that
-    /// did not run.
+    /// The EXACT fixture input identities the claim is scoped to — the
+    /// FRF/FIXTURE/v1 identity (semantic id + content SHA-256 + declared
+    /// arguments), never the human label alone: two different files that
+    /// share a fixture id are different inputs, and the named role stays a
+    /// separate (`fixture_family`) dimension.
     pub fixtures: Vec<String>,
     /// The fixture family (Section 12: `malformed-input`).
     pub fixture_family: String,
