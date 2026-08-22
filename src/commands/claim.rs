@@ -178,11 +178,20 @@ fn witness_ids(store: &Store) -> Result<Vec<String>> {
 /// The claim carries the content-addressed challenge ids BOUND TO THE
 /// PREMISE RECEIPT; this function refuses the claim, naming the axis and
 /// what would satisfy the tier, when coverage is missing.
+///
+/// v9: the returned entry also carries the DEMONSTRATED MUTATION PROFILE —
+/// the distinct operators of the covering challenges — and `required` (the
+/// `AXIS:FAMILY` pairs the claim was compiled under) constrains the
+/// coverage: a required family on a claimed axis must be among the
+/// demonstrated operators, and a required pair for an axis the claim does
+/// not cover is refused (a claim cannot require sensitivity on a surface it
+/// does not claim — the profile stays bounded, never a correctness claim).
 fn capability_coverage(
     store: &Store,
     receipt_id: &str,
     receipt: &Receipt,
     k: &ClaimScope,
+    required: &[String],
 ) -> Result<Vec<ClaimCapability>> {
     let mut out = Vec::new();
     let ids = challenge_ids(store)?;
@@ -197,6 +206,25 @@ fn capability_coverage(
             crate::verify::load_capture_verified(store, &ch.run)?,
         ));
     }
+    // The required AXIS:FAMILY pairs, validated: an axis the claim does not
+    // claim is refused (bounded — never a requirement on an unclaimed
+    // surface).
+    let required_pairs: Vec<(String, String)> = required
+        .iter()
+        .map(|entry| {
+            let (axis, family) = entry.split_once(':').ok_or_else(|| {
+                FrfError::new(format!(
+                    "claim refused under policy sensitivity-backed: the required mutation profile entry {entry:?} is not AXIS:FAMILY"
+                ))
+            })?;
+            if !k.observables.contains(&axis.to_string()) {
+                return Err(FrfError::new(format!(
+                    "claim refused under policy sensitivity-backed: the required mutation profile names axis {axis}, which the claim does not cover — a claim cannot require sensitivity on a surface it does not assert"
+                )));
+            }
+            Ok((axis.to_string(), family.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
     for axis in &k.observables {
         let mut challenge_ids: Vec<String> = Vec::new();
         for (ch, cv) in &challenges {
@@ -238,10 +266,30 @@ fn capability_coverage(
                 "claim refused under policy sensitivity-backed: the court has NOT demonstrated it can see the {axis} defect class — no challenge record (same court semantic identity, same reference artifact, targeted axis, saw_defect and specificity_clean recomputed from the mutant run) covers the claimed axis of premise {receipt_id}; run `frf court challenge` before compiling"
             )));
         }
+        // The DEMONSTRATED mutation profile: the distinct operators of the
+        // covering challenges (sorted, so the profile is a deterministic set
+        // identity and a verifier can re-derive it from the named records).
+        let mut mutation_profile: Vec<String> = challenges
+            .iter()
+            .filter(|(ch, _)| challenge_ids.contains(&ch.id))
+            .map(|(ch, _)| ch.operator.clone())
+            .collect();
+        mutation_profile.sort();
+        mutation_profile.dedup();
+        // The REQUIRED families on THIS axis must be demonstrated.
+        for (req_axis, family) in &required_pairs {
+            if req_axis == axis && !mutation_profile.contains(family) {
+                return Err(FrfError::new(format!(
+                    "claim refused under policy sensitivity-backed: the court has NOT demonstrated the {family} mutation family on the claimed {axis} axis — the required profile {family} (on {req_axis}) is not among the demonstrated operators {}; run `frf court challenge --operators {family}` before compiling",
+                    mutation_profile.join(", ")
+                )));
+            }
+        }
         challenge_ids.sort();
         out.push(ClaimCapability {
             receipt: receipt_id.to_string(),
             axis: axis.clone(),
+            mutation_profile,
             challenge_ids,
         });
     }
@@ -331,7 +379,13 @@ fn resolution_hint(receipt: &Receipt) -> String {
         .unwrap_or_default()
 }
 
-pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> Result<()> {
+pub fn run(
+    store: &Store,
+    receipt_ids: &[String],
+    json: bool,
+    policy: &str,
+    mutation_profile: &str,
+) -> Result<()> {
     // The admission policy is one of the declared tiers (baseline through
     // high-assurance); a tier the engine does not know is refused, never
     // silently downgraded.
@@ -482,17 +536,42 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
     //     sensitivity-backed claim is not "challenge passed" as a boolean, it
     //     names the exact content-addressed challenges that proved each
     //     premise's court can SEE each claimed surface.
+    //
+    //     v9: the REQUIRED SENSITIVITY MUTATION PROFILE (--mutation-profile,
+    //     `AXIS:FAMILY,…`) constrains WHICH families must be demonstrated on
+    //     each claimed axis; the claim records the required profile AND each
+    //     axis's demonstrated profile.
     let sensitivity_required = matches!(
         policy,
         CLAIM_POLICY_SENSITIVITY_BACKED
             | CLAIM_POLICY_INDEPENDENTLY_WITNESSED
             | CLAIM_POLICY_HIGH_ASSURANCE
     );
+    let required_profile: Vec<String> = if mutation_profile.trim().is_empty() {
+        Vec::new()
+    } else {
+        mutation_profile
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+    if !required_profile.is_empty() && !sensitivity_required {
+        return Err(FrfError::new(format!(
+            "claim refused: --mutation-profile requires a sensitivity-bearing policy tier (sensitivity-backed, independently-witnessed, or high-assurance), not {policy:?}"
+        )));
+    }
     let capability = if sensitivity_required {
         let mut cap = Vec::new();
         for (i, r) in receipts.iter().enumerate() {
             let cell = scope::claim_scope(r);
-            cap.extend(capability_coverage(store, &receipt_ids[i], r, &cell)?);
+            cap.extend(capability_coverage(
+                store,
+                &receipt_ids[i],
+                r,
+                &cell,
+                &required_profile,
+            )?);
         }
         cap
     } else {
@@ -669,6 +748,7 @@ pub fn run(store: &Store, receipt_ids: &[String], json: bool, policy: &str) -> R
         requires: receipt_ids.to_vec(),
         knowledge_snapshot,
         policy: policy.to_string(),
+        mutation_profile: required_profile,
         capability,
         witness_statements,
         independence_evidence,

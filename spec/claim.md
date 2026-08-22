@@ -7,8 +7,11 @@ sentence — and written to `claims/<claim-id>.json` with a by-receipt index at
 `claims/by-receipt/<first-premise-receipt>/<claim-id>` (or rendered canonically
 with `--json`).
 
-The claim schema is `frf-claim-v8`. The core of the protocol is the paper's
-admission rule, made RELATIVE to an explicitly committed state of knowledge:
+The claim schema is `frf-claim-v9` (v9 adds the sensitivity mutation
+profile: the required AXIS:FAMILY pairs the claim was compiled under and
+each capability entry's demonstrated operators). The core of the protocol
+is the paper's admission rule, made RELATIVE to an explicitly committed
+state of knowledge:
 
 ```text
 Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)     and     no unresolved residual in U intersects K
@@ -67,7 +70,7 @@ premise it belongs to.
 | policy | requires (per premise) | carried in the claim |
 |---|---|---|
 | `baseline` | observation evidence only (the verified receipts + the absence scan over U) | — |
-| `sensitivity-backed` | EVERY claimed observable axis of EVERY premise has CHALLENGE coverage: a content-addressed challenge record for THAT premise's court semantic identity, wrapping the same reference artifact, targeting exactly that axis, with `saw_defect` and `specificity_clean` RECOMPUTED from the mutant run | `capability` (per-premise, per-axis challenge ids) |
+| `sensitivity-backed` | EVERY claimed observable axis of EVERY premise has CHALLENGE coverage: a content-addressed challenge record for THAT premise's court semantic identity, wrapping the same reference artifact, targeting exactly that axis, with `saw_defect` and `specificity_clean` RECOMPUTED from the mutant run. The REQUIRED SENSITIVITY MUTATION PROFILE (`--mutation-profile AXIS:FAMILY,…`) may additionally declare WHICH mutation families must be demonstrated on each claimed surface: every required pair must name a CLAIMED axis (a claim cannot require sensitivity on a surface it does not assert — the profile stays bounded, never a correctness claim) whose DEMONSTRATED operators include that family | `capability` (per-premise, per-axis `{ receipt, axis, mutation_profile, challenge_ids }` — the demonstrated operators plus the challenge ids) + `mutation_profile` (the required pairs) |
 | `independently-witnessed` | sensitivity coverage PLUS a verified witness statement attesting EACH premise receipt (`subject kind=receipt`, `outcome: affirm` — the statement's identity, preserved request/response, and request binding all verify on read) PLUS at least one admissible INDEPENDENCE relation per premise: a content-addressed `IndependenceEvidence` record (`frf-independence-v1`) bound to an attestation of THAT premise (identity rederives, the relation is closed, the spec hash rederives). An affirming witness with zero declared independence is WITNESSED, not independently witnessed — the tier's name is its semantics | `witness_statements` (the union across premises) + `independence_evidence` (the records backing them) |
 | `high-assurance` | independently witnessed PLUS EVERY premise's observation was made under the reference execution profile (`frf-exec-linux-v1`) with the reference capture bounds — the protocol CONSTANTS of the profile, which no `FRF_EXEC_*` override can redefine (the exact-replay contract) | `replay_profile` |
 
@@ -81,7 +84,7 @@ the admission from the claim alone (the independent verifiers do).
 ClaimRecord {
     id                 content address: FRF/CLAIM/v1 over the canonical
                        document minus the id (Section 0)
-    schema_version     frf-claim-v8
+    schema_version     frf-claim-v9
     receipt            the FIRST premise receipt (the claim's root into the
                        evidence graph; the by-receipt index maps it)
     authority          prose id of the admitted reference (all premises bind
@@ -105,10 +108,17 @@ ClaimRecord {
     requires           ALL premise receipt ids
     knowledge_snapshot U — the evidence universe the absence search ran over
     policy             the admission policy (Section 0)
+    mutation_profile   the REQUIRED sensitivity mutation profile: the
+                       AXIS:FAMILY pairs the claim was compiled under (v9;
+                       empty = any demonstrated sensitivity on each claimed
+                       axis suffices)
     capability         per-premise, per-claimed-axis challenge evidence:
-                       { receipt, axis, challenge_ids } — the content-
-                       addressed challenges that demonstrated sensitivity on
-                       that axis for that premise's court
+                       { receipt, axis, mutation_profile, challenge_ids } —
+                       the DEMONSTRATED operators (the distinct operators of
+                       the covering challenges, sorted — re-derived by every
+                       verifier) plus the content-addressed challenges that
+                       demonstrated sensitivity on that axis for that
+                       premise's court
     witness_statements the verified witness statements attesting the premise
                        receipts (independently-witnessed and above)
     independence_evidence
@@ -128,7 +138,7 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v8
+    schema_version     frf-claim-v9
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

@@ -2,207 +2,915 @@
   "schema_version": "frf-protocol-registry-v1",
   "description": "The machine-readable inventory of the FRF evidence protocol. This registry is the AUTHORITY: every schema version, identity domain, relation, policy, and execution profile used anywhere in the reference engine or the independent verifiers must occur here (tests/protocol_registry.rs enforces it), and the README's registry tables are generated from it. Status values: active (the protocol currently defines it), superseded (a previous version, kept for history), future (designed, not yet implemented), reserved-invalid (deliberately refused values used by negative tests), test-only (reserved for unit-test fixtures, never protocol).",
   "objects": [
-    { "id": "artifact", "meaning": "Exact executable/data bytes under objects/sha256/<H>, content-addressed by their bytes", "schema": null, "status": "active" },
-    { "id": "authority", "meaning": "Admitted reference executable and its provenance", "schema": "frf-authority-v1", "status": "active" },
-    { "id": "environment", "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + digest)", "schema": "frf-environment-v2", "status": "active" },
-    { "id": "court", "meaning": "Semantic question + falsifier + envelope (human-authored YAML manifest, not evidence)", "schema": null, "status": "active" },
-    { "id": "comparator-spec", "meaning": "Meaning of a comparison relation (extractor/relation/classifier/version)", "schema": null, "identity": "FRF/COMPARATOR-SPEC/v2", "status": "active" },
-    { "id": "normalizer-spec", "meaning": "Meaning of a comparison-surface transform (relation + the streams it applies to)", "schema": null, "identity": "FRF/NORMALIZER-SPEC/v2", "status": "active" },
-    { "id": "capture-adapter-spec", "meaning": "Meaning of an adapted observation for an externally served axis", "schema": null, "identity": "FRF/CAPTURE-ADAPTER-SPEC/v2", "status": "active" },
-    { "id": "minimizer-spec", "meaning": "Meaning of a reduction relation", "schema": null, "identity": "FRF/MINIMIZER-SPEC/v2", "status": "active" },
-    { "id": "mutation-spec", "meaning": "Meaning of a mutation relation (the defect class a provider proposes)", "schema": null, "identity": "FRF/MUTATION-SPEC/v1", "status": "active" },
-    { "id": "witness-spec", "meaning": "Meaning of a witness attestation relation", "schema": null, "identity": "FRF/WITNESS-SPEC/v2", "status": "active" },
-    { "id": "execution", "meaning": "What was actually executed (a run: identity + capture + produced trees)", "schema": "frf-capture-v11", "identity": "FRF/RUN/v1", "status": "active" },
-    { "id": "observation", "meaning": "Raw captured result (side capture + produced-artifact tree)", "schema": "frf-produced-v1", "status": "active" },
-    { "id": "residual", "meaning": "Preserved disagreement (fingerprinted, lineage-identified)", "schema": "frf-residual-v1", "identity": "FRF/RESIDUAL-FINGERPRINT/v1", "status": "active" },
-    { "id": "residual-lineage", "meaning": "Stable comparison question/surface/feature across revisions and environments", "schema": null, "identity": "FRF/RESIDUAL-LINEAGE/v1", "status": "active" },
-    { "id": "disposition-event", "meaning": "Interpretation/state transition of a residual (hash-chained append-only events)", "schema": "frf-disposition-v2", "identity": "FRF/DISPOSITION-EVENT/v1", "status": "active" },
-    { "id": "resolution", "meaning": "Evidence that a residual closed (a fixed event + its resolution run)", "schema": null, "status": "active" },
-    { "id": "series", "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots)", "schema": "frf-series-v3", "identity": "FRF/SERIES/v2", "status": "active" },
-    { "id": "trajectory", "meaning": "Ordered residual observations over a declared axis with deterministic classification", "schema": "frf-trajectory-v4", "status": "active" },
-    { "id": "reduction", "meaning": "Minimization attempt: fixture reduction + preservation predicate", "schema": "frf-reduction-v4", "identity": "FRF/REDUCTION/v3", "status": "active" },
-    { "id": "token", "meaning": "Deterministic endoduction result routing the residual", "schema": "frf-token-v1", "status": "active" },
-    { "id": "challenge", "meaning": "Court capability evidence: a seeded defect the court demonstrated it can see", "schema": "frf-challenge-v1", "identity": "FRF/CHALLENGE/v1", "status": "active" },
-    { "id": "witness-statement", "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence — independence is the separate `independence` object", "schema": "frf-witness-statement-v3", "identity": "FRF/WITNESS-STATEMENT/v1", "status": "active" },
-    { "id": "independence", "meaning": "Declared independence relation about a witness attestation, with its basis", "schema": "frf-independence-v1", "identity": "FRF/INDEPENDENCE/v1", "status": "active" },
-    { "id": "knowledge-snapshot", "meaning": "The committed evidence universe U a claim's absence scan ran over", "schema": "frf-claim-v8", "identity": "FRF/KNOWLEDGE/v2", "status": "active" },
-    { "id": "claim", "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored)", "schema": "frf-claim-v8", "identity": "FRF/CLAIM/v1", "status": "active" },
-    { "id": "receipt", "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics)", "schema": "frf-receipt-v17", "status": "active" },
-    { "id": "runtime-closure", "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment", "schema": "frf-runtime-closure-v1", "identity": "FRF/RUNTIME-CLOSURE/v1", "status": "active" },
-    { "id": "bundle", "meaning": "Portable closure of referenced evidence (directory or single tar)", "schema": "frf-bundle-v3", "status": "active" },
-    { "id": "ci-status", "meaning": "CI gate presentation of a compiled claim", "schema": "frf-ci-status-v1", "status": "active" },
-    { "id": "comparator-invocation", "meaning": "Extension evidence: what was invoked, against which request", "schema": "frf-comparator-invocation-v1", "identity": "FRF/COMPARATOR-INVOCATION/v1", "status": "active" },
-    { "id": "comparator-result", "meaning": "Extension evidence: which response answered which request", "schema": "frf-comparator-result-v1", "identity": "FRF/COMPARATOR-RESULT/v1", "status": "active" },
-    { "id": "normalizer-invocation", "meaning": "Normalizer invocation evidence", "schema": "frf-normalizer-invocation-v1", "identity": "FRF/NORMALIZER-INVOCATION/v1", "status": "active" },
-    { "id": "normalizer-result", "meaning": "Normalizer result evidence", "schema": "frf-normalizer-result-v1", "identity": "FRF/NORMALIZER-RESULT/v1", "status": "active" },
-    { "id": "minimizer-invocation", "meaning": "Minimizer invocation evidence", "schema": "frf-minimizer-invocation-v1", "identity": "FRF/MINIMIZER-INVOCATION/v1", "status": "active" },
-    { "id": "minimizer-result", "meaning": "Minimizer result evidence", "schema": "frf-minimizer-result-v1", "identity": "FRF/MINIMIZER-RESULT/v1", "status": "active" },
-    { "id": "mutation-invocation", "meaning": "Mutation provider invocation evidence", "schema": "frf-mutation-invocation-v1", "identity": "FRF/MUTATION-INVOCATION/v1", "status": "active" },
-    { "id": "mutation-result", "meaning": "Mutation provider result evidence", "schema": "frf-mutation-result-v1", "identity": "FRF/MUTATION-RESULT/v1", "status": "active" },
-    { "id": "capture-adapter-invocation", "meaning": "Capture adapter invocation evidence", "schema": "frf-capture-invocation-v1", "identity": "FRF/CAPTURE-ADAPTER-INVOCATION/v1", "status": "active" },
-    { "id": "capture-adapter-result", "meaning": "Capture adapter result evidence", "schema": "frf-capture-result-v1", "identity": "FRF/CAPTURE-ADAPTER-RESULT/v1", "status": "active" }
+    {
+      "id": "artifact",
+      "meaning": "Exact executable/data bytes under objects/sha256/<H>, content-addressed by their bytes",
+      "schema": null,
+      "status": "active"
+    },
+    {
+      "id": "authority",
+      "meaning": "Admitted reference executable and its provenance",
+      "schema": "frf-authority-v1",
+      "status": "active"
+    },
+    {
+      "id": "environment",
+      "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + digest)",
+      "schema": "frf-environment-v2",
+      "status": "active"
+    },
+    {
+      "id": "court",
+      "meaning": "Semantic question + falsifier + envelope (human-authored YAML manifest, not evidence)",
+      "schema": null,
+      "status": "active"
+    },
+    {
+      "id": "comparator-spec",
+      "meaning": "Meaning of a comparison relation (extractor/relation/classifier/version)",
+      "schema": null,
+      "identity": "FRF/COMPARATOR-SPEC/v2",
+      "status": "active"
+    },
+    {
+      "id": "normalizer-spec",
+      "meaning": "Meaning of a comparison-surface transform (relation + the streams it applies to)",
+      "schema": null,
+      "identity": "FRF/NORMALIZER-SPEC/v2",
+      "status": "active"
+    },
+    {
+      "id": "capture-adapter-spec",
+      "meaning": "Meaning of an adapted observation for an externally served axis",
+      "schema": null,
+      "identity": "FRF/CAPTURE-ADAPTER-SPEC/v2",
+      "status": "active"
+    },
+    {
+      "id": "minimizer-spec",
+      "meaning": "Meaning of a reduction relation",
+      "schema": null,
+      "identity": "FRF/MINIMIZER-SPEC/v2",
+      "status": "active"
+    },
+    {
+      "id": "mutation-spec",
+      "meaning": "Meaning of a mutation relation (the defect class a provider proposes)",
+      "schema": null,
+      "identity": "FRF/MUTATION-SPEC/v1",
+      "status": "active"
+    },
+    {
+      "id": "witness-spec",
+      "meaning": "Meaning of a witness attestation relation",
+      "schema": null,
+      "identity": "FRF/WITNESS-SPEC/v2",
+      "status": "active"
+    },
+    {
+      "id": "execution",
+      "meaning": "What was actually executed (a run: identity + capture + produced trees)",
+      "schema": "frf-capture-v11",
+      "identity": "FRF/RUN/v1",
+      "status": "active"
+    },
+    {
+      "id": "observation",
+      "meaning": "Raw captured result (side capture + produced-artifact tree)",
+      "schema": "frf-produced-v1",
+      "status": "active"
+    },
+    {
+      "id": "residual",
+      "meaning": "Preserved disagreement (fingerprinted, lineage-identified)",
+      "schema": "frf-residual-v1",
+      "identity": "FRF/RESIDUAL-FINGERPRINT/v1",
+      "status": "active"
+    },
+    {
+      "id": "residual-lineage",
+      "meaning": "Stable comparison question/surface/feature across revisions and environments",
+      "schema": null,
+      "identity": "FRF/RESIDUAL-LINEAGE/v1",
+      "status": "active"
+    },
+    {
+      "id": "disposition-event",
+      "meaning": "Interpretation/state transition of a residual (hash-chained append-only events)",
+      "schema": "frf-disposition-v2",
+      "identity": "FRF/DISPOSITION-EVENT/v1",
+      "status": "active"
+    },
+    {
+      "id": "resolution",
+      "meaning": "Evidence that a residual closed (a fixed event + its resolution run)",
+      "schema": null,
+      "status": "active"
+    },
+    {
+      "id": "series",
+      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots)",
+      "schema": "frf-series-v3",
+      "identity": "FRF/SERIES/v2",
+      "status": "active"
+    },
+    {
+      "id": "trajectory",
+      "meaning": "Ordered residual observations over a declared axis with deterministic classification",
+      "schema": "frf-trajectory-v4",
+      "status": "active"
+    },
+    {
+      "id": "reduction",
+      "meaning": "Minimization attempt: fixture reduction + preservation predicate",
+      "schema": "frf-reduction-v4",
+      "identity": "FRF/REDUCTION/v3",
+      "status": "active"
+    },
+    {
+      "id": "token",
+      "meaning": "Deterministic endoduction result routing the residual",
+      "schema": "frf-token-v1",
+      "status": "active"
+    },
+    {
+      "id": "challenge",
+      "meaning": "Court capability evidence: a seeded defect the court demonstrated it can see",
+      "schema": "frf-challenge-v1",
+      "identity": "FRF/CHALLENGE/v1",
+      "status": "active"
+    },
+    {
+      "id": "witness-statement",
+      "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence \u2014 independence is the separate `independence` object",
+      "schema": "frf-witness-statement-v3",
+      "identity": "FRF/WITNESS-STATEMENT/v1",
+      "status": "active"
+    },
+    {
+      "id": "independence",
+      "meaning": "Declared independence relation about a witness attestation, with its basis",
+      "schema": "frf-independence-v1",
+      "identity": "FRF/INDEPENDENCE/v1",
+      "status": "active"
+    },
+    {
+      "id": "knowledge-snapshot",
+      "meaning": "The committed evidence universe U a claim's absence scan ran over",
+      "schema": "frf-claim-v9",
+      "identity": "FRF/KNOWLEDGE/v2",
+      "status": "active"
+    },
+    {
+      "id": "claim",
+      "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators",
+      "schema": "frf-claim-v9",
+      "identity": "FRF/CLAIM/v1",
+      "status": "active"
+    },
+    {
+      "id": "receipt",
+      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts \u2014 executable hash is not executable semantics)",
+      "schema": "frf-receipt-v17",
+      "status": "active"
+    },
+    {
+      "id": "runtime-closure",
+      "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component \u2014 resolved by the system loader under the observation environment",
+      "schema": "frf-runtime-closure-v1",
+      "identity": "FRF/RUNTIME-CLOSURE/v1",
+      "status": "active"
+    },
+    {
+      "id": "bundle",
+      "meaning": "Portable closure of referenced evidence (directory or single tar)",
+      "schema": "frf-bundle-v3",
+      "status": "active"
+    },
+    {
+      "id": "ci-status",
+      "meaning": "CI gate presentation of a compiled claim",
+      "schema": "frf-ci-status-v1",
+      "status": "active"
+    },
+    {
+      "id": "comparator-invocation",
+      "meaning": "Extension evidence: what was invoked, against which request",
+      "schema": "frf-comparator-invocation-v1",
+      "identity": "FRF/COMPARATOR-INVOCATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "comparator-result",
+      "meaning": "Extension evidence: which response answered which request",
+      "schema": "frf-comparator-result-v1",
+      "identity": "FRF/COMPARATOR-RESULT/v1",
+      "status": "active"
+    },
+    {
+      "id": "normalizer-invocation",
+      "meaning": "Normalizer invocation evidence",
+      "schema": "frf-normalizer-invocation-v1",
+      "identity": "FRF/NORMALIZER-INVOCATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "normalizer-result",
+      "meaning": "Normalizer result evidence",
+      "schema": "frf-normalizer-result-v1",
+      "identity": "FRF/NORMALIZER-RESULT/v1",
+      "status": "active"
+    },
+    {
+      "id": "minimizer-invocation",
+      "meaning": "Minimizer invocation evidence",
+      "schema": "frf-minimizer-invocation-v1",
+      "identity": "FRF/MINIMIZER-INVOCATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "minimizer-result",
+      "meaning": "Minimizer result evidence",
+      "schema": "frf-minimizer-result-v1",
+      "identity": "FRF/MINIMIZER-RESULT/v1",
+      "status": "active"
+    },
+    {
+      "id": "mutation-invocation",
+      "meaning": "Mutation provider invocation evidence",
+      "schema": "frf-mutation-invocation-v1",
+      "identity": "FRF/MUTATION-INVOCATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "mutation-result",
+      "meaning": "Mutation provider result evidence",
+      "schema": "frf-mutation-result-v1",
+      "identity": "FRF/MUTATION-RESULT/v1",
+      "status": "active"
+    },
+    {
+      "id": "capture-adapter-invocation",
+      "meaning": "Capture adapter invocation evidence",
+      "schema": "frf-capture-invocation-v1",
+      "identity": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "capture-adapter-result",
+      "meaning": "Capture adapter result evidence",
+      "schema": "frf-capture-result-v1",
+      "identity": "FRF/CAPTURE-ADAPTER-RESULT/v1",
+      "status": "active"
+    }
   ],
   "identities": [
-    { "domain": "FRF/RUN/v1", "meaning": "Run identity preimage", "status": "active" },
-    { "domain": "FRF/COURT/v2", "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)", "status": "active" },
-    { "domain": "FRF/COMPARATOR-SPEC/v2", "meaning": "Comparator semantic specification", "status": "active" },
-    { "domain": "FRF/NORMALIZER-SPEC/v2", "meaning": "Normalizer semantic specification", "status": "active" },
-    { "domain": "FRF/MINIMIZER-SPEC/v2", "meaning": "Minimizer semantic specification", "status": "active" },
-    { "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2", "meaning": "Capture-adapter semantic specification", "status": "active" },
-    { "domain": "FRF/WITNESS-SPEC/v2", "meaning": "Witness semantic specification", "status": "active" },
-    { "domain": "FRF/MUTATION-SPEC/v1", "meaning": "Mutation semantic specification", "status": "active" },
-    { "domain": "FRF/RESIDUAL-FINGERPRINT/v1", "meaning": "Exact residual observation fingerprint", "status": "active" },
-    { "domain": "FRF/RESIDUAL-LINEAGE/v1", "meaning": "Stable residual lineage across revisions/environments", "status": "active" },
-    { "domain": "FRF/SERIES/v2", "meaning": "ExecutionSeries snapshot identity", "status": "active" },
-    { "domain": "FRF/REDUCTION/v3", "meaning": "Reduction record identity", "status": "active" },
-    { "domain": "FRF/REDUCTION/v2", "meaning": "Previous reduction record identity (superseded by v3)", "status": "superseded" },
-    { "domain": "FRF/KNOWLEDGE/v2", "meaning": "Knowledge snapshot (evidence universe U) identity", "status": "active" },
-    { "domain": "FRF/CHALLENGE/v1", "meaning": "CourtChallenge identity", "status": "active" },
-    { "domain": "FRF/DISPOSITION-EVENT/v1", "meaning": "Disposition event identity (hash-chained)", "status": "active" },
-    { "domain": "FRF/COMPARATOR-INVOCATION/v1", "meaning": "Comparator invocation evidence identity", "status": "active" },
-    { "domain": "FRF/COMPARATOR-RESULT/v1", "meaning": "Comparator result evidence identity", "status": "active" },
-    { "domain": "FRF/NORMALIZER-INVOCATION/v1", "meaning": "Normalizer invocation evidence identity", "status": "active" },
-    { "domain": "FRF/NORMALIZER-RESULT/v1", "meaning": "Normalizer result evidence identity", "status": "active" },
-    { "domain": "FRF/MINIMIZER-INVOCATION/v1", "meaning": "Minimizer invocation evidence identity", "status": "active" },
-    { "domain": "FRF/MINIMIZER-RESULT/v1", "meaning": "Minimizer result evidence identity", "status": "active" },
-    { "domain": "FRF/MUTATION-INVOCATION/v1", "meaning": "Mutation invocation evidence identity", "status": "active" },
-    { "domain": "FRF/MUTATION-RESULT/v1", "meaning": "Mutation result evidence identity", "status": "active" },
-    { "domain": "FRF/CAPTURE-ADAPTER-INVOCATION/v1", "meaning": "Capture-adapter invocation evidence identity", "status": "active" },
-    { "domain": "FRF/CAPTURE-ADAPTER-RESULT/v1", "meaning": "Capture-adapter result evidence identity", "status": "active" },
-    { "domain": "FRF/WITNESS-IDENTITY/v1", "meaning": "Witness identity (the stable WHO: semantic + implementation)", "status": "active" },
-    { "domain": "FRF/WITNESS-STATEMENT/v1", "meaning": "Witness statement identity", "status": "active" },
-    { "domain": "FRF/INDEPENDENCE-SPEC/v1", "meaning": "Independence relation specification", "status": "active" },
-    { "domain": "FRF/INDEPENDENCE/v1", "meaning": "Independence evidence record identity", "status": "active" },
-    { "domain": "FRF/CLAIM/v1", "meaning": "Compiled claim identity (over the canonical document minus the id)", "status": "active" },
-    { "domain": "FRF/RUNTIME-CLOSURE/v1", "meaning": "Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable)", "status": "active" },
-    { "domain": "FRF/X/v1", "meaning": "Reserved for the domain-separation unit test; never a protocol domain", "status": "test-only" },
-    { "domain": "FRF/Y/v1", "meaning": "Reserved for the domain-separation unit test; never a protocol domain", "status": "test-only" }
+    {
+      "domain": "FRF/RUN/v1",
+      "meaning": "Run identity preimage",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COURT/v2",
+      "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COMPARATOR-SPEC/v2",
+      "meaning": "Comparator semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-SPEC/v2",
+      "meaning": "Normalizer semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-SPEC/v2",
+      "meaning": "Minimizer semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2",
+      "meaning": "Capture-adapter semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-SPEC/v2",
+      "meaning": "Witness semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-SPEC/v1",
+      "meaning": "Mutation semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
+      "meaning": "Exact residual observation fingerprint",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL-LINEAGE/v1",
+      "meaning": "Stable residual lineage across revisions/environments",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/SERIES/v2",
+      "meaning": "ExecutionSeries snapshot identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/REDUCTION/v3",
+      "meaning": "Reduction record identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/REDUCTION/v2",
+      "meaning": "Previous reduction record identity (superseded by v3)",
+      "status": "superseded"
+    },
+    {
+      "domain": "FRF/KNOWLEDGE/v2",
+      "meaning": "Knowledge snapshot (evidence universe U) identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/CHALLENGE/v1",
+      "meaning": "CourtChallenge identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/DISPOSITION-EVENT/v1",
+      "meaning": "Disposition event identity (hash-chained)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COMPARATOR-INVOCATION/v1",
+      "meaning": "Comparator invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COMPARATOR-RESULT/v1",
+      "meaning": "Comparator result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-INVOCATION/v1",
+      "meaning": "Normalizer invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-RESULT/v1",
+      "meaning": "Normalizer result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-INVOCATION/v1",
+      "meaning": "Minimizer invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-RESULT/v1",
+      "meaning": "Minimizer result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-INVOCATION/v1",
+      "meaning": "Mutation invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-RESULT/v1",
+      "meaning": "Mutation result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
+      "meaning": "Capture-adapter invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/CAPTURE-ADAPTER-RESULT/v1",
+      "meaning": "Capture-adapter result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-IDENTITY/v1",
+      "meaning": "Witness identity (the stable WHO: semantic + implementation)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-STATEMENT/v1",
+      "meaning": "Witness statement identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/INDEPENDENCE-SPEC/v1",
+      "meaning": "Independence relation specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/INDEPENDENCE/v1",
+      "meaning": "Independence evidence record identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/CLAIM/v1",
+      "meaning": "Compiled claim identity (over the canonical document minus the id)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RUNTIME-CLOSURE/v1",
+      "meaning": "Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/X/v1",
+      "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
+      "status": "test-only"
+    },
+    {
+      "domain": "FRF/Y/v1",
+      "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
+      "status": "test-only"
+    }
   ],
   "schemas": [
-    { "id": "frf-authority-v1", "status": "active" },
-    { "id": "frf-capture-v11", "status": "active" },
-    { "id": "frf-residual-v1", "status": "active" },
-    { "id": "frf-disposition-v2", "status": "active" },
-    { "id": "frf-receipt-v17", "status": "active" },
-    { "id": "frf-receipt-v16", "status": "superseded" },
-    { "id": "frf-receipt-v15", "status": "superseded" },
-    { "id": "frf-receipt-v12", "status": "superseded" },
-    { "id": "frf-receipt-v7", "status": "superseded" },
-    { "id": "frf-receipt-v5", "status": "superseded" },
-    { "id": "frf-claim-v8", "status": "active" },
-    { "id": "frf-claim-v7", "status": "superseded" },
-    { "id": "frf-runtime-closure-v1", "status": "active" },
-    { "id": "frf-runner-v1", "status": "active" },
-    { "id": "frf-environment-v2", "status": "active" },
-    { "id": "frf-provenance-v3", "status": "active" },
-    { "id": "frf-challenge-v1", "status": "active" },
-    { "id": "frf-mutation-request-v1", "status": "active" },
-    { "id": "frf-mutation-response-v1", "status": "active" },
-    { "id": "frf-mutation-invocation-v1", "status": "active" },
-    { "id": "frf-mutation-result-v1", "status": "active" },
-    { "id": "frf-bundle-v3", "status": "active" },
-    { "id": "frf-bundle-v2", "status": "superseded" },
-    { "id": "frf-bundle-v9", "status": "reserved-invalid" },
-    { "id": "frf-trajectory-v4", "status": "active" },
-    { "id": "frf-series-v3", "status": "active" },
-    { "id": "frf-comparator-request-v4", "status": "active" },
-    { "id": "frf-comparator-request-v3", "status": "superseded" },
-    { "id": "frf-comparator-response-v2", "status": "active" },
-    { "id": "frf-comparator-response-v9", "status": "reserved-invalid" },
-    { "id": "frf-comparator-invocation-v1", "status": "active" },
-    { "id": "frf-comparator-result-v1", "status": "active" },
-    { "id": "frf-normalizer-request-v1", "status": "active" },
-    { "id": "frf-normalizer-response-v1", "status": "active" },
-    { "id": "frf-normalizer-invocation-v1", "status": "active" },
-    { "id": "frf-normalizer-result-v1", "status": "active" },
-    { "id": "frf-minimizer-request-v1", "status": "active" },
-    { "id": "frf-minimizer-response-v1", "status": "active" },
-    { "id": "frf-minimizer-invocation-v1", "status": "active" },
-    { "id": "frf-minimizer-result-v1", "status": "active" },
-    { "id": "frf-capture-request-v1", "status": "active" },
-    { "id": "frf-capture-response-v1", "status": "active" },
-    { "id": "frf-capture-invocation-v1", "status": "active" },
-    { "id": "frf-capture-result-v1", "status": "active" },
-    { "id": "frf-witness-request-v1", "status": "active" },
-    { "id": "frf-witness-response-v3", "status": "active" },
-    { "id": "frf-witness-statement-v3", "status": "active" },
-    { "id": "frf-independence-v1", "status": "active" },
-    { "id": "frf-produced-v1", "status": "active" },
-    { "id": "frf-token-v1", "status": "active" },
-    { "id": "frf-ci-status-v1", "status": "active" },
-    { "id": "frf-reduction-v4", "status": "active" },
-    { "id": "frf-experiment-v1", "status": "active", "scope": "xtask empirical-program report" },
-    { "id": "frf-external-corpus-v1", "status": "active", "scope": "external empirical corpus manifest" },
-    { "id": "frf-external-corpus-v3", "status": "active", "scope": "v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases)" },
-    { "id": "frf-external-experiment-v1", "status": "active", "scope": "external empirical program v1 report" },
-    { "id": "frf-external-experiment-v2", "status": "active", "scope": "external empirical program v2 report" },
-    { "id": "frf-external-experiment-v3", "status": "active", "scope": "external empirical program v3 report (real upstream releases)" }
+    {
+      "id": "frf-claim-v9",
+      "status": "active"
+    },
+    {
+      "id": "frf-authority-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-capture-v11",
+      "status": "active"
+    },
+    {
+      "id": "frf-residual-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-disposition-v2",
+      "status": "active"
+    },
+    {
+      "id": "frf-receipt-v17",
+      "status": "active"
+    },
+    {
+      "id": "frf-receipt-v16",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-receipt-v15",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-receipt-v12",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-receipt-v7",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-receipt-v5",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-claim-v8",
+      "status": "superseded",
+      "superseded_by": "frf-claim-v9"
+    },
+    {
+      "id": "frf-claim-v7",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-runtime-closure-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-runner-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-environment-v2",
+      "status": "active"
+    },
+    {
+      "id": "frf-provenance-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-challenge-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-mutation-request-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-mutation-response-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-mutation-invocation-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-mutation-result-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-bundle-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-bundle-v2",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-bundle-v9",
+      "status": "reserved-invalid"
+    },
+    {
+      "id": "frf-trajectory-v4",
+      "status": "active"
+    },
+    {
+      "id": "frf-series-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-comparator-request-v4",
+      "status": "active"
+    },
+    {
+      "id": "frf-comparator-request-v3",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-comparator-response-v2",
+      "status": "active"
+    },
+    {
+      "id": "frf-comparator-response-v9",
+      "status": "reserved-invalid"
+    },
+    {
+      "id": "frf-comparator-invocation-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-comparator-result-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-normalizer-request-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-normalizer-response-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-normalizer-invocation-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-normalizer-result-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-minimizer-request-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-minimizer-response-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-minimizer-invocation-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-minimizer-result-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-capture-request-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-capture-response-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-capture-invocation-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-capture-result-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-witness-request-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-witness-response-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-witness-statement-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-independence-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-produced-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-token-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-ci-status-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-reduction-v4",
+      "status": "active"
+    },
+    {
+      "id": "frf-experiment-v1",
+      "status": "active",
+      "scope": "xtask empirical-program report"
+    },
+    {
+      "id": "frf-external-corpus-v1",
+      "status": "active",
+      "scope": "external empirical corpus manifest"
+    },
+    {
+      "id": "frf-external-corpus-v3",
+      "status": "active",
+      "scope": "v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases)"
+    },
+    {
+      "id": "frf-external-experiment-v1",
+      "status": "active",
+      "scope": "external empirical program v1 report"
+    },
+    {
+      "id": "frf-external-experiment-v2",
+      "status": "active",
+      "scope": "external empirical program v2 report"
+    },
+    {
+      "id": "frf-external-experiment-v3",
+      "status": "active",
+      "scope": "external empirical program v3 report (real upstream releases)"
+    }
   ],
   "relations": {
     "comparator": [
-      { "id": "eq", "meaning": "Equality over the extractor's projection", "status": "active" }
+      {
+        "id": "eq",
+        "meaning": "Equality over the extractor's projection",
+        "status": "active"
+      }
     ],
     "independence": [
-      { "id": "different-implementation", "meaning": "The attestation was produced by a different implementation", "status": "active" },
-      { "id": "separate-party", "meaning": "The attestation was produced by a separate party", "status": "active" },
-      { "id": "unaffiliated-channel", "meaning": "The attestation arrived over an unaffiliated channel", "status": "active" },
-      { "id": "adversarial-review", "meaning": "The attestation is an adversarial review", "status": "active" }
+      {
+        "id": "different-implementation",
+        "meaning": "The attestation was produced by a different implementation",
+        "status": "active"
+      },
+      {
+        "id": "separate-party",
+        "meaning": "The attestation was produced by a separate party",
+        "status": "active"
+      },
+      {
+        "id": "unaffiliated-channel",
+        "meaning": "The attestation arrived over an unaffiliated channel",
+        "status": "active"
+      },
+      {
+        "id": "adversarial-review",
+        "meaning": "The attestation is an adversarial review",
+        "status": "active"
+      }
     ],
     "mutation-operators": [
-      { "id": "exit-class", "meaning": "Alter exactly the exit class", "status": "active" },
-      { "id": "stderr-first-line", "meaning": "Alter exactly the first stderr line", "status": "active" },
-      { "id": "stdout-first-line", "meaning": "Alter exactly the first stdout line", "status": "active" }
+      {
+        "id": "exit-class",
+        "meaning": "Alter exactly the exit class",
+        "status": "active"
+      },
+      {
+        "id": "stderr-first-line",
+        "meaning": "Alter exactly the first stderr line",
+        "status": "active"
+      },
+      {
+        "id": "stdout-first-line",
+        "meaning": "Alter exactly the first stdout line",
+        "status": "active"
+      }
     ],
     "trajectory-coordinates": [
-      { "id": "repeat_index", "meaning": "Repeated observation of the same evidence", "status": "active" },
-      { "id": "candidate_revision", "meaning": "Candidate revision ladder", "status": "active" },
-      { "id": "authority_version", "meaning": "Authority version ladder", "status": "active" },
-      { "id": "environment", "meaning": "Environment points", "status": "active" },
-      { "id": "time", "meaning": "Time points", "status": "active" },
-      { "id": "fixture_reduction", "meaning": "Fixture reduction (belongs to the minimization protocol)", "status": "active" }
+      {
+        "id": "repeat_index",
+        "meaning": "Repeated observation of the same evidence",
+        "status": "active"
+      },
+      {
+        "id": "candidate_revision",
+        "meaning": "Candidate revision ladder",
+        "status": "active"
+      },
+      {
+        "id": "authority_version",
+        "meaning": "Authority version ladder",
+        "status": "active"
+      },
+      {
+        "id": "environment",
+        "meaning": "Environment points",
+        "status": "active"
+      },
+      {
+        "id": "time",
+        "meaning": "Time points",
+        "status": "active"
+      },
+      {
+        "id": "fixture_reduction",
+        "meaning": "Fixture reduction (belongs to the minimization protocol)",
+        "status": "active"
+      }
     ],
     "dispositions": [
-      { "id": "open", "meaning": "Unexplained, blocks claims whose scope intersects", "status": "active" },
-      { "id": "fixed", "meaning": "Closed by a verified resolution run", "status": "active" },
-      { "id": "intentional", "meaning": "Documented intentional divergence", "status": "active" },
-      { "id": "environmental", "meaning": "Environment-dependent", "status": "active" },
-      { "id": "oracle_version", "meaning": "The reference version changed", "status": "active" },
-      { "id": "harness", "meaning": "Runner contamination — invalidates the run's evidence", "status": "active" },
-      { "id": "unknown", "meaning": "Unclassified — treated as open", "status": "active" }
+      {
+        "id": "open",
+        "meaning": "Unexplained, blocks claims whose scope intersects",
+        "status": "active"
+      },
+      {
+        "id": "fixed",
+        "meaning": "Closed by a verified resolution run",
+        "status": "active"
+      },
+      {
+        "id": "intentional",
+        "meaning": "Documented intentional divergence",
+        "status": "active"
+      },
+      {
+        "id": "environmental",
+        "meaning": "Environment-dependent",
+        "status": "active"
+      },
+      {
+        "id": "oracle_version",
+        "meaning": "The reference version changed",
+        "status": "active"
+      },
+      {
+        "id": "harness",
+        "meaning": "Runner contamination \u2014 invalidates the run's evidence",
+        "status": "active"
+      },
+      {
+        "id": "unknown",
+        "meaning": "Unclassified \u2014 treated as open",
+        "status": "active"
+      }
     ],
     "trajectory-classes": {
       "drift": [
-        { "id": "persistent", "meaning": "Observed at every coordinate", "status": "active" },
-        { "id": "transient", "meaning": "Observed then gone", "status": "active" },
-        { "id": "recurrent", "meaning": "Observed, gone, observed again", "status": "active" }
+        {
+          "id": "persistent",
+          "meaning": "Observed at every coordinate",
+          "status": "active"
+        },
+        {
+          "id": "transient",
+          "meaning": "Observed then gone",
+          "status": "active"
+        },
+        {
+          "id": "recurrent",
+          "meaning": "Observed, gone, observed again",
+          "status": "active"
+        }
       ],
       "slew": [
-        { "id": "stable", "meaning": "Present at every coordinate", "status": "active" },
-        { "id": "abrupt", "meaning": "Appears/disappears at one boundary", "status": "active" },
-        { "id": "burst", "meaning": "A bounded run of coordinates", "status": "active" },
-        { "id": "recurrent", "meaning": "Multiple separated runs", "status": "active" }
+        {
+          "id": "stable",
+          "meaning": "Present at every coordinate",
+          "status": "active"
+        },
+        {
+          "id": "abrupt",
+          "meaning": "Appears/disappears at one boundary",
+          "status": "active"
+        },
+        {
+          "id": "burst",
+          "meaning": "A bounded run of coordinates",
+          "status": "active"
+        },
+        {
+          "id": "recurrent",
+          "meaning": "Multiple separated runs",
+          "status": "active"
+        }
       ],
       "localization": [
-        { "id": "start", "meaning": "Boundary-localized at the axis start", "status": "active" },
-        { "id": "end", "meaning": "Boundary-localized at the axis end", "status": "active" },
-        { "id": "both", "meaning": "Boundary-localized at both ends", "status": "active" },
-        { "id": "interior", "meaning": "A band not touching either bound", "status": "active" }
+        {
+          "id": "start",
+          "meaning": "Boundary-localized at the axis start",
+          "status": "active"
+        },
+        {
+          "id": "end",
+          "meaning": "Boundary-localized at the axis end",
+          "status": "active"
+        },
+        {
+          "id": "both",
+          "meaning": "Boundary-localized at both ends",
+          "status": "active"
+        },
+        {
+          "id": "interior",
+          "meaning": "A band not touching either bound",
+          "status": "active"
+        }
       ],
       "trend": [
-        { "id": "none", "meaning": "No monotonic magnitude movement (identity surfaces never claim a trend)", "status": "active" },
-        { "id": "increasing", "meaning": "The divergence degree increases monotonically", "status": "active" },
-        { "id": "decreasing", "meaning": "The divergence degree decreases monotonically", "status": "active" }
+        {
+          "id": "none",
+          "meaning": "No monotonic magnitude movement (identity surfaces never claim a trend)",
+          "status": "active"
+        },
+        {
+          "id": "increasing",
+          "meaning": "The divergence degree increases monotonically",
+          "status": "active"
+        },
+        {
+          "id": "decreasing",
+          "meaning": "The divergence degree decreases monotonically",
+          "status": "active"
+        }
       ]
     }
   },
   "policies": [
-    { "id": "baseline", "meaning": "Observation evidence only (verified premises + absence scan over U)", "status": "active" },
-    { "id": "sensitivity-backed", "meaning": "Every claimed axis has challenge coverage per premise", "status": "active" },
-    { "id": "independently-witnessed", "meaning": "Sensitivity + a verified affirming witness attestation of every premise + at least one admissible independence relation per premise", "status": "active" },
-    { "id": "high-assurance", "meaning": "Independently witnessed + every premise observed under the reference execution profile and the reference capture bounds", "status": "active" }
+    {
+      "id": "baseline",
+      "meaning": "Observation evidence only (verified premises + absence scan over U)",
+      "status": "active"
+    },
+    {
+      "id": "sensitivity-backed",
+      "meaning": "Every claimed axis has challenge coverage per premise",
+      "status": "active"
+    },
+    {
+      "id": "independently-witnessed",
+      "meaning": "Sensitivity + a verified affirming witness attestation of every premise + at least one admissible independence relation per premise",
+      "status": "active"
+    },
+    {
+      "id": "high-assurance",
+      "meaning": "Independently witnessed + every premise observed under the reference execution profile and the reference capture bounds",
+      "status": "active"
+    }
   ],
   "execution_profiles": [
-    { "id": "frf-exec-linux-v1", "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> — no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)", "status": "active" },
-    { "id": "frf-exec-linux-v2", "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run — a declared profile is enforced, never approximated", "status": "active" }
+    {
+      "id": "frf-exec-linux-v1",
+      "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> \u2014 no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)",
+      "status": "active"
+    },
+    {
+      "id": "frf-exec-linux-v2",
+      "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer \u2014 the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+      "status": "active"
+    }
   ]
 }
