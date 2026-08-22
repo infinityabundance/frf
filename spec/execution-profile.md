@@ -106,6 +106,24 @@ cpu.max     the per-side, per-tree CPU quota (aggregate)
 - The setrlimit layer remains in force underneath the envelope (a second
   layer, per the design).
 - The group is removed when the side is reaped; nothing lingers.
+- **The group is KILLED, not merely bounded** — the v2 termination policy.
+  The side's direct process is reaped; then the harness writes `1` to
+  `cgroup.kill` (kernel >= 5.14), terminating every remaining member of the
+  side's tree — including a descendant that escaped the process group via
+  `setsid()` (the v1 group-kill cannot reach it, but it is still IN the
+  side's cgroup). The harness then waits for `cgroup.events` to report
+  `populated 0` (bounded); on a kernel without `cgroup.kill` it enumerates
+  `cgroup.procs` and SIGKILLs each member until the group is empty. The
+  harness is a child subreaper (`PR_SET_CHILD_SUBREAPER`), so the side's
+  orphaned descendants reparent to it and are reaped in the wait loop — a
+  container whose pid 1 never reaps cannot leave a zombie holding the group
+  populated forever.
+- **A group that cannot be emptied within the budget is a run REFUSAL**, not
+  ignored cleanup (an uninterruptible D-state member that survives SIGKILL
+  is the honest failure mode). The v2 property is therefore mechanical:
+  **no descendant of the observed side remains alive after the observation
+  is finalized** — the cgroup is removed only after it reports empty, and
+  only then is the evidence emitted.
 - The capture records the envelope under `capture_bounds` (`cgroup_pids_max`
   / `cgroup_memory_max` / `cgroup_cpu_max`, receipt schema v16), so exact
   replay requires the same envelope and the receipt never guesses it.

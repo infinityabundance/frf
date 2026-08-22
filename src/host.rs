@@ -369,13 +369,33 @@ pub fn cgroup2_root() -> Result<Option<PathBuf>> {
 }
 
 /// A per-side cgroup v2 group: the side's whole descendant tree runs in it,
-/// bounded by the profile's aggregate envelope; the group is removed when
-/// the side is reaped. `cgroup.procs` is opened WITHOUT close-on-exec so the
+/// bounded by the profile's aggregate envelope. When the side's direct
+/// process is gone, the group is KILLED (not merely bounded) and emptied
+/// before any evidence is emitted — a descendant that escaped the process
+/// group via setsid() is still in the side's cgroup, and "no descendant of
+/// the observed side remains alive after the observation is finalized" is
+/// the v2 property. `cgroup.procs` is opened WITHOUT close-on-exec so the
 /// child can move itself in during pre_exec.
 pub struct CgroupV2 {
     dir: PathBuf,
     procs_fd: Option<std::os::fd::RawFd>,
+    /// The side's DIRECT child pid, recorded once spawned. It is reaped by
+    /// the harness before finalize, so the fallback empty-check must not
+    /// count it (on a real kernel the pid leaves `cgroup.procs` at exit; on
+    /// the regression suite's fake root it lingers, and a recycled pid at
+    /// that number is NOT the side).
+    direct_pid: Option<libc::pid_t>,
 }
+
+/// The bounded budget for draining a killed cgroup: after `cgroup.kill` (or
+/// the enumerate-and-SIGKILL fallback), the group must report empty within
+/// this window — a member in D state (uninterruptible I/O) can hold it
+/// longer, and under v2 a group that cannot be emptied is a run REFUSAL,
+/// never ignored cleanup.
+const CGROUP_EMPTY_BUDGET: Duration = Duration::from_secs(2);
+
+/// Poll interval for the cgroup-empty wait.
+const CGROUP_EMPTY_POLL: Duration = Duration::from_millis(20);
 
 impl CgroupV2 {
     /// Create `frf/<name>` under the writable root, apply the envelope, and
@@ -423,13 +443,172 @@ impl CgroupV2 {
         Ok(CgroupV2 {
             dir,
             procs_fd: Some(fd),
+            direct_pid: None,
         })
+    }
+
+    /// Record the side's direct child pid (called once the child exists).
+    pub fn mark_direct(&mut self, pid: u32) {
+        self.direct_pid = Some(pid as libc::pid_t);
     }
 
     /// The inherited `cgroup.procs` fd the side writes its own pid to.
     pub fn procs_fd(&self) -> std::os::fd::RawFd {
         self.procs_fd.unwrap_or(-1)
     }
+
+    /// The members of the group from `cgroup.procs` that are not the
+    /// known-reaped direct child (the kernel removes a pid when its process
+    /// exits; the harness probes existence because the regression suite's
+    /// fake root never rewrites the file).
+    fn live_members(&self) -> Vec<libc::pid_t> {
+        let mut out = Vec::new();
+        let Ok(contents) = std::fs::read_to_string(self.dir.join("cgroup.procs")) else {
+            return out;
+        };
+        for line in contents.lines() {
+            if let Ok(pid) = line.trim().parse::<libc::pid_t>() {
+                if pid > 0 && Some(pid) != self.direct_pid && pid_exists(pid) {
+                    out.push(pid);
+                }
+            }
+        }
+        out
+    }
+
+    /// The group is empty when the kernel says so (`cgroup.events`
+    /// `populated 0`) or — where the events file is absent (an older kernel,
+    /// or the regression suite's fake root) — when `cgroup.procs` holds no
+    /// present member. A ZOMBIE counts as present: the kernel's populated
+    /// accounting counts a task until it is reaped, and a killed descendant
+    /// is only released once the harness (their subreaper) reaps it.
+    fn is_empty(&self) -> bool {
+        let events = self.dir.join("cgroup.events");
+        if let Ok(contents) = std::fs::read_to_string(&events) {
+            for line in contents.lines() {
+                if let Some(v) = line.strip_prefix("populated ") {
+                    return v.trim() == "0";
+                }
+            }
+        }
+        self.live_members().is_empty()
+    }
+
+    /// KILL the group, wait for it to EMPTY (bounded), and remove it — the
+    /// v2 finalization. The side's direct process is already reaped; a
+    /// descendant that survived the process-group kill (e.g. it called
+    /// setsid()) is still HERE, inside the side's cgroup. `cgroup.kill`
+    /// (kernel >= 5.14) is the atomic path; without it, enumerate
+    /// `cgroup.procs` and SIGKILL every member until the group is empty. The
+    /// harness is a child subreaper, so the side's orphaned descendants
+    /// reparent HERE and are reaped in the wait loop — a container whose pid
+    /// 1 never reaps cannot leave a zombie holding the group populated
+    /// forever. A group that cannot be emptied within the budget REFUSES the
+    /// run — under v2, failure to empty the group is a run refusal, never
+    /// ignored cleanup.
+    pub fn finalize(&self) -> Result<()> {
+        ensure_subreaper();
+        // 1. cgroup.kill: the kernel terminates every member atomically.
+        let kill_path = self.dir.join("cgroup.kill");
+        if kill_path.is_file() {
+            let _ = std::fs::write(&kill_path, "1");
+        }
+        // 2. Wait for the group to empty (bounded), SIGKILLing any member
+        //    the enumerate path still finds present and reaping the side's
+        //    orphaned descendants (a no-op after cgroup.kill — the kernel
+        //    already removed them; the reaping releases the zombies).
+        let deadline = Instant::now() + CGROUP_EMPTY_BUDGET;
+        loop {
+            if self.is_empty() {
+                break;
+            }
+            let members = self.live_members();
+            if Instant::now() >= deadline {
+                // One final SIGKILL sweep + reap drain, then REFUSE: a
+                // member that survives the budget means the observation is
+                // not finalized — the v2 property "no descendant of the
+                // observed side remains alive after the observation is
+                // finalized" is violated, and the run must not become
+                // evidence.
+                for pid in &members {
+                    kill_member(*pid);
+                }
+                for pid in members {
+                    reap_member(pid);
+                }
+                return Err(FrfError::new(format!(
+                    "{} could not be emptied within the {} budget: a member survived SIGKILL (uninterruptible D-state?) — under {} the side's whole descendant tree must be dead before the observation is finalized",
+                    self.dir.display(),
+                    CGROUP_EMPTY_BUDGET.as_millis(),
+                    ExecProfile::LinuxV2.as_str()
+                )));
+            }
+            for pid in &members {
+                kill_member(*pid);
+            }
+            for pid in members {
+                reap_member(pid);
+            }
+            std::thread::sleep(CGROUP_EMPTY_POLL);
+        }
+        // 3. The group is empty: remove it (and the empty `frf/` parent).
+        let _ = std::fs::remove_dir_all(&self.dir);
+        if let Some(parent) = self.dir.parent() {
+            let _ = std::fs::remove_dir(parent);
+        }
+        Ok(())
+    }
+}
+
+/// The harness is a child subreaper (PR_SET_CHILD_SUBREAPER): when a side's
+/// descendant loses its parent (the side itself), it reparents HERE, not to
+/// init — so the v2 finalization reaps it, and a container whose pid 1 never
+/// reaps cannot leave a zombie holding the side's cgroup populated forever.
+/// Set once, process-wide; the per-member reap in [`CgroupV2::finalize`]
+/// reaps exactly the side's reparented descendants (never `waitpid(-1)`: a
+/// process-wide wait would race with any other child a concurrent caller
+/// owns).
+fn ensure_subreaper() {
+    static SET: std::sync::Once = std::sync::Once::new();
+    SET.call_once(|| {
+        // SAFETY: prctl(2) with PR_SET_CHILD_SUBREAPER and value 1 is
+        // infallible from Rust's perspective; errno is deliberately ignored
+        // (an unsupported kernel leaves normal init-reaping semantics).
+        unsafe {
+            libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1);
+        }
+    });
+}
+
+/// SIGKILL one cgroup member (positive pid — exactly that process; a member
+/// may exit between enumeration and signal, so errno is ignored).
+fn kill_member(pid: libc::pid_t) {
+    // SAFETY: kill(2) with a positive pid signals exactly that process.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+}
+
+/// Reap one cgroup member IF it is the harness's child (a killed descendant
+/// that reparented to the subreaper): `waitpid(pid, WNOHANG)` returns the
+/// pid when reaped, 0 when it is still running, and -1/ECHILD when it is not
+/// our child at all (leave it to its owner — never steal another child).
+fn reap_member(pid: libc::pid_t) {
+    // SAFETY: waitpid(2) with a specific pid and WNOHANG reaps exactly that
+    // child when it is ready; errno is deliberately ignored.
+    unsafe {
+        libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG);
+    }
+}
+
+/// Is a pid currently in the process table (`kill(pid, 0)`)? A ZOMBIE
+/// answers YES — it is still a task, still counted by the kernel's cgroup
+/// populated accounting — which is exactly the case the cgroup-empty wait
+/// must treat as non-empty until the harness (their subreaper) reaps it.
+fn pid_exists(pid: libc::pid_t) -> bool {
+    // SAFETY: kill(2) with a positive pid and signal 0 performs only an
+    // existence check; errno is deliberately ignored.
+    unsafe { libc::kill(pid, 0) == 0 }
 }
 
 impl Drop for CgroupV2 {
@@ -831,7 +1010,7 @@ fn run_impl(
     // then the group is removed. No writable cgroup v2 subtree = the profile
     // REFUSES to run (a declared profile is enforced, never approximated).
     #[cfg(target_os = "linux")]
-    let _cgroup: Option<CgroupV2> = if profile == ExecProfile::LinuxV2 {
+    let mut cgroup: Option<CgroupV2> = if profile == ExecProfile::LinuxV2 {
         let root = cgroup2_root()?.ok_or_else(|| {
             FrfError::new(format!(
                 "{} was requested but no writable cgroup v2 subtree is delegated to this user: the side's aggregate envelope cannot be enforced; run under a delegating manager (a systemd user session with Delegate=, a container with a writable /sys/fs/cgroup) or use the reference profile {}",
@@ -851,7 +1030,7 @@ fn run_impl(
         None
     };
     #[cfg(not(target_os = "linux"))]
-    let _cgroup: Option<CgroupV2> = None;
+    let mut cgroup: Option<CgroupV2> = None;
     #[cfg(not(target_os = "linux"))]
     if profile == ExecProfile::LinuxV2 {
         return Err(FrfError::new(format!(
@@ -875,7 +1054,7 @@ fn run_impl(
         let cpu_s = rlimit_cpu_s();
         let nofile = rlimit_nofile();
         let nproc = rlimit_nproc();
-        let cgroup_procs_fd = _cgroup.as_ref().map(CgroupV2::procs_fd);
+        let cgroup_procs_fd = cgroup.as_ref().map(CgroupV2::procs_fd);
         // SAFETY: `pre_exec` runs after fork(2), before execve(2), in the
         // single-threaded child; setrlimit(2) and write(2) are
         // async-signal-safe.
@@ -932,6 +1111,12 @@ fn run_impl(
             }
         }
     };
+    // The side's direct child is in the cgroup: record it so the
+    // finalization can tell the reaped direct process from its descendants
+    // (the empty-check must never count the pid the harness itself reaped).
+    if let Some(cg) = &mut cgroup {
+        cg.mark_direct(child.id());
+    }
 
     // Drain both pipes *concurrently* with the wait loop, then join before
     // returning. Reading after the child exits is a deadlock: a child that
@@ -968,7 +1153,7 @@ fn run_impl(
             s.spawn(|| drain_capped(&mut stdout_pipe, &mut stdout, max_bytes, group, &overflow));
         let _drain_err =
             s.spawn(|| drain_capped(&mut stderr_pipe, &mut stderr, max_bytes, group, &overflow));
-        let result = loop {
+        let mut result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
@@ -1001,6 +1186,26 @@ fn run_impl(
         // by a different process that would then be signaled).
         #[cfg(unix)]
         terminate_process_group(group);
+        // Under v2, the process-group kill is not the end: a descendant that
+        // called setsid() escaped the group but is STILL in the side's
+        // cgroup. KILL the cgroup, wait for it to empty, and remove it — a
+        // group that cannot be emptied refuses the run (no descendant of the
+        // observed side remains alive after the observation is finalized).
+        // This runs INSIDE the scope, before the drains join: a surviving
+        // descendant holding the capture pipes must die here, not deadlock
+        // the harness. The finalize error wins only when the run was
+        // otherwise successful (the timeout/overflow refusal is already an
+        // honest outcome).
+        if let Some(cg) = &cgroup {
+            match cg.finalize() {
+                Ok(()) => {}
+                Err(e) => {
+                    if result.is_ok() {
+                        result = Err(e);
+                    }
+                }
+            }
+        }
         result
         // `scope` joins all threads here (stdin writer + both drains), so the
         // buffers are complete before the caller sees them.
@@ -1753,6 +1958,146 @@ echo "zero=$0 one=$1"
             "the per-side cgroup must be removed after the run"
         );
         let _ = std::fs::remove_file(&script);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Priority 5 — finalize KILLS the group, it does not merely remove the
+    /// directory. A member that survived the process-group kill (it called
+    /// setsid()) is still in the side's cgroup; finalize must SIGKILL it,
+    /// reap the reparented orphan, wait for the group to empty, and only
+    /// then remove the group.
+    #[test]
+    fn finalize_kills_a_member_that_survived_the_process_group() {
+        ensure_subreaper();
+        let root = fake_cgroup_root("finalize-kill");
+        let cg = CgroupV2::create(&root, "frf-test").unwrap();
+        // A live process NOT in our process group (the setsid() escapee
+        // analogue): a long sleep. Its wrapper parent exits immediately, so
+        // the sleep reparents to the harness (the child subreaper) — the way
+        // a side's orphaned descendants reparent to the real harness. Nobody
+        // else holds a handle on it, so finalize's per-member reap is the
+        // only collector. The pid is written to a file — the background
+        // sleep inherits the wrapper's stdout, so the harness must not wait
+        // on a pipe the sleep holds.
+        let pidfile = temp_script("orphan-pid");
+        let script = format!("sleep 30 & echo $! > {0}", pidfile.display());
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        let pid: libc::pid_t = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut pid = None;
+            while std::time::Instant::now() < deadline {
+                if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                    if let Ok(p) = text.trim().parse() {
+                        pid = Some(p);
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            pid.expect("the wrapper must print the sleep's pid")
+        };
+        std::fs::write(cg.dir.join("cgroup.procs"), format!("{pid}\n")).unwrap();
+
+        cg.finalize().expect("finalize must empty the group");
+
+        // The member was SIGKILLed and reaped by the finalization (a
+        // kill(pid, 0) probe now answers no — the zombie was collected).
+        assert!(
+            !pid_exists(pid),
+            "the cgroup member must be SIGKILLed and reaped by finalize"
+        );
+        // The group was removed only after it emptied.
+        assert!(!cg.dir.exists(), "the emptied cgroup must be removed");
+        let _ = std::fs::remove_file(&pidfile);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Priority 5 — a group that cannot be emptied is a run REFUSAL, never
+    /// ignored cleanup. A ZOMBIE owned by a live, non-reaping parent cannot
+    /// be SIGKILLed (it is already dead) and is not the harness's child, so
+    /// the per-member reap cannot collect it: the group cannot empty, and
+    /// finalize must refuse.
+    #[test]
+    fn finalize_refuses_a_group_it_cannot_empty() {
+        ensure_subreaper();
+        let root = fake_cgroup_root("finalize-refuse");
+        let cg = CgroupV2::create(&root, "frf-test").unwrap();
+        // `sh -c 'sleep 0.05 & echo $! > FILE; exec sleep 30'`: the shell
+        // execs into a long sleep (30s, same pid), so the 50ms background
+        // sleep's zombie is owned by the exec'd sleep — alive and never
+        // waitpid()ing. It is not the harness's child (its parent never
+        // died), so finalize can neither kill it nor reap it. The pid is
+        // written to a file — the exec'd sleep holds the stdout pipe open
+        // for 30s, so the harness must not wait on it.
+        let pidfile = temp_script("zombie-pid");
+        let script = format!(
+            "sleep 0.05 & echo $! > {0}; exec sleep 30",
+            pidfile.display()
+        );
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let owner = child.id() as libc::pid_t;
+        let zombie: libc::pid_t = {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut pid = None;
+            while std::time::Instant::now() < deadline {
+                if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                    if let Ok(p) = text.trim().parse() {
+                        pid = Some(p);
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            pid.expect("the wrapper must print the zombie's pid")
+        };
+        // Wait for the 50ms sleep to exit (become a zombie).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut is_zombie = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{zombie}/stat")) {
+                if stat.split_whitespace().nth(2) == Some("Z") {
+                    is_zombie = true;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(is_zombie, "the short sleep must become a zombie");
+        std::fs::write(cg.dir.join("cgroup.procs"), format!("{zombie}\n")).unwrap();
+
+        let err = cg
+            .finalize()
+            .expect_err("an unemptyable group must refuse")
+            .0;
+        assert!(
+            err.contains("could not be emptied"),
+            "the refusal must name the empty failure: {err}"
+        );
+
+        // Cleanup: kill the exec'd sleep (the zombie's owner); the zombie
+        // then reparents to the harness (this process is the subreaper) and
+        // both are reaped there.
+        // SAFETY: kill(2) with a positive pid signals exactly that process.
+        unsafe {
+            libc::kill(owner, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && pid_exists(zombie) {
+            reap_member(zombie);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&pidfile);
         let _ = std::fs::remove_dir_all(&root);
     }
 
