@@ -1,0 +1,1 @@
+{"comparator_family":"within-2x","id":"latency","identity":"92c12b617afdcc1fb14a8a13b93ab045e13185b0e99b2e44beef3b43664f20d0","meaning":"the candidate's latency projection fell outside the declared envelope","schema_version":"frf-kind-v1","surface_grammar":"latency ratio or parse outcome"}

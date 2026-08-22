@@ -147,6 +147,7 @@ not these tables.
 | FRF/MUTATION-SPEC/v1 | Mutation semantic specification | active |
 | FRF/RESIDUAL-FINGERPRINT/v1 | Exact residual observation fingerprint | active |
 | FRF/RESIDUAL-LINEAGE/v1 | Stable residual lineage across revisions/environments | active |
+| FRF/KIND/v1 | Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary | active |
 | FRF/SERIES/v2 | ExecutionSeries snapshot identity | active |
 | FRF/REDUCTION/v3 | Reduction record identity | active |
 | FRF/REDUCTION/v2 | Previous reduction record identity (superseded by v3) | superseded |
@@ -227,6 +228,7 @@ not these tables.
 | frf-independence-v1 | active |  |
 | frf-produced-v1 | active |  |
 | frf-token-v1 | active |  |
+| frf-kind-v1 | active | residual-kind protocol record (conformance/kinds/) |
 | frf-ci-status-v1 | active |  |
 | frf-reduction-v4 | active |  |
 | frf-experiment-v1 | active | xtask empirical-program report |

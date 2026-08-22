@@ -539,6 +539,18 @@ func residualLineage(kind, axis string, surface *string, fixtureFamily, authorit
 	return hashPreimage("FRF/RESIDUAL-LINEAGE/v1", doc)
 }
 
+// kindIdentity: FRF/KIND/v1 — the residual-kind protocol record (id, meaning,
+// surface_grammar, comparator_family). The identity rederives from the record's
+// own fields in every implementation; the records are pinned in the
+// conformance corpus (conformance/kinds/).
+func kindIdentity(id, meaning, surfaceGrammar, comparatorFamily string) (string, error) {
+	doc := &jcs.Object{
+		Keys:   []string{"id", "meaning", "surface_grammar", "comparator_family"},
+		Values: []jcs.Value{id, meaning, surfaceGrammar, comparatorFamily},
+	}
+	return hashPreimage("FRF/KIND/v1", doc)
+}
+
 // runIdentity: FRF/RUN/v1 over the capture's recorded fields — the name is a
 // claim until recomputed.
 func runIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, error) {

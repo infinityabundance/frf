@@ -177,6 +177,57 @@ fn write(dir: &Path, rel: &str, bytes: &str) {
     fs::write(&path, bytes).unwrap();
 }
 
+/// The protocol record of one registered residual kind (FRF/KIND/v1): the
+/// record carries the derived identity, so any verifier rederives it from the
+/// record's own semantic fields and compares it to the pinned corpus.
+fn kind_record(id: &str, meaning: &str, surface_grammar: &str, comparator_family: &str) -> Value {
+    let identity =
+        crate::rules::kind_identity_parts(id, meaning, surface_grammar, comparator_family);
+    json!({
+        "schema_version": "frf-kind-v1",
+        "id": id,
+        "meaning": meaning,
+        "surface_grammar": surface_grammar,
+        "comparator_family": comparator_family,
+        "identity": identity,
+    })
+}
+
+/// The registered residual-kind vocabulary: (id, meaning, surface grammar,
+/// comparator family) — the SAME records the reference engine's KIND_SCHEMAS
+/// table declares and the corpus pins byte-for-byte.
+fn kind_records() -> Vec<Value> {
+    [
+        (
+            "exit",
+            "the candidate's exit class diverged from the reference's",
+            "exit code",
+            "eq",
+        ),
+        (
+            "text",
+            "the candidate's compared text projection diverged from the reference's",
+            "the comparator's first-line projection",
+            "eq",
+        ),
+        (
+            "wire",
+            "the candidate's compared byte-stream projection diverged from the reference's",
+            "the compared byte stream",
+            "eq",
+        ),
+        (
+            "latency",
+            "the candidate's latency projection fell outside the declared envelope",
+            "latency ratio or parse outcome",
+            "within-2x",
+        ),
+    ]
+    .iter()
+    .map(|(id, meaning, grammar, family)| kind_record(id, meaning, grammar, family))
+    .collect()
+}
+
 /// Materialize a new valid fixture: an OpenReceipt with a wholly external
 /// observable axis (`wire`) — the observable-pluggability milestone. Built
 /// from the regenerated golden fixture so everything else is consistent.
@@ -237,6 +288,71 @@ fn wire_fixture(golden: &Value) -> Value {
     doc
 }
 
+/// Materialize a new valid fixture: a wholly NON-builtin domain observable
+/// (`timing.latency` — nothing in the built-in registry serves it) with a
+/// NON-builtin residual kind (`latency`), served by an external comparator
+/// (`within-2x`, the timing envelope relation). The residual carries the
+/// generic κ row (the axis id names the token surface; no fabricated
+/// minimizer target), and the kind registration rules must pass: the kind
+/// `latency` and the classifier `latency` are registered protocol kinds.
+fn timing_fixture(golden: &Value) -> Value {
+    let mut doc = golden.clone();
+    let timing_spec =
+        comparator_spec_hash("timing.latency", "within-2x", "latency-ms", "latency", "v1");
+    let request_cid =
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string();
+    let result_cid = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string();
+    let run = as_str(&doc["run"]);
+    doc["court"]["admissibility_envelope"]["observables"] = json!(["timing.latency"]);
+    doc["court"]["question"] = json!(
+        "For the bench spec in fixture family malformed-input, does the candidate's latency stay within the declared envelope of the reference's?"
+    );
+    doc["court"]["falsifier"] = json!("The candidate's latency exceeds twice the reference's.");
+    doc["comparator_semantics"] = json!([{
+        "id": "timing.latency",
+        "relation_id": "within-2x",
+        "extractor": "latency-ms",
+        "residual_classifier": "latency",
+        "relation_version": "v1",
+        "specification_hash": timing_spec,
+    }]);
+    doc["observables"] = json!([{
+        "axis": "timing.latency",
+        "raw_reference_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "raw_candidate_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "comparator": "within-2x(latency-ms)",
+        "normalization_rules": [],
+        "verdict": "residual",
+        "comparator_request": request_cid,
+        "comparator_result": result_cid,
+    }]);
+    doc["residuals"] = json!([{
+        "id": "cli-latency-0001",
+        "axis": "timing.latency",
+        "kind": "latency",
+        "sign": {"trajectory_evidence": []},
+        "grammar_state": "violation",
+        "raw_reference_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "raw_candidate_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "disposition": "open",
+        "disposition_event_id": null,
+        "reproducer": run,
+        "invariant": "",
+        "residual_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    }]);
+    doc["endoduction"]["tokens"] = json!([{
+        "residual_id": "cli-latency-0001",
+        "token": "latency/timing.latency-divergence/observed/open",
+        "next_court": "none",
+        "blocks_claims": ["malformed-input timing.latency parity"],
+    }]);
+    doc["claims"]["blocked_by_open_residuals"] = json!([
+        "cannot claim compatibility for fixture family malformed-input because residual cli-latency-0001 (latency) is open"
+    ]);
+    doc["court"]["semantic_identity"] = json!(court_semantic_identity_from_receipt(&doc));
+    doc
+}
+
 fn as_str(v: &Value) -> String {
     v.as_str().unwrap_or_default().to_string()
 }
@@ -275,6 +391,37 @@ pub fn regen_corpus(dir: &Path) {
     );
     eprintln!("regen valid/05-wire-observable.json (new)");
     valid_names.push("05-wire-observable.json".to_string());
+
+    // 2b. The kind protocol records (FRF/KIND/v1): the registered residual-kind
+    //     vocabulary, pinned byte-for-byte with their derived identities.
+    for rec in kind_records() {
+        let id = as_str(&rec["id"]);
+        let canonical = canonical(&rec);
+        write(dir, &format!("kinds/{id}.json"), &canonical);
+        write(dir, &format!("canonical/kinds/{id}.json"), &canonical);
+        let digest = sha256_bytes(canonical.as_bytes());
+        write(
+            dir,
+            &format!("hashes/{id}.kind.sha256"),
+            &format!("{digest}\n"),
+        );
+        eprintln!("regen kinds/{id}.json (new)");
+    }
+
+    // 2c. A wholly NON-builtin domain observable with a NON-builtin kind:
+    //     `timing.latency` / `latency`, served by an external comparator.
+    let timing = timing_fixture(&golden);
+    let timing_canonical = canonical(&timing);
+    write(dir, "valid/06-timing-latency.json", &timing_canonical);
+    write(dir, "canonical/06-timing-latency.json", &timing_canonical);
+    let digest = sha256_bytes(timing_canonical.as_bytes());
+    write(
+        dir,
+        "hashes/06-timing-latency.json.sha256",
+        &format!("{digest}\n"),
+    );
+    eprintln!("regen valid/06-timing-latency.json (new)");
+    valid_names.push("06-timing-latency.json".to_string());
 
     // 3. Invalid-semantic fixtures: bump; recompute the semantic identity
     //    EXCEPT for the fixture whose violation IS the identity. Each keeps
@@ -357,6 +504,25 @@ pub fn regen_corpus(dir: &Path) {
                 "slew": "stable",
             }]);
         }),
+        ("23-kind-not-registered.json", |d| {
+            // The residual kind (and its comparator's classifier) is not a
+            // REGISTERED protocol kind (FRF/KIND/v1): `bogus` passes the
+            // identifier grammar, so the registration rule is the ONLY
+            // violation (classifier, kind, and token are internally
+            // consistent with each other).
+            let axis = as_str(&d["residuals"][0]["axis"]);
+            for c in d["comparator_semantics"]
+                .as_array_mut()
+                .unwrap_or(&mut Vec::new())
+            {
+                if as_str(&c["id"]) == axis {
+                    c["residual_classifier"] = json!("bogus");
+                }
+            }
+            d["residuals"][0]["kind"] = json!("bogus");
+            d["endoduction"]["tokens"][0]["token"] =
+                json!("bogus/diagnostic-routing/first-line-token-change/open");
+        }),
     ];
     for (name, mutate) in new_fixtures {
         let mut doc = base.clone();
@@ -365,6 +531,21 @@ pub fn regen_corpus(dir: &Path) {
         write(dir, &format!("invalid-semantic/{name}"), &canonical(&doc));
         eprintln!("regen invalid-semantic/{name} (new)");
     }
+
+    // 4b. The timing-axis kind discipline: a residual on the external
+    //     `timing.latency` axis whose kind disagrees with its comparator's
+    //     declared classifier (`latency` vs `text`) — inconsistent evidence.
+    let mut timing_mismatch = timing_fixture(&golden);
+    bump(&mut timing_mismatch, true, true);
+    timing_mismatch["residuals"][0]["kind"] = json!("text");
+    timing_mismatch["endoduction"]["tokens"][0]["token"] =
+        json!("text/timing.latency-divergence/observed/open");
+    write(
+        dir,
+        "invalid-semantic/24-kind-vs-classifier-latency.json",
+        &canonical(&timing_mismatch),
+    );
+    eprintln!("regen invalid-semantic/24-kind-vs-classifier-latency.json (new)");
 
     // 5. Invalid fixtures: bump so the INTENDED violation is the refusal
     //    reason (a fixture that fails only because it predates the v10

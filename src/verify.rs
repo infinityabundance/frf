@@ -2151,6 +2151,23 @@ impl Receipt {
                     ),
                 );
             }
+            // The classifier NAMES a residual kind: it must be a registered
+            // protocol kind (FRF/KIND/v1) — a comparator that classifies
+            // into an unregistered kind is the same protocol hazard as a
+            // residual carrying one.
+            if !c.residual_classifier.is_empty() {
+                if let Ok(classifier) = ResidualKind::parse(&c.residual_classifier) {
+                    if classifier.schema().is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "comparator semantic {}: residual classifier {:?} is not a registered protocol kind",
+                                c.id, c.residual_classifier
+                            ),
+                        );
+                    }
+                }
+            }
             match crate::semantics::comparator_spec_hash_rederives(c) {
                 Ok(true) => {}
                 Ok(false) => fail(
@@ -2343,6 +2360,23 @@ impl Receipt {
                     &mut violations,
                     format!("residual {} has invalid kind {:?}", r.id, r.kind.as_str()),
                 );
+            }
+            // The kind must be a REGISTERED protocol kind (FRF/KIND/v1): an
+            // unregistered kind is a protocol this engine does not know, and
+            // evidence classified into it cannot be interpreted — fail
+            // closed. The registered vocabulary is pinned in the conformance
+            // corpus (`conformance/kinds/`).
+            if let Ok(kind) = ResidualKind::parse(r.kind.as_str()) {
+                if kind.schema().is_none() {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "residual {} kind {:?} is not a registered protocol kind",
+                            r.id,
+                            r.kind.as_str()
+                        ),
+                    );
+                }
             }
             // The residual kind is the axis's comparator's residual
             // classifier — the classifier is part of the question, so a

@@ -7,6 +7,13 @@ import (
 	"frf-verifier-go/jcs"
 )
 
+// The registered residual-kind vocabulary (FRF/KIND/v1) — the Go mirror of
+// the reference engine's KIND_SCHEMAS table. The records themselves are
+// pinned in the conformance corpus (conformance/kinds/); every residual kind
+// in evidence is checked against this vocabulary (fail closed: an
+// unregistered kind is a protocol this implementation does not know).
+var registeredKinds = []string{"exit", "text", "wire", "latency"}
+
 // The structural + semantic conformance rules — the Go ports of the
 // document-level rules in the Rust engine's semantic validator and the xtask
 // verifier. Written by hand from the protocol documents; no generated
@@ -401,6 +408,11 @@ func semanticViolations(rec jcs.Value) []string {
 		if err == nil && expected != str(co, "specification_hash") {
 			push(&v, fmt.Sprintf("comparator semantic %s: the specification_hash does not rederive from its own fields", id))
 		}
+		// The classifier NAMES a residual kind: it must be a registered
+		// protocol kind (FRF/KIND/v1).
+		if !containsString(registeredKinds, str(co, "residual_classifier")) {
+			push(&v, fmt.Sprintf("comparator semantic %s: residual classifier %v is not a registered protocol kind", id, str(co, "residual_classifier")))
+		}
 		semantics = append(semantics, co)
 	}
 	for _, ob := range arr(recVal(o, "observables")) {
@@ -501,6 +513,9 @@ func semanticViolations(rec jcs.Value) []string {
 		}
 		if classifier != str(ro, "kind") {
 			push(&v, fmt.Sprintf("residual %s kind %v is inconsistent with the %s axis's residual classifier %v", rid, str(ro, "kind"), axis, classifier))
+		}
+		if !containsString(registeredKinds, str(ro, "kind")) {
+			push(&v, fmt.Sprintf("residual %s kind %v is not a registered protocol kind", rid, str(ro, "kind")))
 		}
 		d := str(ro, "disposition")
 		switch d {

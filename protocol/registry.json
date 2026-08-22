@@ -317,6 +317,11 @@
       "status": "active"
     },
     {
+      "domain": "FRF/KIND/v1",
+      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary",
+      "status": "active"
+    },
+    {
       "domain": "FRF/SERIES/v2",
       "meaning": "ExecutionSeries snapshot identity",
       "status": "active"
@@ -642,6 +647,11 @@
     {
       "id": "frf-token-v1",
       "status": "active"
+    },
+    {
+      "id": "frf-kind-v1",
+      "status": "active",
+      "scope": "residual-kind protocol record (conformance/kinds/)"
     },
     {
       "id": "frf-ci-status-v1",

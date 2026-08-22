@@ -24,7 +24,7 @@
 
 use frf::canon;
 use frf::host;
-use frf::model::Receipt;
+use frf::model::{Receipt, KIND_SCHEMAS};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -359,6 +359,108 @@ fn semantic_invalid_fixtures_must_be_refused() {
         count >= 8,
         "the semantic corpus must carry at least eight fixtures"
     );
+}
+
+#[test]
+fn the_kind_records_are_pinned_and_their_identities_rederive() {
+    // The residual-kind vocabulary (FRF/KIND/v1) is a protocol object: every
+    // registered kind record in `conformance/kinds/` must canonicalize to the
+    // pinned bytes, hash to the pinned digest, and carry an `identity` that
+    // rederives from the record's own semantic fields.
+    let mut count = 0;
+    for entry in fs::read_dir(dir("conformance/kinds")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let source = fs::read_to_string(&path).unwrap();
+        let value: Value = canon::parse_strict(source.as_bytes())
+            .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
+        let canonical =
+            canon::canonical(&value).unwrap_or_else(|e| panic!("{name}: cannot canonicalize: {e}"));
+        let expected = fs::read_to_string(dir("conformance/canonical/kinds").join(&name))
+            .unwrap_or_else(|_| panic!("{name}: missing canonical/kinds/{name}"));
+        assert_eq!(
+            canonical, expected,
+            "{name}: canonical bytes drifted from the pinned corpus"
+        );
+        let digest = host::sha256_bytes(canonical.as_bytes());
+        let stem = name.strip_suffix(".json").unwrap_or(&name);
+        let pinned =
+            fs::read_to_string(dir("conformance/hashes").join(format!("{stem}.kind.sha256")))
+                .unwrap_or_else(|_| panic!("{name}: missing hashes/{stem}.kind.sha256"));
+        assert_eq!(digest, pinned.trim(), "{name}: digest drifted");
+        // The identity rederives from the record's own fields.
+        assert_eq!(
+            frf::semantics::kind_identity_parts(
+                value["id"].as_str().unwrap_or_default(),
+                value["meaning"].as_str().unwrap_or_default(),
+                value["surface_grammar"].as_str().unwrap_or_default(),
+                value["comparator_family"].as_str().unwrap_or_default(),
+            )
+            .unwrap(),
+            value["identity"].as_str().unwrap_or_default(),
+            "{name}: the identity does not rederive from its own fields"
+        );
+        // And the engine's own registry table declares exactly this record.
+        let id = value["id"].as_str().unwrap_or_default();
+        let engine = KIND_SCHEMAS
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{name}: kind not in the engine's KIND_SCHEMAS"));
+        assert_eq!(
+            engine.id,
+            value["id"].as_str().unwrap_or_default(),
+            "{name}"
+        );
+        assert_eq!(
+            engine.meaning,
+            value["meaning"].as_str().unwrap_or_default(),
+            "{name}: the pinned record drifts from the engine's registered vocabulary"
+        );
+        assert_eq!(
+            engine.surface_grammar,
+            value["surface_grammar"].as_str().unwrap_or_default(),
+            "{name}: the pinned record drifts from the engine's registered vocabulary"
+        );
+        assert_eq!(
+            engine.comparator_family,
+            value["comparator_family"].as_str().unwrap_or_default(),
+            "{name}: the pinned record drifts from the engine's registered vocabulary"
+        );
+        count += 1;
+    }
+    assert!(count >= 4, "the kind corpus must carry the full vocabulary");
+}
+
+#[test]
+fn every_kind_used_in_valid_fixtures_is_registered() {
+    // The vocabulary rule, end to end: a valid fixture's residuals and its
+    // comparators' classifiers must name REGISTERED kinds (the reference
+    // engine's KIND_SCHEMAS — the protocol vocabulary the corpus pins).
+    for entry in fs::read_dir(dir("conformance/valid")).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let source = fs::read_to_string(&path).unwrap();
+        let value: Value = canon::parse_strict(source.as_bytes())
+            .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
+        for c in value["comparator_semantics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+        {
+            let classifier = c["residual_classifier"].as_str().unwrap_or_default();
+            assert!(
+                frf::model::KIND_SCHEMAS.iter().any(|s| s.id == classifier),
+                "{name}: comparator classifier {classifier:?} is not a registered kind"
+            );
+        }
+        for r in value["residuals"].as_array().cloned().unwrap_or_default() {
+            let kind = r["kind"].as_str().unwrap_or_default();
+            assert!(
+                frf::model::KIND_SCHEMAS.iter().any(|s| s.id == kind),
+                "{name}: residual kind {kind:?} is not a registered kind"
+            );
+        }
+    }
 }
 
 #[test]

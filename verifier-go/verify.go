@@ -941,5 +941,33 @@ func verifyCorpus(dir string) int {
 		}
 		count++
 	}
+	// The kind protocol records (FRF/KIND/v1): each registered kind is pinned
+	// byte-for-byte, and its derived identity rederives from the record's own
+	// semantic fields (an independent re-implementation of the identity).
+	for _, name := range sortedNames(dir + "/kinds") {
+		path := dir + "/kinds/" + name
+		v := loadEvidenceNoCanonical(path)
+		canonical, err := jcs.Canonical(v)
+		if err != nil {
+			fail("kinds/%s: cannot canonicalize: %v", name, err)
+		}
+		expected := string(readFile(dir + "/canonical/kinds/" + name))
+		if canonical != expected {
+			fail("kinds/%s: canonical bytes drifted", name)
+		}
+		digest := jcs.Sha256Hex([]byte(canonical))
+		stem := strings.TrimSuffix(name, ".json")
+		pinned := strings.TrimSpace(string(readFile(dir + "/hashes/" + stem + ".kind.sha256")))
+		if digest != pinned {
+			fail("kinds/%s: digest drifted", name)
+		}
+		ko := obj(v)
+		id, meaning := str(ko, "id"), str(ko, "meaning")
+		grammar, family := str(ko, "surface_grammar"), str(ko, "comparator_family")
+		if ident, err := kindIdentity(id, meaning, grammar, family); err != nil || ident != str(ko, "identity") {
+			fail("kinds/%s: the identity does not rederive from its own fields", name)
+		}
+		count++
+	}
 	return count
 }
