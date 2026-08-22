@@ -319,34 +319,90 @@ fn side(doc: &Value) -> Value {
     })
 }
 
-/// FRF/RUN/v1 over the capture's recorded fields — the name is a claim until
-/// recomputed.
-pub fn run_identity(cap: &Value, residuals: &[Value]) -> String {
+/// The residual projection shared by the observation and run identities.
+fn residual_projection(r: &Value) -> Value {
+    json!({
+        "kind": s(&r["kind"]),
+        "raw_reference": s(&r["raw_reference"]),
+        "raw_candidate": s(&r["raw_candidate"]),
+    })
+}
+
+/// The implementation projection shared by the execution identity: the exact
+/// program that served one axis/route, bound by its implementation hash.
+fn implementation_projection(doc: &Value) -> Value {
+    json!({
+        "id": s(&doc["id"]),
+        "implementation_hash": s(&doc["implementation_hash"]),
+    })
+}
+
+/// FRF/OBSERVATION/v1 over the capture's recorded fields: what was observed
+/// — the question, the inputs, the effective environment, and the answer.
+pub fn observation_identity(cap: &Value, residuals: &[Value]) -> String {
     let doc = json!({
         "court": s(&cap["court"]),
+        "court_semantic_identity": s(&cap["court_semantic_identity"]),
         "authority": s(&cap["authority"]),
-        "authority_interpreter": interpreter_hash(&cap["authority_artifact"]),
         "candidate_sha256": s(&cap["candidate_artifact"]["sha256"]),
-        "candidate_interpreter": interpreter_hash(&cap["candidate_artifact"]),
         "fixture_sha256": s(&cap["fixture_sha256"]),
         "arguments": cap["arguments"],
         "environment_digest": s(&cap["environment"]["digest"]),
-        "runner_hash": s(&cap["provenance"]["runner"]["frf_executable_hash"]),
-        "court_semantic_identity": s(&cap["court_semantic_identity"]),
         "reference": side(&cap["reference"]),
         "candidate": side(&cap["candidate"]),
-        "residuals": residuals
-            .iter()
-            .map(|r| {
-                json!({
-                    "kind": s(&r["kind"]),
-                    "raw_reference": s(&r["raw_reference"]),
-                    "raw_candidate": s(&r["raw_candidate"]),
-                })
-            })
-            .collect::<Vec<_>>(),
+        "residuals": residuals.iter().map(residual_projection).collect::<Vec<_>>(),
     });
-    preimage("FRF/RUN/v1", &doc)
+    preimage("FRF/OBSERVATION/v1", &doc)
+}
+
+/// FRF/EXECUTION/v1 over the capture's recorded fields: under exactly what
+/// machinery and contract the observation was made — the execution profile,
+/// the effective capture bounds (including FRF_EXEC_* overrides), the runner
+/// executable, the side interpreter chains, and every comparator/normalizer/
+/// adapter/minimizer implementation.
+pub fn execution_identity(cap: &Value) -> String {
+    let bounds = &cap["capture_bounds"];
+    let opt = |k: &str| bounds.get(k).cloned().unwrap_or(Value::Null);
+    let prov = &cap["provenance"];
+    let impls = |k: &str| {
+        prov.get(k)
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().map(implementation_projection).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let doc = json!({
+        "execution_profile": s(&cap["execution_profile"]),
+        "capture_bounds": {
+            "timeout_ms": s(&bounds["timeout_ms"]),
+            "max_stream_bytes": s(&bounds["max_stream_bytes"]),
+            "rlimit_as_mb": s(&bounds["rlimit_as_mb"]),
+            "rlimit_cpu_s": s(&bounds["rlimit_cpu_s"]),
+            "rlimit_nofile": s(&bounds["rlimit_nofile"]),
+            "rlimit_nproc": s(&bounds["rlimit_nproc"]),
+            "cgroup_pids_max": opt("cgroup_pids_max"),
+            "cgroup_memory_max": opt("cgroup_memory_max"),
+            "cgroup_cpu_max": opt("cgroup_cpu_max"),
+        },
+        "runner_hash": s(&prov["runner"]["frf_executable_hash"]),
+        "authority_interpreter": interpreter_hash(&cap["authority_artifact"]),
+        "candidate_interpreter": interpreter_hash(&cap["candidate_artifact"]),
+        "comparator_implementations": impls("comparator_implementations"),
+        "normalizer_implementations": impls("normalizer_implementations"),
+        "adapter_implementations": impls("adapter_implementations"),
+        "minimizer_implementations": impls("minimizer_implementations"),
+    });
+    preimage("FRF/EXECUTION/v1", &doc)
+}
+
+/// FRF/RUN/v2 over the capture's recorded fields — the composition of the
+/// observation identity and the execution identity; the name is a claim until
+/// recomputed.
+pub fn run_identity(cap: &Value, residuals: &[Value]) -> String {
+    let doc = json!({
+        "observation_identity": observation_identity(cap, residuals),
+        "execution_identity": execution_identity(cap),
+    });
+    preimage("FRF/RUN/v2", &doc)
 }
 
 /// FRF/DISPOSITION-EVENT/v1 over the event's own fields.

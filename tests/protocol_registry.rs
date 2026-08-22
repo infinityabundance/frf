@@ -84,7 +84,7 @@ fn scan_schema_tokens(text: &str) -> BTreeSet<String> {
 /// Scan for `FRF/<NAME>/v<N>` domain tags. The lexical scan accepts the
 /// whole token shape (`FRF/` + uppercase/hyphen names + `/v` + digits) and
 /// then VALIDATES the shape — a scanner that stops at the first lowercase
-/// character would never recognize an ordinary domain tag like `FRF/RUN/v1`
+/// character would never recognize an ordinary domain tag like `FRF/RUN/v2`
 /// (the `v` is lowercase), and a tag whose name part still contains a `/`
 /// after `rsplit_once('/')` is likewise not a domain tag. Both failure
 /// modes made the old scan vacuously pass; the unit tests below pin the
@@ -226,15 +226,20 @@ fn the_domain_scanner_recognizes_ordinary_domain_tags() {
     // check because the name still contained a `/`. It could not recognize
     // an ordinary domain tag at all, so the registry test passed vacuously.
     let cases: &[(&str, &[&str])] = &[
-        ("x FRF/RUN/v1 y", &["FRF/RUN/v1"]),
+        ("x FRF/RUN/v2 y", &["FRF/RUN/v2"]),
         (
             "FRF/CAPTURE-ADAPTER-RESULT/v1",
             &["FRF/CAPTURE-ADAPTER-RESULT/v1"],
         ),
         ("FRF/COURT/v2", &["FRF/COURT/v2"]),
         (
-            "FRF/RUN/v1 and FRF/COURT/v2 and FRF/REDUCTION/v3",
-            &["FRF/COURT/v2", "FRF/REDUCTION/v3", "FRF/RUN/v1"],
+            "FRF/RUN/v2 and FRF/OBSERVATION/v1 and FRF/EXECUTION/v1 and FRF/REDUCTION/v3",
+            &[
+                "FRF/EXECUTION/v1",
+                "FRF/OBSERVATION/v1",
+                "FRF/REDUCTION/v3",
+                "FRF/RUN/v2",
+            ],
         ),
         // Invalid shapes must not be recognized.
         ("FRF/run/v1", &[]),
@@ -251,7 +256,7 @@ fn the_domain_scanner_recognizes_ordinary_domain_tags() {
         );
     }
     // The specific regression: an ordinary tag must be recognized.
-    assert!(scan_domain_tokens("FRF/RUN/v1").contains("FRF/RUN/v1"));
+    assert!(scan_domain_tokens("FRF/RUN/v2").contains("FRF/RUN/v2"));
     assert!(scan_domain_tokens("FRF/CAPTURE-ADAPTER-RESULT/v1")
         .contains("FRF/CAPTURE-ADAPTER-RESULT/v1"));
 }

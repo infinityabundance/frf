@@ -57,8 +57,8 @@ rederives cross-language from the captured files alone. The raw files are
 copied under `captures/<run>/produced/<side>/` and rehashed by
 verification.
 
-The produced trees enter the RUN IDENTITY (the side capture is part of the
-`FRF/RUN/v1` preimage): a run binds what its sides BUILT.
+The produced trees enter the OBSERVATION IDENTITY (the side capture is part
+of the `FRF/OBSERVATION/v1` preimage): a run binds what its sides BUILT.
 
 ## The comparator
 

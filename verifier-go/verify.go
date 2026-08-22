@@ -152,6 +152,22 @@ func verifyBundle(bundle string) ClaimIR {
 	if "run-"+str(c, "court")+"-"+expectedRun != run {
 		fail("capture %s: the run identity does not rederive (recorded %s, recomputed run-%s-%s)", run, run, str(c, "court"), expectedRun)
 	}
+	// The recorded observation/execution identities must rederive from the
+	// recorded fields (the run identity commits each of them separately).
+	obs, err := observationIdentity(c, residuals)
+	if err != nil {
+		fail("capture %s: cannot rederive observation identity: %v", run, err)
+	}
+	if obs != str(c, "observation_identity") {
+		fail("capture %s: the recorded observation_identity does not rederive", run)
+	}
+	exec, err := executionIdentity(c)
+	if err != nil {
+		fail("capture %s: cannot rederive execution identity: %v", run, err)
+	}
+	if exec != str(c, "execution_identity") {
+		fail("capture %s: the recorded execution_identity does not rederive", run)
+	}
 	// Objects are content-addressed.
 	objects := arr(recVal(c, "evidence_refs"))
 	for _, r := range objects {

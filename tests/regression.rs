@@ -1269,6 +1269,60 @@ fn harness_invalidates_the_entire_run_evidence() {
     );
 }
 
+/// The FRF/RUN/v2 identity commits the EXECUTION CONTRACT, not merely the
+/// outputs: the same court with the same observable results under a
+/// different FRF_EXEC_* override is a DIFFERENT bounded observation — a
+/// different run identity — while the observation identity (what was
+/// observed) stays equal. An override cannot silently share a run id with
+/// the reference contract.
+#[test]
+fn run_identity_commits_frf_exec_overrides_end_to_end() {
+    let work = Workdir::new("run-identity-commits-contract");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    let default = run_court(&work);
+    let overridden = run_court_env(&work, &[("FRF_EXEC_TIMEOUT_MS", "30000")]);
+    assert_ne!(
+        default, overridden,
+        "identical outputs under a different execution contract must not share a run id"
+    );
+
+    let read_capture = |run: &str| -> serde_json::Value {
+        serde_json::from_str(
+            &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+        )
+        .unwrap()
+    };
+    let a = read_capture(&default);
+    let b = read_capture(&overridden);
+
+    // Same question, inputs, environment, and observed answer: the same
+    // observation identity.
+    assert_eq!(a["observation_identity"], b["observation_identity"]);
+    // Different effective bounds: a different execution identity.
+    assert_ne!(a["execution_identity"], b["execution_identity"]);
+    assert_eq!(a["capture_bounds"]["timeout_ms"], "60000");
+    assert_eq!(b["capture_bounds"]["timeout_ms"], "30000");
+    // The recorded identities are real: rehashing through the verified
+    // loader (frf replay) must accept the default run and refuse nothing
+    // (replay rederives the identity from the recorded fields).
+    let out = frf(
+        &work,
+        &["--root", ROOT, "replay", &default, "--policy", "exact"],
+    );
+    assert_success(&out, "replay the default run (identity rederives)");
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "replay", &overridden, "--policy", "exact"],
+        &[("FRF_EXEC_TIMEOUT_MS", "30000")],
+    );
+    assert_success(
+        &out,
+        "replay the overridden run under its own contract (identity rederives)",
+    );
+}
+
 #[test]
 fn execution_timeout_kills_and_writes_nothing() {
     let work = Workdir::new("timeout");

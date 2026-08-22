@@ -47,8 +47,17 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// streams and the normalizer/capture-adapter/minimizer implementations
 /// bound at observation time. v11: the recorded `court_semantic_identity`
 /// is the FRF/COURT/v2 formula — the question now covers the normalizer
-/// and capture-adapter SEMANTICS, not only the comparator relations.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v11";
+/// and capture-adapter SEMANTICS, not only the comparator relations. v12:
+/// the run identity is the FRF/RUN/v2 composition of the OBSERVATION
+/// identity (FRF/OBSERVATION/v1 — what was observed) and the EXECUTION
+/// identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it
+/// was observed: the execution profile, the EFFECTIVE capture bounds
+/// including FRF_EXEC_* overrides, the runner executable, the side
+/// interpreter chains, and every comparator/normalizer/adapter/minimizer
+/// implementation). The capture records both identities, and the run id
+/// commits the contract — two executions that coincide on outputs but
+/// differ on bounds or profile are different bounded observations.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v12";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -1904,6 +1913,19 @@ pub struct CaptureManifest {
     /// The capture bounds that actually applied (the profile's defaults or
     /// the overrides in force).
     pub capture_bounds: CaptureBounds,
+    /// The observation identity (`FRF/OBSERVATION/v1`): what was observed —
+    /// the semantic question, inputs, effective environment, and the
+    /// observed answer. Rederived from the recorded fields by every
+    /// verifier; the run identity commits it.
+    pub observation_identity: String,
+    /// The execution identity (`FRF/EXECUTION/v1`): under exactly what
+    /// machinery and contract the observation was made — the execution
+    /// profile, the effective capture bounds (including `FRF_EXEC_*`
+    /// overrides), the runner executable, the side interpreter chains, and
+    /// every comparator/normalizer/adapter/minimizer implementation.
+    /// Rederived from the recorded fields by every verifier; the run
+    /// identity commits it.
+    pub execution_identity: String,
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,

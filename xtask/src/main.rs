@@ -1003,6 +1003,14 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     if expected_run != run {
         panic!("capture {run}: the recorded fields do not hash to the run identity");
     }
+    // The recorded observation/execution identities must rederive from the
+    // recorded fields (the run identity commits each of them separately).
+    if observation_identity(&cap, &residuals) != as_str(&cap["observation_identity"]) {
+        panic!("capture {run}: the recorded observation_identity does not rederive");
+    }
+    if execution_identity(&cap) != as_str(&cap["execution_identity"]) {
+        panic!("capture {run}: the recorded execution_identity does not rederive");
+    }
     for side in ["reference", "candidate"] {
         let s = &cap[side];
         let stdout = read(&safe_rel(bundle, &format!("captures/{run}/{side}.stdout")));

@@ -5,7 +5,9 @@
 //! delimiter-assembled strings (`|`, newlines) anywhere: a JSON document
 //! cannot be ambiguous about field boundaries the way a concatenation can.
 //!
-//!   FRF/RUN/v1                 run identity (per court run)
+//!   FRF/RUN/v2                 run (capture) identity = composition of
+//!   FRF/OBSERVATION/v1         observation identity (what was observed)
+//!   FRF/EXECUTION/v1           execution identity (under what contract)
 //!   FRF/COURT/v2               court semantic identity (the question)
 //!   FRF/COMPARATOR-SPEC/v2     comparator relation specification
 //!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
@@ -305,11 +307,23 @@ pub fn court_semantic_identity_from_receipt(rec: &Receipt) -> Result<String> {
     .and_then(|doc| hash_preimage("FRF/COURT/v2", &doc))
 }
 
-/// Every input that defines one court run's identity. The preimage is a
-/// domain-separated canonical JSON document (`FRF/RUN/v1`); the identity is
-/// its SHA-256. Built at court time by the runner and REDERIVED by replay,
-/// receipt verification, and the verification suite from the capture's own
-/// recorded fields — the name is a claim until it is recomputed.
+/// Every input that defines one court run's identity. The identity is the
+/// pair of the run's OBSERVATION identity (what was observed — the question
+/// and the answer) and its EXECUTION identity (under exactly what machinery
+/// and contract it was observed), composed into a domain-separated canonical
+/// JSON document (`FRF/RUN/v2`); the digest is its SHA-256. Built at court
+/// time by the runner and REDERIVED by replay, receipt verification, and the
+/// verification suite from the capture's own recorded fields — the name is a
+/// claim until it is recomputed.
+///
+/// The split is deliberate: a repeated execution can legitimately share an
+/// observation identity (same program, same input, same environment, same
+/// output) while the execution identity remains separately addressable — the
+/// same program observed under `frf-exec-linux-v1` with a 60s timeout is
+/// NOT the same bounded observation as under `frf-exec-linux-v2` with a
+/// cgroup envelope, even if the outputs coincide, and an `FRF_EXEC_*`
+/// override changes the observation's contract even when the process
+/// happened to terminate well within both bounds.
 pub struct RunPreimage<'a> {
     pub court: &'a str,
     pub authority: &'a str,
@@ -324,59 +338,159 @@ pub struct RunPreimage<'a> {
     pub reference: &'a SideCapture,
     pub candidate: &'a SideCapture,
     pub residuals: &'a [ResidualRecord],
+    /// The harness contract the observation was made under: the execution
+    /// profile id and the EFFECTIVE capture bounds (the profile's defaults
+    /// or the overrides in force) — the run identity commits the contract,
+    /// not merely the outputs.
+    pub execution_profile: &'a str,
+    pub capture_bounds: &'a CaptureBounds,
+    /// The exact implementations that produced the observation: the
+    /// comparator, normalizer, capture-adapter, and minimizer programs that
+    /// served each axis (in-binary implementations hash to the runner
+    /// executable; external ones carry their own implementation hash).
+    pub comparator_implementations: &'a [ComparatorImplementation],
+    pub normalizer_implementations: &'a [NormalizerImplementation],
+    pub adapter_implementations: &'a [CaptureAdapterImplementation],
+    pub minimizer_implementations: &'a [MinimizerImplementation],
+}
+
+/// The side projection shared by the observation and run identities: the
+/// OBSERVED surface (exit class, stream hashes + first lines, produced
+/// artifact tree, adapted payload) — never raw bytes.
+fn side_projection(s: &SideCapture) -> serde_json::Value {
+    json!({
+        "exit": s.exit,
+        "stdout_sha256": s.stdout_sha256,
+        "stderr_sha256": s.stderr_sha256,
+        "stdout_first_line": s.stdout_first_line,
+        "stderr_first_line": s.stderr_first_line,
+        "produced": s.produced.as_ref().map(|p| json!({
+            "schema_version": p.schema_version,
+            "manifest_sha256": p.manifest_sha256,
+            "files": p.files.iter().map(|f| json!({
+                "path": f.path,
+                "sha256": f.sha256,
+                "executable": f.executable,
+            })).collect::<Vec<_>>(),
+        })),
+        "adapted": s.adapted.as_ref().map(|a| json!({
+            "format": a.format,
+            "payload_base64": a.payload_base64,
+            "content_sha256": a.content_sha256,
+        })),
+    })
+}
+
+/// The residual projection shared by the observation and run identities: the
+/// recorded disagreements (kind + raw projections), not the residual ids — a
+/// residual's identity as evidence is its divergence, not its storage label.
+fn residual_projection(r: &ResidualRecord) -> serde_json::Value {
+    json!({
+        "kind": r.kind.as_str(),
+        "raw_reference": r.raw_reference,
+        "raw_candidate": r.raw_candidate,
+    })
+}
+
+/// The observation identity: WHAT was observed — the semantic question and
+/// the answer. `FRF/OBSERVATION/v1` over the domain-separated canonical
+/// document; the digest is its SHA-256. Two observations with the same
+/// question, inputs, effective environment, and outputs share this identity
+/// regardless of which harness observed them.
+pub fn observation_identity(p: &RunPreimage) -> Result<String> {
+    let doc = json!({
+        "court": p.court,
+        "court_semantic_identity": p.court_semantic_identity,
+        "authority": p.authority,
+        "candidate_sha256": p.candidate_sha256,
+        "fixture_sha256": p.fixture_sha256,
+        "arguments": p.arguments,
+        "environment_digest": p.environment_digest,
+        "reference": side_projection(p.reference),
+        "candidate": side_projection(p.candidate),
+        "residuals": p.residuals.iter().map(residual_projection).collect::<Vec<_>>(),
+    });
+    hash_preimage("FRF/OBSERVATION/v1", &doc)
+}
+
+/// The implementation projection shared by the execution identity: the
+/// exact program that served one axis/route, bound by its implementation
+/// hash (in-binary implementations hash to the runner executable; external
+/// ones carry their own).
+fn implementation_projection(id: &str, implementation_hash: &str) -> serde_json::Value {
+    json!({
+        "id": id,
+        "implementation_hash": implementation_hash,
+    })
+}
+
+/// The execution identity: under EXACTLY what machinery and contract the
+/// observation was made. `FRF/EXECUTION/v1` over the domain-separated
+/// canonical document; the digest is its SHA-256. The execution profile, the
+/// effective capture bounds (including `FRF_EXEC_*` overrides), the runner
+/// executable, the interpreter chain of each side, and every comparator /
+/// normalizer / adapter / minimizer implementation are all part of it — an
+/// observation is made under a declared harness contract, and its identity
+/// commits that contract.
+pub fn execution_identity(p: &RunPreimage) -> Result<String> {
+    let b = p.capture_bounds;
+    let doc = json!({
+        "execution_profile": p.execution_profile,
+        "capture_bounds": {
+            "timeout_ms": b.timeout_ms,
+            "max_stream_bytes": b.max_stream_bytes,
+            "rlimit_as_mb": b.rlimit_as_mb,
+            "rlimit_cpu_s": b.rlimit_cpu_s,
+            "rlimit_nofile": b.rlimit_nofile,
+            "rlimit_nproc": b.rlimit_nproc,
+            "cgroup_pids_max": b.cgroup_pids_max,
+            "cgroup_memory_max": b.cgroup_memory_max,
+            "cgroup_cpu_max": b.cgroup_cpu_max,
+        },
+        "runner_hash": p.runner_hash,
+        "authority_interpreter": p.authority_interpreter,
+        "candidate_interpreter": p.candidate_interpreter,
+        "comparator_implementations": p
+            .comparator_implementations
+            .iter()
+            .map(|i| implementation_projection(&i.id, &i.implementation_hash))
+            .collect::<Vec<_>>(),
+        "normalizer_implementations": p
+            .normalizer_implementations
+            .iter()
+            .map(|i| implementation_projection(&i.id, &i.implementation_hash))
+            .collect::<Vec<_>>(),
+        "adapter_implementations": p
+            .adapter_implementations
+            .iter()
+            .map(|i| implementation_projection(&i.id, &i.implementation_hash))
+            .collect::<Vec<_>>(),
+        "minimizer_implementations": p
+            .minimizer_implementations
+            .iter()
+            .map(|i| implementation_projection(&i.id, &i.implementation_hash))
+            .collect::<Vec<_>>(),
+    });
+    hash_preimage("FRF/EXECUTION/v1", &doc)
 }
 
 /// The one run-identity function, shared by `court run`, replay, receipt
 /// verification, and the verification suite. No duplicate implementation:
 /// a capture whose recorded fields hash to a different id is refused.
+///
+/// `FRF/RUN/v2` composes the observation identity and the execution identity
+/// (each separately rederivable and separately addressable): the capture is
+/// the complete content-addressed evidence object, and its identity commits
+/// BOTH what was observed and under exactly what machinery/contract it was
+/// observed.
 pub fn run_identity(p: &RunPreimage) -> Result<String> {
-    let side = |s: &SideCapture| {
-        json!({
-            "exit": s.exit,
-            "stdout_sha256": s.stdout_sha256,
-            "stderr_sha256": s.stderr_sha256,
-            "stdout_first_line": s.stdout_first_line,
-            "stderr_first_line": s.stderr_first_line,
-            "produced": s.produced.as_ref().map(|p| json!({
-                "schema_version": p.schema_version,
-                "manifest_sha256": p.manifest_sha256,
-                "files": p.files.iter().map(|f| json!({
-                    "path": f.path,
-                    "sha256": f.sha256,
-                    "executable": f.executable,
-                })).collect::<Vec<_>>(),
-            })),
-            "adapted": s.adapted.as_ref().map(|a| json!({
-                "format": a.format,
-                "payload_base64": a.payload_base64,
-                "content_sha256": a.content_sha256,
-            })),
-        })
-    };
+    let observation = observation_identity(p)?;
+    let execution = execution_identity(p)?;
     let doc = json!({
-        "court": p.court,
-        "authority": p.authority,
-        "authority_interpreter": p.authority_interpreter,
-        "candidate_sha256": p.candidate_sha256,
-        "candidate_interpreter": p.candidate_interpreter,
-        "fixture_sha256": p.fixture_sha256,
-        "arguments": p.arguments,
-        "environment_digest": p.environment_digest,
-        "runner_hash": p.runner_hash,
-        "court_semantic_identity": p.court_semantic_identity,
-        "reference": side(p.reference),
-        "candidate": side(p.candidate),
-        "residuals": p
-            .residuals
-            .iter()
-            .map(|r| json!({
-                "kind": r.kind.as_str(),
-                "raw_reference": r.raw_reference,
-                "raw_candidate": r.raw_candidate,
-            }))
-            .collect::<Vec<_>>(),
+        "observation_identity": observation,
+        "execution_identity": execution,
     });
-    hash_preimage("FRF/RUN/v1", &doc)
+    hash_preimage("FRF/RUN/v2", &doc)
 }
 
 /// The residual fingerprint: stable across repeated executions and (with the
@@ -1339,6 +1453,115 @@ mod tests {
     }
 
     #[test]
+    fn run_identity_commits_the_execution_contract_but_observation_is_separate() {
+        // The core property of the FRF/RUN/v2 split: two executions that
+        // coincide on outputs under DIFFERENT harness contracts are
+        // different bounded observations (different run identities) yet
+        // share the same observation identity; and two executions that
+        // differ on OUTPUTS under the same contract share the execution
+        // identity.
+        let empty = SideCapture {
+            exit: "0".into(),
+            exit_sha256: "0".repeat(64),
+            stderr_first_line: String::new(),
+            stderr_first_line_sha256: "0".repeat(64),
+            stdout_first_line: String::new(),
+            stdout_first_line_sha256: "0".repeat(64),
+            stdout_sha256: "0".repeat(64),
+            stderr_sha256: "0".repeat(64),
+            produced: None,
+            adapted: None,
+            stdout_bytes: vec![],
+        };
+        let bounds = |timeout: &str, cgroup: Option<&str>| CaptureBounds {
+            timeout_ms: timeout.into(),
+            max_stream_bytes: "16777216".into(),
+            rlimit_as_mb: "2048".into(),
+            rlimit_cpu_s: "30".into(),
+            rlimit_nofile: "1024".into(),
+            rlimit_nproc: "512".into(),
+            cgroup_pids_max: cgroup.map(str::to_string),
+            cgroup_memory_max: None,
+            cgroup_cpu_max: None,
+        };
+        let candidate_sha = "1".repeat(64);
+        let fixture_sha = "2".repeat(64);
+        let env_digest = "3".repeat(64);
+        let runner_hash = "4".repeat(64);
+        let court_sem = "5".repeat(64);
+        // The three identities of one run, computed from a preimage built
+        // and consumed inside the closure (no borrow escapes).
+        let ids = |profile: &str,
+                   timeout: &str,
+                   cgroup: Option<&str>,
+                   side: &SideCapture|
+         -> (String, String, String) {
+            let b = bounds(timeout, cgroup);
+            let pre = RunPreimage {
+                court: "c",
+                authority: "a",
+                authority_interpreter: None,
+                candidate_sha256: &candidate_sha,
+                candidate_interpreter: None,
+                fixture_sha256: &fixture_sha,
+                arguments: &[],
+                environment_digest: &env_digest,
+                runner_hash: &runner_hash,
+                court_semantic_identity: &court_sem,
+                reference: side,
+                candidate: side,
+                residuals: &[],
+                execution_profile: profile,
+                capture_bounds: &b,
+                comparator_implementations: &[],
+                normalizer_implementations: &[],
+                adapter_implementations: &[],
+                minimizer_implementations: &[],
+            };
+            (
+                observation_identity(&pre).unwrap(),
+                execution_identity(&pre).unwrap(),
+                run_identity(&pre).unwrap(),
+            )
+        };
+        let (obs, exec, run) = ids("frf-exec-linux-v1", "60000", None, &empty);
+        let (obs5, exec5, run5) = ids("frf-exec-linux-v1", "5000", None, &empty);
+        // Same outputs under a different TIMEOUT: the same bounded
+        // observation contract must not silently collide.
+        assert_eq!(
+            obs, obs5,
+            "identical outputs + inputs under different bounds share the OBSERVATION identity"
+        );
+        assert_ne!(
+            exec, exec5,
+            "a different timeout is a different EXECUTION identity"
+        );
+        assert_ne!(
+            run, run5,
+            "a different contract is a different RUN identity even with identical outputs"
+        );
+
+        // Same outputs under a different PROFILE (v1 per-process limits vs
+        // v2 cgroup envelope): different execution + run identity.
+        let (obs_v2, _, run_v2) = ids("frf-exec-linux-v2", "60000", Some("64"), &empty);
+        assert_eq!(obs, obs_v2);
+        assert_ne!(run, run_v2);
+
+        // A different observed OUTPUT under the same contract: the same
+        // execution identity, a different observation + run identity.
+        let mut out1 = empty.clone();
+        out1.exit = "1".into();
+        let (obs_out, exec_out, run_out) = ids("frf-exec-linux-v1", "60000", None, &out1);
+        assert_eq!(exec, exec_out);
+        assert_ne!(obs, obs_out);
+        assert_ne!(run, run_out);
+
+        // The run identity is the deterministic composition of the two.
+        let (_, _, run_re) = ids("frf-exec-linux-v1", "60000", None, &empty);
+        assert_eq!(run, run_re);
+    }
+
+    #[test]
     fn diff_names_the_first_differing_dimension() {
         let capture = |spec: CourtSpec, auth_sha: &str| CaptureManifest {
             schema_version: SCHEMA_CAPTURE.into(),
@@ -1402,6 +1625,8 @@ mod tests {
                 cgroup_memory_max: None,
                 cgroup_cpu_max: None,
             },
+            observation_identity: "0".repeat(64),
+            execution_identity: "0".repeat(64),
             reference: SideCapture {
                 exit: "0".into(),
                 exit_sha256: "0".repeat(64),

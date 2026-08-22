@@ -103,7 +103,9 @@ not these tables.
 | minimizer-spec | Meaning of a reduction relation | FRF/MINIMIZER-SPEC/v2 | active |
 | mutation-spec | Meaning of a mutation relation (the defect class a provider proposes) | FRF/MUTATION-SPEC/v1 | active |
 | witness-spec | Meaning of a witness attestation relation | FRF/WITNESS-SPEC/v2 | active |
-| execution | What was actually executed (a run: identity + capture + produced trees) | frf-capture-v11 · FRF/RUN/v1 | active |
+| execution | What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed) | frf-capture-v12 · FRF/RUN/v2 | active |
+| observation-identity | What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them | FRF/OBSERVATION/v1 | active |
+| execution-identity | Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract | FRF/EXECUTION/v1 | active |
 | observation | Raw captured result (side capture + produced-artifact tree) | frf-produced-v1 | active |
 | residual | Preserved disagreement (fingerprinted, lineage-identified) | frf-residual-v1 · FRF/RESIDUAL-FINGERPRINT/v1 | active |
 | residual-lineage | Stable comparison question/surface/feature across revisions and environments | FRF/RESIDUAL-LINEAGE/v1 | active |
@@ -137,7 +139,9 @@ not these tables.
 
 | domain | meaning | status |
 |---|---|---|
-| FRF/RUN/v1 | Run identity preimage | active |
+| FRF/RUN/v2 | Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed | active |
+| FRF/OBSERVATION/v1 | Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer) | active |
+| FRF/EXECUTION/v1 | Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes) | active |
 | FRF/COURT/v2 | Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics) | active |
 | FRF/COMPARATOR-SPEC/v2 | Comparator semantic specification | active |
 | FRF/NORMALIZER-SPEC/v2 | Normalizer semantic specification | active |
@@ -179,7 +183,7 @@ not these tables.
 |---|---|---|
 | frf-claim-v9 | active |  |
 | frf-authority-v1 | active |  |
-| frf-capture-v11 | active |  |
+| frf-capture-v12 | active |  |
 | frf-residual-v1 | active |  |
 | frf-disposition-v2 | active |  |
 | frf-receipt-v17 | active |  |
