@@ -388,6 +388,19 @@ func asStrArray(v jcs.Value) []string {
 	return out
 }
 
+// slicesEqual: two ordered string slices are identical.
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // comparatorSpecHash: FRF/COMPARATOR-SPEC/v2 over {id, relation, extractor,
 // residual_classifier, relation_version}.
 func comparatorSpecHash(id, relation, extractor, classifier, version string) (string, error) {

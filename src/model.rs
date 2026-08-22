@@ -130,7 +130,15 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v17";
 /// claim, and they coexist forever), and the stored prose fields
 /// (`positive`/`non_claims`) are GONE — prose is a renderer output derived
 /// from the verified IR, never stored as authoritative Claim IR.
-pub const SCHEMA_CLAIM: &str = "frf-claim-v8";
+/// v9: the SENSITIVITY MUTATION PROFILE — a sensitivity-backed claim (and
+/// every tier above it) names WHICH mutation families were demonstrated on
+/// each claimed surface: the claim records the required profile it was
+/// compiled under (`--mutation-profile AXIS:FAMILY,…`) and each capability
+/// entry records the DEMONSTRATED operators of its covering challenges, so
+/// `claimed observables(K) ⊆ demonstrated-sensitive observables(C)` is
+/// policy-checkable per family — and still bounded (a demonstrated family is
+/// never a universal-correctness claim).
+pub const SCHEMA_CLAIM: &str = "frf-claim-v9";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -3872,7 +3880,11 @@ pub struct ClaimCandidate {
 /// evidence, never from a boolean. v6: the entry binds the PREMISE RECEIPT
 /// the coverage belongs to (a multi-premise claim's cells can come from
 /// different courts, and each cell's axes must be covered by challenges of
-/// ITS court).
+/// ITS court). v9: the entry ALSO records the DEMONSTRATED MUTATION
+/// PROFILE — the distinct operators of its covering challenges (sorted) —
+/// so the claim names WHICH mutation families the court proved it can see
+/// on that surface, and a verifier re-derives the profile from the named
+/// challenge records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimCapability {
@@ -3880,6 +3892,10 @@ pub struct ClaimCapability {
     pub receipt: String,
     /// The claimed observable axis this capability covers.
     pub axis: String,
+    /// The mutation operators the covering challenges demonstrated on
+    /// `axis` (distinct, sorted; re-derived by verification from the
+    /// challenge records — a hand-edited profile is a tampered claim).
+    pub mutation_profile: Vec<String>,
     /// The challenge records that demonstrated sensitivity on `axis`
     /// (content-addressed; a verifier recomputes `saw_defect` and
     /// `specificity_clean` from each mutant run).
@@ -3964,6 +3980,15 @@ pub struct ClaimRecord {
     /// Claim IR — the admission policy the claim was compiled under
     /// (see [`CLAIM_POLICY_BASELINE`] and friends).
     pub policy: String,
+    /// Claim IR (v9) — the REQUIRED SENSITIVITY MUTATION PROFILE the claim
+    /// was compiled under: `AXIS:FAMILY` pairs (e.g.
+    /// `exit:exit-class`) that MUST be demonstrated on the claimed surface —
+    /// for each entry, the named axis (which the claim must cover) must have
+    /// the named mutation family among its demonstrated operators. Empty =
+    /// any demonstrated sensitivity on each claimed axis suffices. The
+    /// per-axis DEMONSTRATED profile is recorded in each `capability` entry.
+    #[serde(default)]
+    pub mutation_profile: Vec<String>,
     /// Claim IR — the capability evidence that satisfied the policy tier,
     /// per claimed observable axis: the content-addressed challenge records
     /// (same court semantic identity, same reference artifact, targeted axis,

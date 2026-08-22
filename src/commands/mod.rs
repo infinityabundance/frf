@@ -100,7 +100,8 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 receipt,
                 json,
                 policy,
-            } => claim::run(store, &receipt, json, &policy),
+                mutation_profile,
+            } => claim::run(store, &receipt, json, &policy, &mutation_profile),
             ClaimCmd::Render { receipt, format } => {
                 // The renderers present a VERIFIED claim only: the target is
                 // resolved (a claim content address, or a receipt via the

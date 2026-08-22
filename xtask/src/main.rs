@@ -645,9 +645,13 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
         if challenge_ids.is_empty() {
             panic!("claim {receipt_id}: capability entry for axis {axis} names no challenge");
         }
+        // The DEMONSTRATED mutation profile rederives from the named
+        // challenges: the distinct operators of exactly the recorded ids.
+        let mut rederived_profile: Vec<String> = Vec::new();
         for cid in challenge_ids {
             let cid = as_str(&cid).to_string();
             let ch = load_evidence(&safe_rel(bundle, &format!("challenges/{cid}.json")));
+            rederived_profile.push(as_str(&ch["operator"]).to_string());
             if as_str(&ch["court"]) != as_str(&prem["court"]["id"]) {
                 panic!(
                     "claim {receipt_id}: challenge {cid} is not a challenge of premise {prem_id}'s court"
@@ -697,6 +701,19 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
                 );
             }
         }
+        // The recorded demonstrated profile must rederive exactly.
+        rederived_profile.sort();
+        rederived_profile.dedup();
+        let recorded: Vec<String> = cap["mutation_profile"]
+            .as_array()
+            .map(|a| a.iter().map(|v| as_str(v).to_string()).collect())
+            .unwrap_or_default();
+        if recorded != rederived_profile {
+            panic!(
+                "claim {receipt_id}: capability entry for axis {axis} records mutation profile {:?} which does not rederive from its challenges ({:?})",
+                recorded, rederived_profile
+            );
+        }
         covered.push(axis);
     }
     for axis in &claimed {
@@ -704,6 +721,30 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             panic!(
                 "claim {receipt_id}: claimed axis {axis} has no capability coverage — the court never demonstrated it can see that surface"
             );
+        }
+    }
+    // The REQUIRED sensitivity mutation profile: every AXIS:FAMILY pair the
+    // claim was compiled under must name a claimed axis whose demonstrated
+    // profile includes that family.
+    if let Some(required) = claim["mutation_profile"].as_array() {
+        for entry in required {
+            let entry = as_str(entry);
+            let Some((axis, family)) = entry.split_once(':') else {
+                panic!("claim {receipt_id}: required mutation profile entry {entry:?} is not AXIS:FAMILY");
+            };
+            if !claimed.iter().any(|a| a == axis) {
+                panic!("claim {receipt_id}: required mutation profile names axis {axis}, which the claim does not cover");
+            }
+            let demonstrated = capability.iter().any(|c| {
+                as_str(&c["axis"]) == axis
+                    && c["mutation_profile"]
+                        .as_array()
+                        .map(|a| a.iter().any(|f| as_str(f) == family))
+                        .unwrap_or(false)
+            });
+            if !demonstrated {
+                panic!("claim {receipt_id}: required mutation profile demands the {family} family on axis {axis}, which no capability entry demonstrates");
+            }
         }
     }
 
@@ -1471,7 +1512,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v8" {
+            if as_str(&claim["schema_version"]) != "frf-claim-v9" {
                 panic!(
                     "claim {claim_id}: unexpected schema version {}",
                     as_str(&claim["schema_version"])

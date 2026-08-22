@@ -200,7 +200,7 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         .iter()
         .find(|c| c["policy"] == "sensitivity-backed")
         .expect("the sensitivity-backed claim");
-    assert_eq!(claim["schema_version"], "frf-claim-v8");
+    assert_eq!(claim["schema_version"], "frf-claim-v9");
     assert_eq!(claim["policy"], "sensitivity-backed");
     assert_eq!(claim["observable_scope"], serde_json::json!(["exit"]));
     let capability = claim["capability"].as_array().unwrap();
@@ -242,6 +242,173 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         );
         assert!(ch.saw_defect && ch.specificity_clean);
     }
+}
+
+#[test]
+fn sensitivity_backed_mutation_profile_names_the_demonstrated_families() {
+    let work = Workdir::new("policy-mutation-profile");
+    work.copy_canonical_tree();
+    let (_run, receipt) = resolution_receipt(&work);
+
+    // A required pair for an axis the claim does not cover is refused
+    // (bounded: a claim cannot require sensitivity on an unclaimed surface).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "sensitivity-backed",
+            "--mutation-profile",
+            "stderr:stderr-first-line",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a required axis outside the claim's scope must refuse"
+    );
+    assert!(
+        stderr(&out).contains("stderr"),
+        "the refusal names the unclaimed axis: {}",
+        stderr(&out)
+    );
+
+    // A required profile under `baseline` is refused (the profile belongs to
+    // a sensitivity-bearing tier).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "baseline",
+            "--mutation-profile",
+            "exit:exit-class",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a mutation profile under baseline must refuse"
+    );
+
+    // Demonstrate the family, then a REQUIRED family that was never
+    // demonstrated is refused, naming it (the coverage exists, the family
+    // does not).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "challenge",
+            MANIFEST,
+            "--operators",
+            "exit-class",
+        ],
+    );
+    assert_success(&out, "court challenge (exit-class)");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "sensitivity-backed",
+            "--mutation-profile",
+            "exit:never-demonstrated-family",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a required family that was never demonstrated must refuse"
+    );
+    assert!(
+        stderr(&out).contains("never-demonstrated-family"),
+        "the refusal names the missing family: {}",
+        stderr(&out)
+    );
+
+    // The profile-bound claim compiles once the required family is shown.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "claim",
+            "compile",
+            &receipt,
+            "--policy",
+            "sensitivity-backed",
+            "--mutation-profile",
+            "exit:exit-class",
+        ],
+    );
+    assert_success(&out, "sensitivity-backed claim with the required profile");
+
+    // The claim records BOTH the required profile (claim-level) and the
+    // demonstrated profile (per capability entry).
+    let claims: Vec<serde_json::Value> = claim_json_all(&work, &receipt);
+    let claim = claims
+        .iter()
+        .find(|c| {
+            c["policy"] == "sensitivity-backed"
+                && c["mutation_profile"] == serde_json::json!(["exit:exit-class"])
+        })
+        .expect("the profile-bound claim");
+    assert_eq!(claim["schema_version"], "frf-claim-v9");
+    assert_eq!(
+        claim["mutation_profile"],
+        serde_json::json!(["exit:exit-class"])
+    );
+    let capability = claim["capability"].as_array().unwrap();
+    assert_eq!(capability.len(), 1);
+    assert_eq!(capability[0]["axis"], "exit");
+    assert_eq!(
+        capability[0]["mutation_profile"],
+        serde_json::json!(["exit-class"]),
+        "the demonstrated profile is the distinct operator set of the covering challenges"
+    );
+    assert!(!capability[0]["challenge_ids"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    // The verified loader re-checks the profile on every read (render).
+    let claim_id = claim["id"].as_str().unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", claim_id, "--format", "ci",
+        ],
+    );
+    assert_success(&out, "render the profile-bound claim (verified load)");
+
+    // A tampered demonstrated profile refuses verification (identity + the
+    // profile re-derivation both fail; the refusal must name the claim).
+    let path = work.path(&format!("{ROOT}/claims/{claim_id}.json"));
+    let mut body: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    body["capability"][0]["mutation_profile"] = serde_json::json!(["forged-family"]);
+    fs::write(&path, serde_json::to_string(&body).unwrap()).unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "claim", "render", claim_id, "--format", "ci",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a tampered demonstrated profile must refuse verification"
+    );
 }
 
 #[test]
@@ -464,7 +631,7 @@ fn multi_premise_claim_compiles_under_the_region_algebra() {
     assert_success(&out, "multi-premise claim");
     let claim: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v8");
+    assert_eq!(claim["schema_version"], "frf-claim-v9");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt, receipt2]),

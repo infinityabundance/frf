@@ -214,6 +214,17 @@ pub enum ClaimCmd {
         /// claim carries the capability evidence that satisfied the tier
         #[arg(long, default_value = "baseline")]
         policy: String,
+        /// The REQUIRED sensitivity mutation profile: a comma-separated
+        /// list of AXIS:FAMILY pairs (e.g. `exit:exit-class,stderr:stderr-first-line`)
+        /// that MUST be demonstrated on the claimed surface — for each pair,
+        /// the named axis (which the claim must cover) must have the named
+        /// mutation family among its demonstrated operators. Absent = any
+        /// demonstrated sensitivity on each claimed axis suffices. The claim
+        /// records the required profile and each axis's DEMONSTRATED
+        /// profile; a demonstrated family is sensitivity evidence for that
+        /// family, never a universal-correctness claim
+        #[arg(long, value_name = "AXIS:FAMILY,…", default_value = "")]
+        mutation_profile: String,
     },
     /// Render a COMPILED claim into a presentation format (prose, json,
     /// sarif, ci, badge). The target is a CLAIM id (content address) or a

@@ -243,7 +243,7 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v8" {
+			if str(obj(claim), "schema_version") != "frf-claim-v9" {
 				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
 			}
 			snapshot := obj(recVal(obj(claim), "knowledge_snapshot"))
@@ -615,8 +615,12 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 		if len(ids) == 0 {
 			fail("claim %s: capability entry for axis %s names no challenge", receiptID, axis)
 		}
+		// The DEMONSTRATED mutation profile rederives from the named
+		// challenges: the distinct operators of exactly the recorded ids.
+		rederived := []string{}
 		for _, cid := range ids {
 			ch := obj(loadEvidence(safeJoin(bundle, "challenges/"+cid+".json")))
+			rederived = append(rederived, str(ch, "operator"))
 			if str(ch, "court") != str(obj(recVal(prem, "court")), "id") {
 				fail("claim %s: challenge %s is not a challenge of premise %s's court", receiptID, cid, premID)
 			}
@@ -644,11 +648,59 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				fail("claim %s: challenge %s does not demonstrate sensitivity on %s (recomputed: saw_defect=%v, specificity_clean=%v)", receiptID, cid, axis, onTarget, !onUnaffected)
 			}
 		}
+		// The recorded demonstrated profile must rederive exactly.
+		sort.Strings(rederived)
+		dedup := []string{}
+		for _, op := range rederived {
+			if len(dedup) == 0 || dedup[len(dedup)-1] != op {
+				dedup = append(dedup, op)
+			}
+		}
+		recorded := asStrArray(recVal(cap, "mutation_profile"))
+		if !slicesEqual(recorded, dedup) {
+			fail("claim %s: capability entry for axis %s records mutation profile %v which does not rederive from its challenges (%v)", receiptID, axis, recorded, dedup)
+		}
 		covered[axis] = true
 	}
 	for _, axis := range claimed {
 		if !covered[axis] {
 			fail("claim %s: claimed axis %s has no capability coverage — the court never demonstrated it can see that surface", receiptID, axis)
+		}
+	}
+	// The REQUIRED sensitivity mutation profile: every AXIS:FAMILY pair the
+	// claim was compiled under must name a claimed axis whose demonstrated
+	// profile includes that family.
+	for _, entryV := range arr(recVal(claim, "mutation_profile")) {
+		entry := entryV.(string)
+		parts := strings.SplitN(entry, ":", 2)
+		if len(parts) != 2 {
+			fail("claim %s: required mutation profile entry %q is not AXIS:FAMILY", receiptID, entry)
+		}
+		axis, family := parts[0], parts[1]
+		claimedAxis := false
+		for _, a := range claimed {
+			if a == axis {
+				claimedAxis = true
+				break
+			}
+		}
+		if !claimedAxis {
+			fail("claim %s: required mutation profile names axis %s, which the claim does not cover", receiptID, axis)
+		}
+		demonstrated := false
+		for _, capV := range arr(recVal(claim, "capability")) {
+			cap := obj(capV)
+			if str(cap, "axis") != axis {
+				continue
+			}
+			for _, f := range asStrArray(recVal(cap, "mutation_profile")) {
+				if f == family {
+					demonstrated = true
+				}
+			}
+		}
+		if !demonstrated {
+			fail("claim %s: required mutation profile demands the %s family on axis %s, which no capability entry demonstrates", receiptID, family, axis)
 		}
 	}
 

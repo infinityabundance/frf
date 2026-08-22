@@ -253,6 +253,7 @@ mod tests {
                 objects: Vec::new(),
             },
             policy: "baseline".to_string(),
+            mutation_profile: Vec::new(),
             capability: Vec::new(),
             witness_statements: Vec::new(),
             independence_evidence: Vec::new(),

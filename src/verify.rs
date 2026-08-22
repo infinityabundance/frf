@@ -1441,8 +1441,13 @@ fn verify_capability_entry(
             entry.axis
         )));
     }
+    // The DEMONSTRATED mutation profile rederives from the named challenges:
+    // the distinct operators of exactly the recorded challenge ids (a
+    // hand-edited or omitted profile is a tampered claim, not evidence).
+    let mut rederived_profile: Vec<String> = Vec::new();
     for cid in &entry.challenge_ids {
         let ch = store.load_challenge(cid)?; // content-addressed
+        rederived_profile.push(ch.operator.clone());
         if ch.court != premise.court.id {
             return Err(FrfError::new(format!(
                 "claim capability: challenge {cid} is not a challenge of premise {}'s court",
@@ -1486,6 +1491,14 @@ fn verify_capability_entry(
                 !on_unaffected
             )));
         }
+    }
+    rederived_profile.sort();
+    rederived_profile.dedup();
+    if entry.mutation_profile != rederived_profile {
+        return Err(FrfError::new(format!(
+            "claim capability for axis {}: its recorded mutation profile {:?} does not rederive from the named challenge records ({:?}) — a hand-edited or forged profile is refused",
+            entry.axis, entry.mutation_profile, rederived_profile
+        )));
     }
     Ok(())
 }
@@ -1765,6 +1778,37 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
                 )));
             }
         }
+        // The REQUIRED sensitivity mutation profile re-derives: every
+        // AXIS:FAMILY pair the claim was compiled under must name a claimed
+        // axis whose demonstrated profile includes that family.
+        for entry in &claim.mutation_profile {
+            let (axis, family) = entry.split_once(':').ok_or_else(|| {
+                FrfError::new(format!(
+                    "claim {id}: its required mutation profile entry {entry:?} is not AXIS:FAMILY"
+                ))
+            })?;
+            if !claim.observable_scope.iter().any(|a| a == axis) {
+                return Err(FrfError::new(format!(
+                    "claim {id}: its required mutation profile names axis {axis}, which the claim does not cover"
+                )));
+            }
+            let covered = claim
+                .capability
+                .iter()
+                .any(|c| c.axis == axis && c.mutation_profile.iter().any(|f| f == family));
+            if !covered {
+                return Err(FrfError::new(format!(
+                    "claim {id}: its required mutation profile demands the {family} family on axis {axis}, which no capability entry demonstrates"
+                )));
+            }
+        }
+    } else if !claim.mutation_profile.is_empty() {
+        // A baseline claim names no required profile (the compiler refuses
+        // it; a hand-written one is an inconsistent IR).
+        return Err(FrfError::new(format!(
+            "claim {id}: a {}-policy claim records a required mutation profile — the profile belongs to a sensitivity-bearing tier",
+            claim.policy
+        )));
     }
     if matches!(
         claim.policy.as_str(),
