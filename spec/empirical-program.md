@@ -241,11 +241,19 @@ Per case:
    receipt's claimable surface GROWS to the full declared surface across
    the boundary, and its knowledge-snapshot universe COMMITS the buggy
    residual (the negative search is as portable as the premises); the CLEAN
-   receipt's full-surface claim is REFUSED by the cross-run universe
-   blocker — an open residual about the same surface (same candidate
-   artifact, fixture identity, fixture family, environment, authority
-   version, and axis) recorded by another run blocks the claim wherever it
-   was recorded. Claim admission is relative to the committed evidence
+   receipt's full-surface claim is ADMITTED under the EXACT-FIXTURE rule —
+   the claim scope's `fixtures` dimension carries the FRF/FIXTURE/v1 exact
+   input identity (semantic id + content SHA-256 + declared arguments),
+   never the shared human label, so an open divergence about the DEFECT
+   fixture's exact bytes does not block a claim about the CLEAN fixture's
+   exact bytes (different input, different surface). The study VERIFIES
+   the boundary: no universe residual is about the clean claim's exact
+   fixture identity. The cross-run universe blocker fires when the exact
+   fixture bytes match — an open residual about the same surface (same
+   candidate artifact, exact fixture identity, fixture family, environment,
+   authority version, and axis) recorded by another run blocks the claim
+   wherever it was recorded. Claim admission is relative to the committed
+   evidence
    universe; the study measures it.
 9. **replay stability** — exact replay of the ladder's buggy run.
 10. **conventional baselines, executed BARE** — golden testing pinned to the
@@ -273,6 +281,8 @@ nondeterminism, claim inflation prevented, minimum reproducer sizes,
 replay stability, storage and runtime overhead, localization, and human
 investigation cost. `--check` (default) exits non-zero on any lost defect,
 false positive, unexplained residual survival, exposed nondeterminism,
-inflated claim, clean claim that was NOT refused by the universe blocker,
-fixed-side claim that missed a declared axis or did not commit the defect
-residual, insensitive court, failed replay, or failed minimization.
+inflated claim, clean claim that was NOT admitted under the exact-fixture
+rule (or a compiled claim with a same-exact-fixture residual in the
+universe — the boundary must hold both ways), fixed-side claim that missed
+a declared axis or did not commit the defect residual, insensitive court,
+failed replay, or failed minimization.

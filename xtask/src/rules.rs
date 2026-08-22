@@ -1221,7 +1221,11 @@ fn residual_scope(record: &Value, cap: &Value, authorities: &BTreeMapLike) -> Va
     json!({
         "authority": [authority_id],
         "candidate": [as_str(&record["candidate_sha256"])],
-        "fixtures": [as_str(&cap["fixture"])],
+        "fixtures": [crate::rederive::fixture_identity(
+            as_str(&cap["fixture"]),
+            as_str(&cap["fixture_sha256"]),
+            &cap["court_spec"]["fixture"]["arguments"],
+        )],
         "fixture_family": as_str(&env["fixture_family"]),
         "observables": [as_str(&record["axis"])],
         "environments": [as_str(&cap["environment"]["digest"])],
@@ -1254,7 +1258,13 @@ fn claim_scope(rec: &Value) -> Value {
         "authority": [format!("{}-{}", as_str(&rec["authority"]["name"]), as_str(&rec["authority"]["version"]))],
         "candidate": [as_str(&rec["candidate"]["identity_hash"])],
         "fixtures": rec["fixtures"].as_array().map(|fs| {
-            fs.iter().map(|f| as_str(&f["id"]).to_string()).collect::<Vec<_>>()
+            fs.iter().map(|f| {
+                crate::rederive::fixture_identity(
+                    as_str(&f["id"]),
+                    as_str(&f["hash"]),
+                    &f["declared_arguments"],
+                )
+            }).collect::<Vec<_>>()
         }).unwrap_or_default(),
         "fixture_family": as_str(&envelope["fixture_family"]),
         "observables": clean,

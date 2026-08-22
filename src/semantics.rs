@@ -12,6 +12,7 @@
 //!   FRF/COMPARATOR-SPEC/v2     comparator relation specification
 //!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
 //!   FRF/KIND/v1                residual-kind protocol record
+//!   FRF/FIXTURE/v1             exact fixture input identity
 //!
 //! The court semantic identity answers ONLY "what question was asked?":
 //! question, falsifier, authority ARTIFACT identity, fixture identity,
@@ -39,6 +40,27 @@ use serde_json::{json, Value};
 pub fn hash_preimage(kind: &str, doc: &Value) -> Result<String> {
     let json = canon::canonical(doc)?;
     Ok(host::sha256_bytes(format!("{kind}\n{json}").as_bytes()))
+}
+
+/// The exact fixture input identity: `FRF/FIXTURE/v1` over the canonical
+/// document of the fixture's SEMANTIC id (the human role label), its
+/// content SHA-256 (the exact bytes), and its DECLARED arguments (the
+/// declared input contract). Two different files that share a fixture id are
+/// DIFFERENT exact inputs; renaming an input (changing only its semantic
+/// id) must not make an unexplained residual about the exact bytes
+/// disappear from the claim surface. Claim scopes and residual surfaces
+/// carry this identity in their `fixtures` dimension.
+pub fn fixture_identity(
+    semantic_id: &str,
+    content_sha256: &str,
+    declared_arguments: &[String],
+) -> Result<String> {
+    let doc = json!({
+        "semantic_id": semantic_id,
+        "content_sha256": content_sha256,
+        "declared_arguments": declared_arguments,
+    });
+    hash_preimage("FRF/FIXTURE/v1", &doc)
 }
 
 /// The content address of a native runtime closure: `FRF/RUNTIME-CLOSURE/v1`
@@ -1411,6 +1433,34 @@ mod tests {
             a,
             court_semantic_identity(&spec("q"), &"1".repeat(64), &"2".repeat(64), &[], &[], &[])
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn fixture_identity_binds_the_exact_bytes_not_the_label() {
+        // The claim-scope aliasing fix: two different files that share a
+        // fixture id are DIFFERENT exact inputs, and renaming an input
+        // changes the semantic id (the named role stays a separate,
+        // family-level dimension).
+        let args = vec!["--strict".to_string(), "{fixture}".to_string()];
+        let a = fixture_identity("import.trigger", &"1".repeat(64), &args).unwrap();
+        let b = fixture_identity("import.trigger", &"2".repeat(64), &args).unwrap();
+        assert_ne!(
+            a, b,
+            "different bytes under the same id are different exact inputs"
+        );
+        let renamed = fixture_identity("renamed", &"1".repeat(64), &args).unwrap();
+        assert_ne!(a, renamed, "renaming an input is a different semantic id");
+        let diff_args =
+            fixture_identity("import.trigger", &"1".repeat(64), &["--lax".to_string()]).unwrap();
+        assert_ne!(
+            a, diff_args,
+            "a different declared input contract is a different identity"
+        );
+        // Deterministic: the same exact input is one identity.
+        assert_eq!(
+            a,
+            fixture_identity("import.trigger", &"1".repeat(64), &args).unwrap()
         );
     }
 

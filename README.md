@@ -143,6 +143,7 @@ not these tables.
 | FRF/OBSERVATION/v1 | Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer) | active |
 | FRF/EXECUTION/v1 | Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes) | active |
 | FRF/ENVIRONMENT/v2 | Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input | active |
+| FRF/FIXTURE/v1 | Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments — claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs | active |
 | FRF/COURT/v2 | Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics) | active |
 | FRF/COMPARATOR-SPEC/v2 | Comparator semantic specification | active |
 | FRF/NORMALIZER-SPEC/v2 | Normalizer semantic specification | active |

@@ -169,7 +169,11 @@ receipt, and run.
 ClaimScope {           one cell: a single Cartesian product
     authority        admitted authority ids
     candidate        exact candidate artifact hashes
-    fixtures         fixture ids actually executed
+    fixtures         EXACT fixture input identities (FRF/FIXTURE/v1 over
+                     semantic id + content SHA-256 + declared arguments) —
+                     never the human label alone: two different files that
+                     share a fixture id are different inputs, and the named
+                     role stays the separate fixture_family dimension
     fixture_family
     observables      axes
     environments     environment digests

@@ -99,6 +99,74 @@ fn declared_environment_is_evidence_and_ambient_is_not_inherited() {
     assert_success(&out, "replay with the declared env");
 }
 
+/// The claim scope's `fixtures` dimension is the EXACT fixture input
+/// identity (FRF/FIXTURE/v1 — semantic id + content hash + declared
+/// arguments), never the human label: an open residual about one fixture's
+/// exact bytes must not block a claim about different exact bytes that
+/// share the fixture id. The blocker fires only on the same exact input.
+#[test]
+fn claim_scope_binds_the_exact_fixture_bytes_not_the_label() {
+    let work = Workdir::new("claim-exact-fixture");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // A candidate that always passes (exit 0, no output): any divergence is
+    // the REFERENCE's behavior on the fixture, and a clean fixture yields a
+    // fully passing run (a compilable claim).
+    work.write_candidate("#!/bin/sh\nexit 0\n");
+    let fixture_path = "frf/courts/cli-malformed-input/fixtures/malformed-path.conf";
+
+    // Run 1: the DEFECT fixture bytes (a malformed directive) — the
+    // reference diverges, an OPEN residual about these exact bytes.
+    fs::write(work.path(fixture_path), "nonsense directive\n").unwrap();
+    let run_a = run_court(&work);
+    assert!(
+        fs::read_dir(work.path("frf/residuals"))
+            .unwrap()
+            .flatten()
+            .count()
+            > 0,
+        "run A must leave open residuals"
+    );
+
+    // Run 2: the SAME fixture id (same manifest, same path) with DIFFERENT
+    // exact bytes (a clean file) — a fully passing run.
+    fs::write(work.path(fixture_path), "log entry\n").unwrap();
+    let run_b = run_court(&work);
+    assert_ne!(
+        run_a, run_b,
+        "different fixture bytes are different observations"
+    );
+    let cap_b: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run_b}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        cap_b["residuals"].as_array().unwrap().len(),
+        0,
+        "run B passes"
+    );
+
+    // The claim from run B must COMPILE: the open residual from run A is
+    // about different exact fixture bytes (the exact-input rule), even
+    // though both runs share the fixture ID in the manifest.
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run_b]);
+    assert_success(&out, "receipt emit (run B)");
+    let receipt = stdout(&out);
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
+    assert_success(
+        &out,
+        "claim from run B compiles under the exact-fixture rule",
+    );
+
+    // The recorded fixture identities differ — the surfaces genuinely
+    // differ.
+    let cap_a: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run_a}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(cap_a["fixture_sha256"], cap_b["fixture_sha256"]);
+}
+
 /// The immutable observation record.
 fn raw_residual(work: &Workdir, id: &str) -> serde_json::Value {
     serde_json::from_str(
