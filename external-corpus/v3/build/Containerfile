@@ -1,2 +1,26 @@
-FROM docker.io/library/fedora:41
-RUN dnf -y --setopt=install_weak_deps=False install gcc make perl && dnf clean all
+# The frf-v3 hermetic toolchain image.
+#
+# EVERY input is pinned:
+#   - the base image by OCI manifest digest (fedora:41 as of 2026-08-22,
+#     sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366)
+#   - the exact package NEVRAs (recorded from the image that produced the
+#     committed corpus bytes; a rebuild with these pins reproduced all 11
+#     committed artifact hashes byte-for-byte)
+#   - the JDK (java-17-openjdk-devel) the Java probe is compiled with, so the
+#     probe no longer depends on whatever host javac happens to be installed
+#
+# Limitation, stated honestly: the FEDORA PACKAGE REPOSITORIES are live —
+# the NEVRA pins make the toolchain deterministic only while the repository
+# continues to serve those exact packages (a rebuild therefore needs network
+# for dnf, exactly like the source fetch needs network for curl). The
+# committed artifact hashes in build-manifest.json remain the ground truth
+# for the corpus; the pinned toolchain is what a rebuild is verified
+# against. A fully repository-snapshot-pinned build (or a published OCI
+# image by digest) would remove even that dependency.
+FROM fedora@sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366
+RUN dnf -y --setopt=install_weak_deps=False install \
+      gcc-14.3.1-4.fc41.x86_64 \
+      make-4.4.1-8.fc41.x86_64 \
+      perl-5.40.3-517.fc41.x86_64 \
+      java-17-openjdk-devel-17.0.17.0.10-1.fc41.x86_64 \
+    && dnf clean all

@@ -10,21 +10,23 @@
 #   log4shell   log4j 2.14.1 (vulnerable, CVE-2021-44228) — Maven Central jars
 #               log4j 2.17.1 (fixed)                      — pinned by SHA-256
 #
-# The native builds (bash, openssl) run INSIDE a pinned container image
-# (fedora:41) so the toolchain is hermetic and recorded; the produced
-# binaries are committed to cases/<id>/builds/ so the corpus is
-# self-contained (the experiment itself needs no network and no compiler).
-# The Java probe is compiled with the host JDK; the probe.jar is
-# byte-reproducible (fixed entry timestamps).
+# The native builds (bash, openssl) AND the Java probe run INSIDE a pinned
+# container image (fedora:41 pinned by digest + exact package NEVRAs + a
+# pinned JDK) so the toolchain is hermetic and recorded; the produced
+# binaries and the probe.jar are committed to cases/<id>/builds/ so the
+# corpus is self-contained (the experiment itself needs no network and no
+# compiler). The probe.jar is byte-reproducible (pinned JDK + fixed entry
+# timestamps).
 #
-# Prerequisites: podman (or docker), curl, gcc, make, perl, a JDK (17+).
+# Prerequisites: podman (or docker), curl, and network access (the pinned
+# source tarballs/jars and the image's package repository).
 # Usage:  sh build/build-all.sh
 set -eu
 
 cd "$(dirname "$0")/.."
 
 BUILD_DIR=build
-WORK_DIR=${FRF_V3_BUILD_WORK:-"$BUILD_DIR/work"}
+WORK_DIR=${FRF_V3_BUILD_WORK:-"$PWD/$BUILD_DIR/work"}
 mkdir -p "$WORK_DIR/src" "$WORK_DIR/out"
 : > "$WORK_DIR/build.log"
 
@@ -76,12 +78,14 @@ for v in 2.14.1 2.17.1; do
   done
 done
 
-# The containerized native build (bash + openssl). The image is pinned by
-# its Dockerfile (fedora:41 + gcc/make/perl); the image ID is recorded in
-# the build manifest by the recipe.
+# The containerized native build (bash + openssl + the Java probe). The
+# image is pinned by digest and exact package NEVRAs (see Containerfile);
+# the image digest is recorded in the build manifest by the recipe.
 cp "$BUILD_DIR/Containerfile" "$WORK_DIR/Containerfile"
 cp "$BUILD_DIR/native-build.sh" "$WORK_DIR/native-build.sh"
 cp "heartbleed/src/hb.c" "$WORK_DIR/hb.c"
+mkdir -p "$WORK_DIR/probe"
+cp "log4shell/src/Log4ShellProbe.java" "$WORK_DIR/probe/Log4ShellProbe.java"
 podman build --network=host -t frf-v3-build -f "$WORK_DIR/Containerfile" "$WORK_DIR" \
   >> "$WORK_DIR/build.log" 2>&1
 IMAGE_ID=$(podman image inspect frf-v3-build --format '{{.Id}}')
@@ -90,21 +94,12 @@ podman run --rm --network=host \
   -v "$WORK_DIR":/work:Z -w /work \
   frf-v3-build:latest sh native-build.sh >> "$WORK_DIR/build.log" 2>&1
 
-# The Java probe: compiled against the log4j 2.14.1 API (the older surface),
-# packaged with FIXED entry timestamps so probe.jar is byte-reproducible.
-rm -rf "$WORK_DIR/probe-classes" && mkdir -p "$WORK_DIR/probe-classes"
-javac -cp "$WORK_DIR/src/log4j-api-2.14.1.jar:$WORK_DIR/src/log4j-core-2.14.1.jar" \
-  -d "$WORK_DIR/probe-classes" log4shell/src/Log4ShellProbe.java
-jar --date=2020-01-01T00:00:00Z --create --file "$WORK_DIR/probe.jar" \
-  -C "$WORK_DIR/probe-classes" Log4ShellProbe.class \
-  -C "$WORK_DIR/probe-classes" 'Log4ShellProbe$CapturingListener.class'
-
 # Commit the artifacts into the corpus.
 install -m 0755 "$WORK_DIR/out/bash-4.3.0" shellshock/builds/bash-4.3.0
 install -m 0755 "$WORK_DIR/out/bash-4.3.30" shellshock/builds/bash-4.3.30
 install -m 0755 "$WORK_DIR/out/hb-1.0.1f" heartbleed/builds/hb-1.0.1f
 install -m 0755 "$WORK_DIR/out/hb-1.0.1g" heartbleed/builds/hb-1.0.1g
-install -m 0644 "$WORK_DIR/probe.jar" log4shell/builds/probe.jar
+install -m 0644 "$WORK_DIR/out/probe.jar" log4shell/builds/probe.jar
 install -m 0644 "$WORK_DIR/src/log4j-api-2.14.1.jar" log4shell/builds/lib/
 install -m 0644 "$WORK_DIR/src/log4j-core-2.14.1.jar" log4shell/builds/lib/
 install -m 0644 "$WORK_DIR/src/log4j-api-2.17.1.jar" log4shell/builds/lib/
