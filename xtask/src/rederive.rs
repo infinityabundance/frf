@@ -30,6 +30,8 @@ pub fn runtime_closure_identity(closure: &Value) -> String {
         .as_array()
         .map(|cs| cs.iter().collect())
         .unwrap_or_default();
+    #[allow(clippy::needless_borrow)]
+    // auto-deref of &&Value makes the suggested form a type error
     components.sort_by(|a, b| s(&a["path"]).cmp(&s(&b["path"])));
     let doc = json!({
         "schema_version": s(&closure["schema_version"]),

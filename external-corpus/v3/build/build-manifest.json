@@ -1,0 +1,81 @@
+{
+  "about": "Provenance of the committed v3 corpus artifacts: pinned upstream sources, the hermetic container toolchain, the compat patches, and the SHA-256 of every produced artifact. Rebuilding with build/build-all.sh from these exact inputs reproduces the committed bytes.",
+  "artifacts": {
+    "heartbleed/builds/hb-1.0.1f": "4566303ac42ed95e4af6511b5596fe6afd6b3878eafaaf8dfd7b83164d5b2ff2",
+    "heartbleed/builds/hb-1.0.1g": "0ffd0a1110e212b20521feae9e48417bf6b972065744428993d11e528cd33656",
+    "log4shell/builds/lib/log4j-api-2.14.1.jar": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
+    "log4shell/builds/lib/log4j-api-2.17.1.jar": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
+    "log4shell/builds/lib/log4j-core-2.14.1.jar": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
+    "log4shell/builds/lib/log4j-core-2.17.1.jar": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
+    "log4shell/builds/probe.jar": "ca0abd8173e9d8c1b5aba5cf164d3c4096a8d793956e24df4f5e2ce81700a5d6",
+    "shellshock/builds/bash-4.3.0": "68f22f8e1f9b6231dd6dc411f2e16e9be8aa74c7ee35a68aef4fa8bf81b7c98a",
+    "shellshock/builds/bash-4.3.30": "9270b1e7b8f963ebf1365244af6c537e069c1d2d1ed7b962082aa3053edae775"
+  },
+  "compat_patches": [
+    {
+      "impact": "build-only, no behavior",
+      "patch": "CFLAGS=-std=gnu89 (era-correct C semantics; gcc 14+ defaults to C23 where f() means f(void))",
+      "target": "bash 4.3.x"
+    },
+    {
+      "impact": "terminal-UI code only, never linked into the probe",
+      "patch": "sed 's/-DTERMIO //' Configure; sed 's/# define TERMIO/# define TERMIOS/' crypto/ui/ui_openssl.c (termio.h removed from modern glibc)",
+      "target": "openssl 1.0.1.x"
+    },
+    {
+      "impact": "version-string cosmetics only",
+      "patch": "rm -f .build before make (deterministic build-version suffix)",
+      "target": "bash 4.3.x"
+    }
+  ],
+  "note": "The heartbleed probe (heartbleed/src/hb.c) is linked against each library set with -no-pie (the container archives are built without -fPIC).",
+  "schema_version": "frf-v3-build-manifest-v1",
+  "sources": [
+    {
+      "name": "bash-4.3.0 (pristine upstream)",
+      "sha256": "b2fe79ddf9e7abdb4695e3070afa866d2a94a58d1cc9d731585330c753815491",
+      "url": "https://snapshot.debian.org/archive/debian/20140304T040604Z/pool/main/b/bash/bash_4.3.orig.tar.gz"
+    },
+    {
+      "name": "bash-4.3.30",
+      "sha256": "317881019bbf2262fb814b7dd8e40632d13c3608d2f237800a8828fbb8a640dd",
+      "url": "https://ftp.gnu.org/gnu/bash/bash-4.3.30.tar.gz"
+    },
+    {
+      "name": "openssl-1.0.1f",
+      "sha256": "6cc2a80b17d64de6b7bac985745fdaba971d54ffd7d38d3556f998d7c0c9cb5a",
+      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1f.tar.gz"
+    },
+    {
+      "name": "openssl-1.0.1g",
+      "sha256": "53cb818c3b90e507a8348f4f5eaedb05d8bfe5358aabb508b7263cc670c3e028",
+      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1g.tar.gz"
+    },
+    {
+      "name": "log4j-api-2.14.1",
+      "sha256": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
+      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.14.1/log4j-api-2.14.1.jar"
+    },
+    {
+      "name": "log4j-core-2.14.1",
+      "sha256": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
+      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.14.1/log4j-core-2.14.1.jar"
+    },
+    {
+      "name": "log4j-api-2.17.1",
+      "sha256": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
+      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.17.1/log4j-api-2.17.1.jar"
+    },
+    {
+      "name": "log4j-core-2.17.1",
+      "sha256": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
+      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.17.1/log4j-core-2.17.1.jar"
+    }
+  ],
+  "toolchain": {
+    "container": "fedora:41 (gcc 14.3.1, glibc 2.40, GNU Make 4.4.1, perl)",
+    "host_kernel": "7.1.8-1-cachyos",
+    "image_id": "c829b67da5cb5a2ea3e3b45d5539fd67fa0f982493f9d7433fee0601a22833ff",
+    "java": "openjdk version \"17.0.20\" 2026-07-21"
+  }
+}

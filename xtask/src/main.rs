@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 mod experiment;
 mod experiment_external;
 mod experiment_external_v2;
+mod experiment_external_v3;
 mod jcs;
 mod rederive;
 mod regen;
@@ -1687,7 +1688,8 @@ fn main() {
                cargo xtask regen-readme [--check]\n\
                cargo xtask experiment [OUT.json] [--no-check]\n\
                cargo xtask external-experiment [OUT.json] [--no-check]\n\
-               cargo xtask external-experiment-v2 [OUT.json] [--no-check]\n"
+               cargo xtask external-experiment-v2 [OUT.json] [--no-check]\n\
+               cargo xtask external-experiment-v3 [OUT.json] [--no-check]\n"
         );
         std::process::exit(2);
     }
@@ -1789,6 +1791,25 @@ fn main() {
                 }
             }
             experiment_external_v2::run(repo_root, &out, check);
+        }
+        "external-experiment-v3" => {
+            // The EXTERNAL empirical program v3: the trajectory axes on the
+            // ACTUAL upstream vulnerable and fixed releases (bash, OpenSSL,
+            // Log4j) built from pinned sources by the hermetic recipes in
+            // external-corpus/v3/ (--no-check disables the gates).
+            let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+            let mut out = repo_root
+                .join("golden")
+                .join("work")
+                .join("external-experiment-v3.json");
+            let mut check = true;
+            for a in &args[2..] {
+                match a.as_str() {
+                    "--no-check" => check = false,
+                    other => out = PathBuf::from(other),
+                }
+            }
+            experiment_external_v3::run(repo_root, &out, check);
         }
         other => {
             eprintln!("unknown mode {other:?}");

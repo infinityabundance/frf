@@ -993,12 +993,12 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                     &as_str(&closure["cid"])[..16]
                 ));
             }
-            for what in ["interp"] {
-                let comp = &closure[what];
+            {
+                let comp = &closure["interp"];
                 let sha = as_str(&comp["sha256"]);
                 if sha.len() != 64 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
                     v.push(format!(
-                        "the {who} runtime closure {what} {} carries a malformed hash",
+                        "the {who} runtime closure interp {} carries a malformed hash",
                         as_str(&comp["path"])
                     ));
                 }

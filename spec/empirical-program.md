@@ -120,3 +120,68 @@ bugs its fixtures do not exercise. FRF's measured differentiators are the
 residual (the preserved disagreement, not a pass/fail bit), the
 challenge-proven sensitivity, the minimized reproducer, and the replayed
 observation.
+
+## The trajectory program on reconstructed reproducers (v2)
+
+`cargo xtask external-experiment-v2` (Phase 10) drives the same
+reconstructed corpus through the three generalized trajectory axes
+(series + trajectories, spec/trajectory.md):
+
+1. **Version ladders** (`candidate_revision`) — the buggy and clean
+   candidates are two revisions; the DEFECT lineage is observed at the
+   buggy revision and ABSENT at the clean one, classifying
+   `boundary-localized`/`abrupt`/`start` (the historical fix boundary);
+2. **Environment matrices** (`environment`) — the defect court at three
+   deterministic TZ/LANG coordinates; a real historical defect is not
+   environment-specific, so the lineage must be `persistent`/`stable`;
+3. **Authority transitions** (`authority_version`) — the historical
+   VULNERABLE program is admitted as the pre-fix oracle; the buggy
+   candidate's defect becomes observable exactly when the oracle was
+   fixed (`boundary-localized` onset), and the clean candidate's stricter
+   behavior ceases (`boundary-localized` cessation).
+
+Every classification must rederive from the recorded observations; `--check`
+(default) gates on any misclassification or lost defect.
+
+## The trajectory program on ACTUAL upstream releases (v3)
+
+The v1/v2 corpus is explicit that its cases are "real historical software
+defects, reconstructed as minimal deterministic reproducers". v3 closes the
+remaining credibility gap: the sides ARE the actual upstream releases,
+built from the pinned sources by hermetic recipes
+(`external-corpus/v3/build/build-all.sh` — containerized native builds on
+a pinned fedora:41 image with the exact gcc/make/perl toolchain; Maven
+Central jars pinned by SHA-256). The committed `builds/` artifacts make
+the corpus self-contained: the experiment needs no network and no compiler
+(a JVM is required to execute the Log4j case).
+
+| Case | Vulnerable release | Fixed release | The real interaction |
+| --- | --- | --- | --- |
+| `shellshock` (CVE-2014-6271) | bash 4.3.0 (pristine upstream) | bash 4.3.30 (final 4.3 patch) | the side IS the bash binary; the fixture is a script; the trigger is the malicious function-import environment variable — the exact historical condition |
+| `heartbleed` (CVE-2014-0160) | OpenSSL 1.0.1f | OpenSSL 1.0.1g (the fix release) | the side is a probe statically linked against the real libssl; it performs the exact historical exploit message sequence — ClientHello with the heartbeat extension, then the malformed heartbeat immediately after ServerHelloDone — and reports whether the linked library echoed process memory |
+| `log4shell` (CVE-2021-44228) | Log4j 2.14.1 | Log4j 2.17.1 (JNDI disabled by default) | the side runs the probe on the real jars; the fixture logs a message containing the JNDI lookup; the probe reports whether the lookup error path fired |
+
+`cargo xtask external-experiment-v3` drives each case through the same
+four experiments as v2 — the version ladder, the environment matrix, and
+both authority transitions — PLUS a **clean control**: the VULNERABLE
+side against the clean fixture must produce ZERO residuals. The clean
+control proves the divergence is the historical defect, not a spurious
+difference between two real builds. The historical fix boundary must
+classify exactly as declared:
+
+```text
+ladder (buggy -> fixed):      [observed, absent]   boundary-localized/abrupt/start
+environment matrix:           [observed x3]        persistent/stable/none
+authority transition (buggy): [absent, observed]   boundary-localized/abrupt/end
+authority transition (fixed): [observed, absent]   boundary-localized/abrupt/start
+clean control:                zero residuals       (the vulnerable side without the trigger)
+```
+
+The build provenance (`external-corpus/v3/build/build-manifest.json`)
+pins every input: source URLs + SHA-256, the container image ID, the
+toolchain versions, the compat patches (era-correct `-std=gnu89` for bash;
+the documented `termio.h` removal workaround for openssl), and the SHA-256
+of every committed artifact. Rebuilding from these exact inputs reproduces
+the committed bytes. The native runtime closure (spec/execution-profile.md
+§ native runtime closure) binds what the real binaries loaded at
+observation time.
