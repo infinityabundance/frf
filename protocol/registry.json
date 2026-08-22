@@ -133,8 +133,10 @@
     { "id": "frf-reduction-v4", "status": "active" },
     { "id": "frf-experiment-v1", "status": "active", "scope": "xtask empirical-program report" },
     { "id": "frf-external-corpus-v1", "status": "active", "scope": "external empirical corpus manifest" },
+    { "id": "frf-external-corpus-v3", "status": "active", "scope": "v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases)" },
     { "id": "frf-external-experiment-v1", "status": "active", "scope": "external empirical program v1 report" },
-    { "id": "frf-external-experiment-v2", "status": "active", "scope": "external empirical program v2 report" }
+    { "id": "frf-external-experiment-v2", "status": "active", "scope": "external empirical program v2 report" },
+    { "id": "frf-external-experiment-v3", "status": "active", "scope": "external empirical program v3 report (real upstream releases)" }
   ],
   "relations": {
     "comparator": [

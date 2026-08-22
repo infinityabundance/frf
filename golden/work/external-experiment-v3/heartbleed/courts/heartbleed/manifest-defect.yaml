@@ -1,0 +1,25 @@
+court:
+  id: heartbeat-check
+  question: >-
+    For the malformed-heartbeat trigger in fixture family heartbleed, does
+    the candidate's linked TLS library preserve the fixed reference's exit
+    class and stderr diagnostic?
+  falsifier: >-
+    The candidate's linked library echoes process memory in response to the
+    malformed heartbeat (CVE-2014-0160), diverging on exit and stderr.
+  authority: ref-hb-1.0.1g
+  candidate:
+    name: cand-hb-1.0.1f
+    version_or_commit: "1.0.1f"
+    build_profile: release
+    path: builds/hb-1.0.1f
+  fixture:
+    id: probe.conf
+    path: fixtures/defect.conf
+    arguments: ["{fixture}"]
+  admissibility_envelope:
+    fixture_family: heartbeat
+    platforms: ["x86_64-linux"]
+    observables: [exit, stderr]
+    normalizers: []
+    replay_scope: single-run

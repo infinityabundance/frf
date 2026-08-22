@@ -1,0 +1,1 @@
+{"authority":"ref-log4j-2.17.1","blocks_claims":["byte-identical stdout"],"disposition":"open","kind":"text","magnitude":"first-line-token-change","next_court":"cli-stdout-minimize","residual_id":"cli-text-0001","schema_version":"frf-token-v1","scope":"jndi","surface":"stdout-routing","token":"text/stdout-routing/first-line-token-change/open"}

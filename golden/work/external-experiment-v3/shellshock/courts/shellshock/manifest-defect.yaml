@@ -1,0 +1,25 @@
+court:
+  id: env-import-check
+  question: >-
+    For the environment-import trigger in fixture family shellshock, does
+    the candidate bash preserve the fixed reference's stdout and exit class?
+  falsifier: >-
+    The candidate's function import from the environment evaluates trailing
+    code the fixed reference leaves inert (CVE-2014-6271), diverging on
+    stdout.
+  authority: ref-bash-4.3.30
+  candidate:
+    name: cand-bash-4.3.0
+    version_or_commit: "4.3.0"
+    build_profile: release
+    path: builds/bash-4.3.0
+  fixture:
+    id: import.trigger
+    path: fixtures/defect.import
+    arguments: ["{fixture}"]
+  admissibility_envelope:
+    fixture_family: env-import
+    platforms: ["x86_64-linux"]
+    observables: [stdout, exit]
+    normalizers: []
+    replay_scope: single-run

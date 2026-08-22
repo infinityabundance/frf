@@ -1,0 +1,31 @@
+{
+  "id": "log4shell",
+  "name": "Apache Log4j 'Log4Shell'",
+  "cve": "CVE-2021-44228",
+  "year": 2021,
+  "project": "Apache Log4j",
+  "domain": "structured-runtime",
+  "defect": "A JNDI lookup in a log message is performed at log time, contacting an attacker-controlled LDAP endpoint. The vulnerable release is Log4j 2.14.1; the fixed release is 2.17.1 (JNDI lookups disabled by default). The probe (src/Log4ShellProbe.java) logs a fixture message containing '${jndi:ldap://127.0.0.1:1/a}' through Log4j 2 and reports whether the lookup error path fired.",
+  "build": {
+    "recipe": "build/build-all.sh (Maven Central jars, SHA-256-pinned)",
+    "vulnerable": "2.14.1",
+    "fixed": "2.17.1"
+  },
+  "sides": {
+    "vulnerable": "builds/run-vuln.sh",
+    "fixed": "builds/run-fixed.sh"
+  },
+  "authority_name": "ref-log4j",
+  "authority_fixed_version": "2.17.1",
+  "fixtures": {
+    "defect": "defect.conf",
+    "clean": "clean.conf"
+  },
+  "trigger": "jndi-lookup",
+  "observables": ["stdout", "exit"],
+  "challenge": "builtin",
+  "clean_control": {
+    "manifest": "manifest-clean.yaml",
+    "expectation": "no residual on any axis (without the JNDI lookup in the message, both builds report JNDI_LOOKUP_NOT_ATTEMPTED)"
+  }
+}

@@ -1,0 +1,24 @@
+court:
+  id: jndi-check
+  question: >-
+    For the JNDI-lookup trigger in fixture family log4shell, does the
+    candidate's Log4j preserve the fixed reference's stdout and exit class?
+  falsifier: >-
+    The candidate's Log4j performs the JNDI lookup at log time
+    (CVE-2021-44228), diverging on stdout.
+  authority: ref-log4j-2.17.1
+  candidate:
+    name: cand-log4j-2.14.1
+    version_or_commit: "2.14.1"
+    build_profile: release
+    path: builds/run-fixed.sh
+  fixture:
+    id: message.conf
+    path: fixtures/defect.conf
+    arguments: ["{fixture}"]
+  admissibility_envelope:
+    fixture_family: jndi
+    platforms: ["x86_64-linux"]
+    observables: [stdout, exit]
+    normalizers: []
+    replay_scope: single-run

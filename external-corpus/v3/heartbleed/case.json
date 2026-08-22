@@ -1,0 +1,31 @@
+{
+  "id": "heartbleed",
+  "name": "OpenSSL 'Heartbleed'",
+  "cve": "CVE-2014-0160",
+  "year": 2014,
+  "project": "OpenSSL",
+  "domain": "native-library",
+  "defect": "The TLS heartbeat handler copied a claimed payload length without checking it against the record, leaking up to 16 KiB of process memory. The vulnerable release is OpenSSL 1.0.1f; the fixed release is 1.0.1g (the CVE-2014-0160 fix release). The probe (src/hb.c) performs the exact historical exploit message sequence — ClientHello with the heartbeat extension, then the malformed heartbeat immediately after ServerHelloDone — against the linked library's own protocol code.",
+  "build": {
+    "recipe": "build/native-build.sh (inside build/Containerfile)",
+    "vulnerable": "1.0.1f",
+    "fixed": "1.0.1g"
+  },
+  "sides": {
+    "vulnerable": "builds/hb-1.0.1f",
+    "fixed": "builds/hb-1.0.1g"
+  },
+  "authority_name": "ref-hb",
+  "authority_fixed_version": "1.0.1g",
+  "fixtures": {
+    "defect": "defect.conf",
+    "clean": "clean.conf"
+  },
+  "trigger": "malformed-heartbeat",
+  "observables": ["exit", "stderr"],
+  "challenge": "builtin",
+  "clean_control": {
+    "manifest": "manifest-clean.yaml",
+    "expectation": "no residual on any axis (with the handshake-only clean fixture, the vulnerable and fixed builds are byte-identical on exit and stderr)"
+  }
+}
