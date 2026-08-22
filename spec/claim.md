@@ -148,9 +148,22 @@ KnowledgeSnapshot {
                        universe commits their bytes, not their labels.
     objects            every other member of U as a typed content reference:
                        (kind, id, cid) for receipts, runs, authorities,
-                       series, and reductions
+                       series, and reductions — the cid commits the EXACT
+                       bytes the absence search's scope computation read
 }
 ```
+
+The universe is CONTAINED in the evidence that carries it. The reference
+loader re-derives every committed object's content address from the store
+before consuming a claim (`verify_knowledge_universe`); the independent
+verifiers re-derive the same objects FROM THE BUNDLE — a bundle that cannot
+reproduce a committed receipt/run/authority/series/reduction is refused, so
+"no unresolved residual in U intersects K" means the same thing to the
+compiler, the store re-verifier, and every portable verifier. The bundle
+export therefore carries the ENTIRE committed universe generically (not
+only the objects a run walk happens to cite): every committed authority
+(including one only a witness's admission cites), series, reduction,
+receipt, and run.
 
 ```text
 ClaimScope {           one cell: a single Cartesian product

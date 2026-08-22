@@ -776,13 +776,9 @@ pub fn run_external(
     }
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
-    crate::ext::require_canonical_response(&out.stdout, "comparator response")?;
-    let response: ComparatorResponse = serde_json::from_slice(&out.stdout).map_err(|e| {
-        FrfError::new(format!(
-            "comparator for axis {} produced an unparseable response: {e}",
-            axis.as_str()
-        ))
-    })?;
+    let response: ComparatorResponse =
+        crate::ext::parse_canonical_response(&out.stdout, "comparator response")
+            .map_err(|e| FrfError::new(format!("comparator for axis {}: {e}", axis.as_str())))?;
     let outcome = interpret(&response, request_cid)
         .map_err(|e| FrfError::new(format!("comparator for axis {}: {e}", axis.as_str())))?;
     Ok((outcome, out.stdout))
