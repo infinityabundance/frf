@@ -198,3 +198,13 @@ fn run_court_manifest(work: &Workdir, manifest: &str) -> String {
     assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
     run
 }
+
+/// Run the canonical court under an ambient environment (the FRF_EXEC_*
+/// hooks) and return the run id.
+pub fn run_court_env(work: &Workdir, envs: &[(&str, &str)]) -> String {
+    let out = frf_env(work, &["--root", ROOT, "court", "run", MANIFEST], envs);
+    assert_success(&out, "court run (env)");
+    let run = stdout(&out);
+    assert!(run.starts_with("run-cli-malformed-input-"), "run id: {run}");
+    run
+}

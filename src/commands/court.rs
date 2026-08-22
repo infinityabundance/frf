@@ -2062,9 +2062,15 @@ pub fn run_once(
 
     // -- content-address the run ----------------------------------------------
     // Identity discipline: ONE run-identity function, shared with replay,
-    // receipt verification, and the verification suite. The preimage is a
-    // domain-separated canonical JSON document (FRF/RUN/v1), never a
-    // delimiter-assembled string; a name is a claim until it is recomputed.
+    // receipt verification, and the verification suite. The identity
+    // (FRF/RUN/v2) composes the OBSERVATION identity (FRF/OBSERVATION/v1 —
+    // what was observed) and the EXECUTION identity (FRF/EXECUTION/v1 —
+    // under exactly what machinery/contract it was observed: profile,
+    // effective bounds, runner, interpreters, and every comparator/
+    // normalizer/adapter/minimizer implementation). The preimages are
+    // domain-separated canonical JSON documents, never delimiter-assembled
+    // strings; a name is a claim until it is recomputed.
+    let capture_bounds = host::capture_bounds(profile);
     let pre = crate::semantics::RunPreimage {
         court: &spec.id,
         authority: &authority.id,
@@ -2086,7 +2092,15 @@ pub fn run_once(
         reference: &reference,
         candidate: &candidate,
         residuals: &residuals,
+        execution_profile: profile.as_str(),
+        capture_bounds: &capture_bounds,
+        comparator_implementations: &provenance.comparator_implementations,
+        normalizer_implementations: &provenance.normalizer_implementations,
+        adapter_implementations: &provenance.adapter_implementations,
+        minimizer_implementations: &provenance.minimizer_implementations,
     };
+    let observation_identity = crate::semantics::observation_identity(&pre)?;
+    let execution_identity = crate::semantics::execution_identity(&pre)?;
     let run_hash = crate::semantics::run_identity(&pre)?;
     let run = format!("run-{}-{}", spec.id, run_hash);
     let run_dir = store.run_dir(&run)?;
@@ -2350,7 +2364,9 @@ pub fn run_once(
         },
         court_semantic_identity,
         execution_profile: profile.as_str().to_string(),
-        capture_bounds: host::capture_bounds(profile),
+        capture_bounds,
+        observation_identity,
+        execution_identity,
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),

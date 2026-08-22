@@ -70,9 +70,23 @@
     },
     {
       "id": "execution",
-      "meaning": "What was actually executed (a run: identity + capture + produced trees)",
-      "schema": "frf-capture-v11",
-      "identity": "FRF/RUN/v1",
+      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed)",
+      "schema": "frf-capture-v12",
+      "identity": "FRF/RUN/v2",
+      "status": "active"
+    },
+    {
+      "id": "observation-identity",
+      "meaning": "What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them",
+      "schema": null,
+      "identity": "FRF/OBSERVATION/v1",
+      "status": "active"
+    },
+    {
+      "id": "execution-identity",
+      "meaning": "Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract",
+      "schema": null,
+      "identity": "FRF/EXECUTION/v1",
       "status": "active"
     },
     {
@@ -267,8 +281,18 @@
   ],
   "identities": [
     {
-      "domain": "FRF/RUN/v1",
-      "meaning": "Run identity preimage",
+      "domain": "FRF/RUN/v2",
+      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/OBSERVATION/v1",
+      "meaning": "Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/EXECUTION/v1",
+      "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
       "status": "active"
     },
     {
@@ -452,7 +476,7 @@
       "status": "active"
     },
     {
-      "id": "frf-capture-v11",
+      "id": "frf-capture-v12",
       "status": "active"
     },
     {

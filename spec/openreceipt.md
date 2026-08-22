@@ -55,6 +55,20 @@ The receipt identity is the **full SHA-256** of the canonical bytes:
 The `{run}` component is the content-addressed run identity
 (`run-{court}-{sha256}`). No truncated digest is ever an identity.
 
+The run digest is the `FRF/RUN/v2` composition of two separately
+addressable identities: the **observation identity** (`FRF/OBSERVATION/v1`
+— what was observed: the question, the inputs, the effective environment,
+and the observed answer) and the **execution identity** (`FRF/EXECUTION/v1`
+— under exactly what machinery/contract it was observed: the execution
+profile, the effective capture bounds including any `FRF_EXEC_*`
+overrides, the runner executable, the side interpreter chains, and every
+comparator/normalizer/adapter/minimizer implementation). The capture
+records both identities, and the run id commits the contract: two
+executions that coincide on outputs under different profiles, bounds, or
+overrides are different bounded observations, while a repeated execution
+can legitimately share an observation identity with exact provenance
+separately addressable.
+
 ## 3. Provenance rules
 
 An OpenReceipt is immutable evidence. It never asks its own host what

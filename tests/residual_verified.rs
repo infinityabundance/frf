@@ -291,8 +291,8 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         "a forged residual must not be witnessed"
     );
     // The forged raw projection breaks the run identity commitment (the
-    // residual's raw projections are part of FRF/RUN/v1), so the refusal
-    // names the run — fail-closed either way.
+    // residual's raw projections are part of FRF/OBSERVATION/v1), so the
+    // refusal names the run — fail-closed either way.
     let stderr = stderr(&out);
     assert!(
         stderr.contains("does not rederive")

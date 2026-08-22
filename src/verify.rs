@@ -96,8 +96,55 @@ pub fn capture_digest(capture: &CaptureManifest, residuals: &[ResidualRecord]) -
         reference: &capture.reference,
         candidate: &capture.candidate,
         residuals,
+        execution_profile: &capture.execution_profile,
+        capture_bounds: &capture.capture_bounds,
+        comparator_implementations: &capture.provenance.comparator_implementations,
+        normalizer_implementations: &capture.provenance.normalizer_implementations,
+        adapter_implementations: &capture.provenance.adapter_implementations,
+        minimizer_implementations: &capture.provenance.minimizer_implementations,
     };
     crate::semantics::run_identity(&pre)
+}
+
+/// Recompute a capture's recorded `observation_identity` / `execution_identity`
+/// fields from its own recorded fields — the same functions the court uses.
+pub fn capture_identities(
+    capture: &CaptureManifest,
+    residuals: &[ResidualRecord],
+) -> Result<(String, String)> {
+    let pre = RunPreimage {
+        court: &capture.court,
+        authority: &capture.authority,
+        authority_interpreter: capture
+            .authority_artifact
+            .interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
+        candidate_sha256: &capture.candidate_artifact.sha256,
+        candidate_interpreter: capture
+            .candidate_artifact
+            .interpreter
+            .as_ref()
+            .map(|i| i.downstream_interpreter.sha256.as_str()),
+        fixture_sha256: &capture.fixture_sha256,
+        arguments: &capture.arguments,
+        environment_digest: &capture.environment.digest,
+        runner_hash: &capture.provenance.runner.frf_executable_hash,
+        court_semantic_identity: &capture.court_semantic_identity,
+        reference: &capture.reference,
+        candidate: &capture.candidate,
+        residuals,
+        execution_profile: &capture.execution_profile,
+        capture_bounds: &capture.capture_bounds,
+        comparator_implementations: &capture.provenance.comparator_implementations,
+        normalizer_implementations: &capture.provenance.normalizer_implementations,
+        adapter_implementations: &capture.provenance.adapter_implementations,
+        minimizer_implementations: &capture.provenance.minimizer_implementations,
+    };
+    Ok((
+        crate::semantics::observation_identity(&pre)?,
+        crate::semantics::execution_identity(&pre)?,
+    ))
 }
 
 fn read_bytes(path: &Path, what: &str) -> Result<Vec<u8>> {
@@ -147,7 +194,23 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         residuals.push(record);
     }
 
-    // 3. The run identity rederives from the capture's recorded fields.
+    // 3. The observation + execution identities rederive from the recorded
+    //    fields, and the run identity composes them.
+    let (obs, exec) = capture_identities(&capture, &residuals)?;
+    if capture.observation_identity != obs {
+        return Err(FrfError::new(format!(
+            "capture {run}: the recorded observation_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
+            &obs[..16],
+            &capture.observation_identity[..16]
+        )));
+    }
+    if capture.execution_identity != exec {
+        return Err(FrfError::new(format!(
+            "capture {run}: the recorded execution_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
+            &exec[..16],
+            &capture.execution_identity[..16]
+        )));
+    }
     let rederived = capture_digest(&capture, &residuals)?;
     // The run id is `run-{court}-{hash}`; the rederived hash must be its
     // digest component — the name is a claim until recomputed.

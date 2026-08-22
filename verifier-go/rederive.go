@@ -551,77 +551,153 @@ func kindIdentity(id, meaning, surfaceGrammar, comparatorFamily string) (string,
 	return hashPreimage("FRF/KIND/v1", doc)
 }
 
-// runIdentity: FRF/RUN/v1 over the capture's recorded fields — the name is a
-// claim until recomputed.
-func runIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, error) {
-	prov := obj(recVal(cap, "provenance"))
-	runner := obj(recVal(prov, "runner"))
-	side := func(s *jcs.Object) *jcs.Object {
-		var produced jcs.Value
-		if p, ok := s.Get("produced"); ok && p != nil {
-			pv := p.(*jcs.Object)
-			var files []jcs.Value
-			for _, f := range arr(recVal(pv, "files")) {
-				fo := obj(f)
-				files = append(files, &jcs.Object{
-					Keys:   []string{"path", "sha256", "executable"},
-					Values: []jcs.Value{str(fo, "path"), str(fo, "sha256"), recVal(fo, "executable")},
-				})
-			}
-			produced = &jcs.Object{
-				Keys:   []string{"schema_version", "manifest_sha256", "files"},
-				Values: []jcs.Value{str(pv, "schema_version"), str(pv, "manifest_sha256"), files},
-			}
+// sideProjection: the observed surface of one side — exit class, stream
+// hashes + first lines, produced artifact tree, adapted payload (never raw
+// bytes) — shared by the observation and run identities.
+func sideProjection(s *jcs.Object) *jcs.Object {
+	var produced jcs.Value
+	if p, ok := s.Get("produced"); ok && p != nil {
+		pv := p.(*jcs.Object)
+		var files []jcs.Value
+		for _, f := range arr(recVal(pv, "files")) {
+			fo := obj(f)
+			files = append(files, &jcs.Object{
+				Keys:   []string{"path", "sha256", "executable"},
+				Values: []jcs.Value{str(fo, "path"), str(fo, "sha256"), recVal(fo, "executable")},
+			})
 		}
-		var adapted jcs.Value
-		if a, ok := s.Get("adapted"); ok && a != nil {
-			av := a.(*jcs.Object)
-			adapted = &jcs.Object{
-				Keys:   []string{"format", "payload_base64", "content_sha256"},
-				Values: []jcs.Value{str(av, "format"), str(av, "payload_base64"), str(av, "content_sha256")},
-			}
-		}
-		return &jcs.Object{
-			Keys:   []string{"exit", "stdout_sha256", "stderr_sha256", "stdout_first_line", "stderr_first_line", "produced", "adapted"},
-			Values: []jcs.Value{str(s, "exit"), str(s, "stdout_sha256"), str(s, "stderr_sha256"), str(s, "stdout_first_line"), str(s, "stderr_first_line"), produced, adapted},
+		produced = &jcs.Object{
+			Keys:   []string{"schema_version", "manifest_sha256", "files"},
+			Values: []jcs.Value{str(pv, "schema_version"), str(pv, "manifest_sha256"), files},
 		}
 	}
+	var adapted jcs.Value
+	if a, ok := s.Get("adapted"); ok && a != nil {
+		av := a.(*jcs.Object)
+		adapted = &jcs.Object{
+			Keys:   []string{"format", "payload_base64", "content_sha256"},
+			Values: []jcs.Value{str(av, "format"), str(av, "payload_base64"), str(av, "content_sha256")},
+		}
+	}
+	return &jcs.Object{
+		Keys:   []string{"exit", "stdout_sha256", "stderr_sha256", "stdout_first_line", "stderr_first_line", "produced", "adapted"},
+		Values: []jcs.Value{str(s, "exit"), str(s, "stdout_sha256"), str(s, "stderr_sha256"), str(s, "stdout_first_line"), str(s, "stderr_first_line"), produced, adapted},
+	}
+}
+
+// interpreterHash: the downstream interpreter's sha256 of one side's
+// artifact, or nil (JSON null) when the artifact declares no interpreter.
+func interpreterHash(s *jcs.Object) jcs.Value {
+	if v, ok := s.Get("interpreter"); ok && v != nil {
+		io := v.(*jcs.Object)
+		down := obj(recVal(io, "downstream_interpreter"))
+		if h, ok := down.Get("sha256"); ok {
+			return h
+		}
+	}
+	return nil
+}
+
+// residualProjection: the residual projection shared by the observation and
+// run identities — the recorded disagreement (kind + raw projections).
+func residualProjection(r *jcs.Object) *jcs.Object {
+	return &jcs.Object{
+		Keys:   []string{"kind", "raw_reference", "raw_candidate"},
+		Values: []jcs.Value{str(r, "kind"), str(r, "raw_reference"), str(r, "raw_candidate")},
+	}
+}
+
+// implementationProjection: the exact program that served one axis/route,
+// bound by its implementation hash.
+func implementationProjection(d *jcs.Object) *jcs.Object {
+	return &jcs.Object{
+		Keys:   []string{"id", "implementation_hash"},
+		Values: []jcs.Value{str(d, "id"), str(d, "implementation_hash")},
+	}
+}
+
+// observationIdentity: FRF/OBSERVATION/v1 over the capture's recorded fields
+// — what was observed: the question, the inputs, the effective environment,
+// and the answer. Two observations with the same question, inputs,
+// environment, and outputs share this identity regardless of which harness
+// observed them.
+func observationIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, error) {
 	var res []jcs.Value
 	for _, r := range residuals {
-		res = append(res, &jcs.Object{
-			Keys:   []string{"kind", "raw_reference", "raw_candidate"},
-			Values: []jcs.Value{str(r, "kind"), str(r, "raw_reference"), str(r, "raw_candidate")},
-		})
-	}
-	interp := func(s *jcs.Object) jcs.Value {
-		if v, ok := s.Get("interpreter"); ok && v != nil {
-			io := v.(*jcs.Object)
-			down := obj(recVal(io, "downstream_interpreter"))
-			if h, ok := down.Get("sha256"); ok {
-				return h
-			}
-		}
-		return nil
+		res = append(res, residualProjection(r))
 	}
 	doc := &jcs.Object{
-		Keys: []string{"court", "authority", "authority_interpreter", "candidate_sha256", "candidate_interpreter", "fixture_sha256", "arguments", "environment_digest", "runner_hash", "court_semantic_identity", "reference", "candidate", "residuals"},
+		Keys: []string{"court", "court_semantic_identity", "authority", "candidate_sha256", "fixture_sha256", "arguments", "environment_digest", "reference", "candidate", "residuals"},
 		Values: []jcs.Value{
 			str(cap, "court"),
+			str(cap, "court_semantic_identity"),
 			str(cap, "authority"),
-			interp(obj(recVal(cap, "authority_artifact"))),
 			str(obj(recVal(cap, "candidate_artifact")), "sha256"),
-			interp(obj(recVal(cap, "candidate_artifact"))),
 			str(cap, "fixture_sha256"),
 			recVal(cap, "arguments"),
 			str(obj(recVal(cap, "environment")), "digest"),
-			str(runner, "frf_executable_hash"),
-			str(cap, "court_semantic_identity"),
-			side(obj(recVal(cap, "reference"))),
-			side(obj(recVal(cap, "candidate"))),
+			sideProjection(obj(recVal(cap, "reference"))),
+			sideProjection(obj(recVal(cap, "candidate"))),
 			res,
 		},
 	}
-	return hashPreimage("FRF/RUN/v1", doc)
+	return hashPreimage("FRF/OBSERVATION/v1", doc)
+}
+
+// executionIdentity: FRF/EXECUTION/v1 over the capture's recorded fields —
+// under exactly what machinery and contract the observation was made: the
+// execution profile, the effective capture bounds (including FRF_EXEC_*
+// overrides), the runner executable, the side interpreter chains, and every
+// comparator/normalizer/adapter/minimizer implementation.
+func executionIdentity(cap *jcs.Object) (string, error) {
+	bounds := obj(recVal(cap, "capture_bounds"))
+	prov := obj(recVal(cap, "provenance"))
+	runner := obj(recVal(prov, "runner"))
+	impls := func(key string) []jcs.Value {
+		var out []jcs.Value
+		for _, v := range arr(recVal(prov, key)) {
+			out = append(out, implementationProjection(obj(v)))
+		}
+		return out
+	}
+	cb := &jcs.Object{
+		Keys:   []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"},
+		Values: []jcs.Value{str(bounds, "timeout_ms"), str(bounds, "max_stream_bytes"), str(bounds, "rlimit_as_mb"), str(bounds, "rlimit_cpu_s"), str(bounds, "rlimit_nofile"), str(bounds, "rlimit_nproc"), recVal(bounds, "cgroup_pids_max"), recVal(bounds, "cgroup_memory_max"), recVal(bounds, "cgroup_cpu_max")},
+	}
+	doc := &jcs.Object{
+		Keys: []string{"execution_profile", "capture_bounds", "runner_hash", "authority_interpreter", "candidate_interpreter", "comparator_implementations", "normalizer_implementations", "adapter_implementations", "minimizer_implementations"},
+		Values: []jcs.Value{
+			str(cap, "execution_profile"),
+			cb,
+			str(runner, "frf_executable_hash"),
+			interpreterHash(obj(recVal(cap, "authority_artifact"))),
+			interpreterHash(obj(recVal(cap, "candidate_artifact"))),
+			impls("comparator_implementations"),
+			impls("normalizer_implementations"),
+			impls("adapter_implementations"),
+			impls("minimizer_implementations"),
+		},
+	}
+	return hashPreimage("FRF/EXECUTION/v1", doc)
+}
+
+// runIdentity: FRF/RUN/v2 over the capture's recorded fields — the
+// composition of the observation identity and the execution identity; the
+// name is a claim until recomputed.
+func runIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, error) {
+	obs, err := observationIdentity(cap, residuals)
+	if err != nil {
+		return "", err
+	}
+	exec, err := executionIdentity(cap)
+	if err != nil {
+		return "", err
+	}
+	doc := &jcs.Object{
+		Keys:   []string{"observation_identity", "execution_identity"},
+		Values: []jcs.Value{obs, exec},
+	}
+	return hashPreimage("FRF/RUN/v2", doc)
 }
 
 // dispositionEventIdentity: FRF/DISPOSITION-EVENT/v1 over the event content.
