@@ -10,6 +10,20 @@ keywords = ["forensic", "evidence", "compatibility", "differential-testing", "ve
 categories = ["development-tools::testing", "command-line-utilities"]
 rust-version = "1.85"
 
+# The crate is the reference engine + protocol documentation. The v3
+# empirical corpus (external-corpus/v3) carries ACTUAL upstream binaries
+# (bash/OpenSSL/Log4j builds, ~15 MiB compressed) that exist to be executed
+# by the experiment, not to ship inside every consumer's dependency tree —
+# and crates.io caps uploads at 10 MiB. The committed builds/ artifacts
+# stay in the repository (the corpus is self-contained evidence there); the
+# published crate excludes them — every one is rebuildable from the pinned
+# recipes in external-corpus/v3/build/build-all.sh.
+exclude = [
+    "external-corpus/v3/shellshock/builds/**",
+    "external-corpus/v3/heartbleed/builds/**",
+    "external-corpus/v3/log4shell/builds/**",
+]
+
 [[bin]]
 name = "frf"
 path = "src/main.rs"
