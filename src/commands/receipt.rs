@@ -281,6 +281,10 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
             argv: crate::commands::replay::replay_argv(&store.root, &capture.manifest),
             expected_run_identity: run.to_string(),
         },
+        // The snapshotted execution-context closure (when the court declared
+        // one), copied from the capture — a receipt never reconstructs the
+        // runtime context from whatever happens to be installed.
+        execution_context: capture.execution_context.clone(),
     };
 
     let json = crate::canon::canonical(&body)?;

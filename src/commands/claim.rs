@@ -670,6 +670,30 @@ pub fn run(
                     )));
                 }
             }
+            // The premise's DECLARED execution-context closure (when
+            // declared) is stated, never implied: a high-assurance claim
+            // names the runtime context it was compiled under, and names it
+            // as DECLARED — the child executables / runtime libraries / data
+            // dependencies the court author declared, snapshotted and
+            // content-addressed at observation time. It is NOT a measured
+            // file-access trace: "the declared context is bound" never means
+            // "every file the side read was captured" (a launcher's
+            // classpath is bound because the court declared it, and the
+            // native/script artifact's own closure is its startup-link
+            // closure, not a runtime trace).
+            if let Some(ec) = &r.execution_context {
+                eprintln!(
+                    "high-assurance premise {}: declared execution-context closure {} ({} artifact(s): {})",
+                    r.run,
+                    &ec.cid[..16],
+                    ec.artifacts.len(),
+                    ec.artifacts
+                        .iter()
+                        .map(|a| format!("{}={}", a.role, a.path))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
         }
         EXECUTION_PROFILE_LINUX.to_string()
     } else {

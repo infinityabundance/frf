@@ -1011,6 +1011,14 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     if execution_identity(&cap) != as_str(&cap["execution_identity"]) {
         panic!("capture {run}: the recorded execution_identity does not rederive");
     }
+    // v18: the DECLARED execution-context closure (when carried) is
+    // self-authenticating — its cid rederives from its own artifacts.
+    if let Some(closure) = cap.get("execution_context").filter(|n| !n.is_null()) {
+        let expected = crate::rederive::execution_context_identity(closure);
+        if expected != as_str(&closure["cid"]) {
+            panic!("capture {run}: the execution-context closure cid does not rederive");
+        }
+    }
     for side in ["reference", "candidate"] {
         let s = &cap[side];
         let stdout = read(&safe_rel(bundle, &format!("captures/{run}/{side}.stdout")));

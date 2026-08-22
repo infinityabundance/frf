@@ -63,6 +63,32 @@ pub fn fixture_identity(
     hash_preimage("FRF/FIXTURE/v1", &doc)
 }
 
+/// The execution-context closure identity: `FRF/EXECUTION-CONTEXT/v1` over
+/// the canonical document minus the cid (the artifacts SORTED BY PATH, so
+/// the closure is a deterministic function of the declared SET).
+pub fn execution_context_identity(closure: &ExecutionContextClosure) -> Result<String> {
+    let mut sorted: Vec<&ExecutionContextArtifact> = closure.artifacts.iter().collect();
+    sorted.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut value = serde_json::to_value(closure)
+        .map_err(|e| FrfError::new(format!("cannot serialize the closure: {e}")))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("cid");
+        if let Some(arts) = obj
+            .get_mut("artifacts")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            *arts = sorted
+                .into_iter()
+                .map(|a| {
+                    serde_json::to_value(a)
+                        .map_err(|e| FrfError::new(format!("cannot serialize an artifact: {e}")))
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
+    }
+    hash_preimage("FRF/EXECUTION-CONTEXT/v1", &value)
+}
+
 /// The content address of a native runtime closure: `FRF/RUNTIME-CLOSURE/v1`
 /// over the canonical document minus the `cid` (the components are SORTED BY
 /// NAME inside the identity, so the closure is a deterministic function of
@@ -1331,6 +1357,7 @@ mod tests {
             execution_profile: None,
             environment: None,
             environment_points: None,
+            execution_context: None,
         }
     }
 
@@ -1708,6 +1735,7 @@ mod tests {
             },
             residuals: vec![],
             evidence_refs: vec![],
+            execution_context: None,
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

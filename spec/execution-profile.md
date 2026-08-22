@@ -228,6 +228,53 @@ FRF/RUNTIME-CLOSURE/v1 {
   bound closure is refused, exactly as a script without its interpreter
   chain is refused.
 
+## Execution-context closure — the DECLARED runtime dependencies (v18)
+
+The native runtime closure binds the STARTUP LINK closure of the artifact
+itself; it does not bind what the side subsequently SPAWNS or LOADS. The
+engine therefore also records the court's **DECLARED execution-context
+closure** (receipt + capture schema v18): the child executables, runtime
+libraries, and data dependencies the side's behavior depends on beyond its
+own bytes.
+
+```text
+FRF/EXECUTION-CONTEXT/v1 {
+    schema_version: frf-execution-context-v1
+    cid
+    artifacts: [
+        { path, role: child-executable | runtime-library | data, sha256 }, …
+    ]
+}
+```
+
+- The court author DECLARES the artifacts in the manifest
+  (`court.execution_context.artifacts`), each a working-directory-relative or
+  absolute path plus a protocol role; a role outside the protocol set is a
+  REFUSAL at observation time.
+- At observation time the engine resolves every declared path, snapshots
+  the exact bytes as content-addressed objects, and records the closure in
+  the capture — a declared dependency is bound to the exact bytes, never
+  assumed. Relative paths resolve against the working directory, absolute
+  paths against the host.
+- The identity is a deterministic function of the declared SET: artifacts
+  are sorted by path, and the `cid` rederives in any implementation:
+  `SHA-256("FRF/EXECUTION-CONTEXT/v1\n" ‖ JCS(document minus the cid))`.
+- Verification rederives the closure's `cid` from its own fields, requires
+  the protocol roles and the strictly-sorted order, verifies each snapshot
+  object is content-addressed, and requires the receipt's copy to EQUAL the
+  capture's.
+- **This is a DECLARED closure, never a measured file-access trace.** It
+  binds what the court author declares the side needs — for JVM evidence,
+  `java` + its native startup closure + the classpath artifacts; for
+  Python, the interpreter + the module tree; for a service, the binary +
+  shared libs + config. A high-assurance claim therefore means "the
+  declared execution context is bound", never "every file the side read was
+  captured". A launcher's classpath is bound because the court declared it;
+  the artifact's own closure remains its native startup-link closure (v17),
+  not a runtime trace.
+- High-assurance claim admission states each premise's declared closure
+  (when present) and never implies transitive runtime closure beyond it.
+
 ## The reproduction policies
 
 `frf replay RUN_ID | RECEIPT_ID --policy exact|semantic`:

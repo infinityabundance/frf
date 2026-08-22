@@ -103,7 +103,8 @@ not these tables.
 | minimizer-spec | Meaning of a reduction relation | FRF/MINIMIZER-SPEC/v2 | active |
 | mutation-spec | Meaning of a mutation relation (the defect class a provider proposes) | FRF/MUTATION-SPEC/v1 | active |
 | witness-spec | Meaning of a witness attestation relation | FRF/WITNESS-SPEC/v2 | active |
-| execution | What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed) | frf-capture-v12 · FRF/RUN/v2 | active |
+| execution | What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed) | frf-capture-v13 · FRF/RUN/v2 | active |
+| execution-context | The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) — high-assurance means the declared context is bound, not that every file read was captured | frf-execution-context-v1 · FRF/EXECUTION-CONTEXT/v1 | active |
 | observation-identity | What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them | FRF/OBSERVATION/v1 | active |
 | execution-identity | Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract | FRF/EXECUTION/v1 | active |
 | observation | Raw captured result (side capture + produced-artifact tree) | frf-produced-v1 | active |
@@ -120,7 +121,7 @@ not these tables.
 | independence | Declared independence relation about a witness attestation, with its basis | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
 | knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v9 · FRF/KNOWLEDGE/v2 | active |
 | claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators | frf-claim-v9 · FRF/CLAIM/v1 | active |
-| receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics) | frf-receipt-v17 | active |
+| receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time) | frf-receipt-v18 | active |
 | runtime-closure | The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment | frf-runtime-closure-v1 · FRF/RUNTIME-CLOSURE/v1 | active |
 | bundle | Portable closure of referenced evidence (directory or single tar) | frf-bundle-v3 | active |
 | ci-status | CI gate presentation of a compiled claim | frf-ci-status-v1 | active |
@@ -142,6 +143,7 @@ not these tables.
 | FRF/RUN/v2 | Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed | active |
 | FRF/OBSERVATION/v1 | Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer) | active |
 | FRF/EXECUTION/v1 | Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes) | active |
+| FRF/EXECUTION-CONTEXT/v1 | Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) — the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes | active |
 | FRF/ENVIRONMENT/v2 | Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input | active |
 | FRF/FIXTURE/v1 | Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments — claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs | active |
 | FRF/COURT/v2 | Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics) | active |
@@ -185,10 +187,14 @@ not these tables.
 |---|---|---|
 | frf-claim-v9 | active |  |
 | frf-authority-v1 | active |  |
-| frf-capture-v12 | active |  |
+| frf-capture-v13 | active |  |
+| frf-capture-v12 | superseded |  |
+| frf-execution-context-v1 | active |  |
+| frf-execution-context-v9 | reserved-invalid |  |
 | frf-residual-v1 | active |  |
 | frf-disposition-v2 | active |  |
-| frf-receipt-v17 | active |  |
+| frf-receipt-v18 | active |  |
+| frf-receipt-v17 | superseded |  |
 | frf-receipt-v16 | superseded |  |
 | frf-receipt-v15 | superseded |  |
 | frf-receipt-v12 | superseded |  |

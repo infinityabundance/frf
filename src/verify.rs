@@ -316,6 +316,52 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         }
     }
 
+    // 5c2. The DECLARED execution-context closure (when the court declared
+    //     one) is self-authenticating: its content address rederives from
+    //     its own artifacts (FRF/EXECUTION-CONTEXT/v1 over the document
+    //     minus the cid, sorted by path), every artifact names a protocol
+    //     role, the closure is sorted, and every snapshotted artifact's
+    //     bytes are content-addressed objects — a declared runtime
+    //     dependency is bound to the exact bytes, never assumed.
+    if let Some(closure) = &capture.execution_context {
+        if closure.schema_version != SCHEMA_EXECUTION_CONTEXT {
+            return Err(FrfError::new(format!(
+                "capture {run}: the execution-context closure carries schema_version {:?}, expected {SCHEMA_EXECUTION_CONTEXT}",
+                closure.schema_version
+            )));
+        }
+        let rederived = crate::semantics::execution_context_identity(closure)?;
+        if closure.cid != rederived {
+            return Err(FrfError::new(format!(
+                "capture {run}: the execution-context closure cid does not rederive ({} != {}) — the closure is not self-authenticating",
+                &rederived[..16],
+                &closure.cid[..16]
+            )));
+        }
+        let mut prev: Option<&str> = None;
+        for a in &closure.artifacts {
+            if !matches!(
+                a.role.as_str(),
+                "child-executable" | "runtime-library" | "data"
+            ) {
+                return Err(FrfError::new(format!(
+                    "capture {run}: execution-context artifact {} declares role {:?}; the protocol admits child-executable, runtime-library, or data",
+                    a.path, a.role
+                )));
+            }
+            if let Some(p) = prev {
+                if p >= a.path.as_str() {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: the execution-context artifacts are not strictly sorted by path ({} after {p})",
+                        a.path
+                    )));
+                }
+            }
+            prev = Some(&a.path);
+            store.verified_object_bytes(&a.sha256)?;
+        }
+    }
+
     // 5c. The normalizer chain: the COMPARED streams recorded in the capture
     //     derive from the recorded normalizer evidence. Each normalizer's
     //     preserved request carries the streams it received (base64); its
@@ -1186,6 +1232,11 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     {
         return Err(FrfError::new(format!(
             "receipt {id}: the execution profile or capture bounds do not match the capture (the harness contract is bound at observation time)"
+        )));
+    }
+    if body.execution_context != cap.execution_context {
+        return Err(FrfError::new(format!(
+            "receipt {id}: the declared execution-context closure does not match the capture (the runtime context is bound at observation time, never reconstructed)"
         )));
     }
     for obs in &body.observables {
@@ -2710,6 +2761,61 @@ impl Receipt {
             fail(&mut violations, e.0);
         }
 
+        // The DECLARED execution-context closure (when carried) is
+        // self-authenticating at the document level: the schema version, the
+        // artifact roles, the strictly-sorted order, and the content address
+        // rederiving from the document's own artifacts. A closure that
+        // cannot rederive its own identity is not evidence.
+        if let Some(closure) = &self.execution_context {
+            if closure.schema_version != SCHEMA_EXECUTION_CONTEXT {
+                fail(
+                    &mut violations,
+                    format!(
+                        "the execution-context closure carries schema_version {:?}, expected {SCHEMA_EXECUTION_CONTEXT}",
+                        closure.schema_version
+                    ),
+                );
+            }
+            let mut prev: Option<&str> = None;
+            for a in &closure.artifacts {
+                if !matches!(
+                    a.role.as_str(),
+                    "child-executable" | "runtime-library" | "data"
+                ) {
+                    fail(
+                        &mut violations,
+                        format!(
+                            "execution-context artifact {} declares role {:?}; the protocol admits child-executable, runtime-library, or data",
+                            a.path, a.role
+                        ),
+                    );
+                }
+                if let Some(p) = prev {
+                    if p >= a.path.as_str() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "the execution-context artifacts are not strictly sorted by path ({} after {p})",
+                                a.path
+                            ),
+                        );
+                    }
+                }
+                prev = Some(&a.path);
+            }
+            match crate::semantics::execution_context_identity(closure) {
+                Ok(h) if h != closure.cid => fail(
+                    &mut violations,
+                    "the execution-context closure cid does not rederive from its own artifacts",
+                ),
+                Err(e) => fail(
+                    &mut violations,
+                    format!("the execution-context closure cannot be rederived: {e}"),
+                ),
+                _ => {}
+            }
+        }
+
         // The court semantic identity rederives from the document.
         match crate::semantics::court_semantic_identity_from_receipt(self) {
             Ok(h) if h != self.court.semantic_identity => {
@@ -2916,6 +3022,7 @@ mod tests {
             execution_profile: None,
             environment: None,
             environment_points: None,
+            execution_context: None,
         };
         let semantic = crate::semantics::court_semantic_identity(
             &spec,
@@ -3072,6 +3179,7 @@ mod tests {
                 ],
                 expected_run_identity: "run-cli-malformed-input-1234".into(),
             },
+            execution_context: None,
         };
         body.validate_semantics()
             .expect("the base receipt must be semantically valid");
@@ -3171,6 +3279,74 @@ mod tests {
             b.environment.digest = "0".repeat(64);
         });
         assert!(msg.contains("environment digest"), "{msg}");
+    }
+
+    /// A self-consistent declared execution-context closure (cid rederives).
+    fn valid_closure() -> ExecutionContextClosure {
+        let mut closure = ExecutionContextClosure {
+            schema_version: SCHEMA_EXECUTION_CONTEXT.to_string(),
+            cid: String::new(),
+            artifacts: vec![
+                ExecutionContextArtifact {
+                    path: "builds/a.jar".into(),
+                    role: "runtime-library".into(),
+                    sha256: "1".repeat(64),
+                },
+                ExecutionContextArtifact {
+                    path: "builds/b.jar".into(),
+                    role: "child-executable".into(),
+                    sha256: "2".repeat(64),
+                },
+            ],
+        };
+        closure.cid =
+            crate::semantics::execution_context_identity(&closure).expect("closure identity");
+        closure
+    }
+
+    #[test]
+    fn execution_context_cid_must_rederive() {
+        let msg = violates(valid_receipt(), |b| {
+            let mut c = valid_closure();
+            c.cid = "0".repeat(64);
+            b.execution_context = Some(c);
+        });
+        assert!(msg.contains("execution-context closure cid"), "{msg}");
+    }
+
+    #[test]
+    fn execution_context_role_must_be_protocol() {
+        let msg = violates(valid_receipt(), |b| {
+            let mut c = valid_closure();
+            c.artifacts[0].role = "config".into();
+            c.cid = crate::semantics::execution_context_identity(&c).expect("closure identity");
+            b.execution_context = Some(c);
+        });
+        assert!(
+            msg.contains("admits child-executable, runtime-library, or data"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn execution_context_artifacts_must_be_strictly_sorted_by_path() {
+        let msg = violates(valid_receipt(), |b| {
+            let mut c = valid_closure();
+            c.artifacts.reverse();
+            c.cid = crate::semantics::execution_context_identity(&c).expect("closure identity");
+            b.execution_context = Some(c);
+        });
+        assert!(msg.contains("strictly sorted by path"), "{msg}");
+    }
+
+    #[test]
+    fn execution_context_schema_must_be_protocol() {
+        let msg = violates(valid_receipt(), |b| {
+            let mut c = valid_closure();
+            c.schema_version = "frf-execution-context-v9".into();
+            b.execution_context = Some(c);
+        });
+        assert!(msg.contains("schema_version"), "{msg}");
     }
 
     #[test]

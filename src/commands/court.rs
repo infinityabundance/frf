@@ -1492,6 +1492,73 @@ pub fn run_once(
     let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
     let candidate_native = crate::native::runtime_closure(&candidate_snapshot, &candidate_bytes)?;
 
+    // -- the DECLARED execution-context closure -----------------------------
+    // The court declares the child executables / runtime libraries / data
+    // dependencies the side's execution depends on beyond its own bytes.
+    // Each declared artifact is snapshotted and content-addressed at
+    // observation time (relative paths resolve against the working
+    // directory, absolute paths against the host), and the closure is
+    // recorded in the capture — a declared dependency is bound to the exact
+    // bytes, never assumed. The closure is a DECLARED context, never a
+    // measured file-access trace (spec/execution-profile.md).
+    let mut execution_context_refs: Vec<EvidenceRef> = Vec::new();
+    let execution_context: Option<ExecutionContextClosure> = if let Some(decl) =
+        &spec.execution_context
+    {
+        let mut artifacts: Vec<ExecutionContextArtifact> = Vec::new();
+        for a in &decl.artifacts {
+            let executable = match a.role.as_str() {
+                "child-executable" => true,
+                "runtime-library" | "data" => false,
+                other => {
+                    return Err(FrfError::new(format!(
+                            "execution-context artifact {} declares role {other:?}; the protocol admits child-executable, runtime-library, or data",
+                            a.path
+                        )));
+                }
+            };
+            let path = Path::new(&a.path);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| {
+                        FrfError::new(format!("cannot resolve the working directory: {e}"))
+                    })?
+                    .join(path)
+            };
+            let bytes = host::read_file(&resolved).map_err(|e| {
+                FrfError::new(format!(
+                    "execution-context artifact {} cannot be read (resolved {}): {e}",
+                    a.path,
+                    resolved.display()
+                ))
+            })?;
+            let sha = host::sha256_bytes(&bytes);
+            store.materialize_object(&bytes, executable)?;
+            artifacts.push(ExecutionContextArtifact {
+                path: a.path.clone(),
+                role: a.role.clone(),
+                sha256: sha.clone(),
+            });
+            execution_context_refs.push(EvidenceRef {
+                role: "execution-context".into(),
+                object_kind: "object".into(),
+                cid: sha,
+            });
+        }
+        artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut closure = ExecutionContextClosure {
+            schema_version: SCHEMA_EXECUTION_CONTEXT.to_string(),
+            cid: String::new(),
+            artifacts,
+        };
+        closure.cid = crate::semantics::execution_context_identity(&closure)?;
+        Some(closure)
+    } else {
+        None
+    };
+
     // -- identities, bound NOW (observation time) ----------------------------
     // Two questions, answered separately: WHAT question was asked (semantic
     // identity from comparator SEMANTICS + artifact hashes) and WHO asked it
@@ -2388,6 +2455,7 @@ pub fn run_once(
             cid: snap.impl_hash.clone(),
         });
     }
+    evidence_refs.extend(execution_context_refs);
 
     let capture = CaptureManifest {
         schema_version: SCHEMA_CAPTURE.to_string(),
@@ -2428,6 +2496,7 @@ pub fn run_once(
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
         evidence_refs,
+        execution_context,
     };
     let json = store.to_evidence(&capture)?;
     store.write_once(&run_dir.join("capture.json"), &json)?;

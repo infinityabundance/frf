@@ -281,6 +281,7 @@ mod tests {
                 argv: vec!["--root".into(), "frf".into(), "court".into(), "run".into()],
                 expected_run_identity: "run-cli-malformed-input-ab12cd34".into(),
             },
+            execution_context: None,
         }
     }
 

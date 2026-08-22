@@ -67,6 +67,32 @@ func runtimeClosureIdentity(closure *jcs.Object) string {
 	return mustPreimage("FRF/RUNTIME-CLOSURE/v1", doc)
 }
 
+// executionContextIdentity: FRF/EXECUTION-CONTEXT/v1 over the closure's
+// fields minus the cid, with the artifacts sorted by path — the closure is a
+// deterministic function of the declared SET (two observations that snapshot
+// the same declared paths to the same bytes share one identity).
+func executionContextIdentity(closure *jcs.Object) (string, error) {
+	var arts []jcs.Value
+	for _, a := range arr(recVal(closure, "artifacts")) {
+		arts = append(arts, a)
+	}
+	sort.Slice(arts, func(i, j int) bool {
+		return str(obj(arts[i]), "path") < str(obj(arts[j]), "path")
+	})
+	var sorted []jcs.Value
+	for _, a := range arts {
+		sorted = append(sorted, &jcs.Object{
+			Keys:   []string{"path", "role", "sha256"},
+			Values: []jcs.Value{str(obj(a), "path"), str(obj(a), "role"), str(obj(a), "sha256")},
+		})
+	}
+	doc := &jcs.Object{
+		Keys:   []string{"schema_version", "artifacts"},
+		Values: []jcs.Value{str(closure, "schema_version"), sorted},
+	}
+	return hashPreimage("FRF/EXECUTION-CONTEXT/v1", doc)
+}
+
 // mustPreimage: hashPreimage that cannot fail (the document is already
 // constructed from strings/arrays).
 func mustPreimage(kind string, doc jcs.Value) string {

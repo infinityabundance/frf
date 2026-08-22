@@ -93,6 +93,11 @@ var requiredReceiptKeys = []string{
 	"authority", "candidate", "environment", "fixtures", "observables", "residuals",
 	"endoduction", "claims", "replay",
 }
+
+// Optional receipt fields: carried exactly when the observation has them
+// (a court with no declared execution context produces a receipt without
+// the field), but never anything beyond the protocol set.
+var optionalReceiptKeys = []string{"execution_context"}
 var courtKeys = []string{"id", "question", "falsifier", "admissibility_envelope", "semantic_identity"}
 var envelopeKeys = []string{"authority_versions", "fixture_family", "platforms", "observables", "normalizers", "replay_scope"}
 var provenanceKeys = []string{"schema_version", "runner", "comparator_implementations", "normalizer_implementations", "adapter_implementations", "minimizer_implementations"}
@@ -121,6 +126,9 @@ var endoductionKeys = []string{"schema_version", "tokens"}
 var claimKeys = []string{"positive", "non_claims", "blocked_by_open_residuals"}
 var replayKeys = []string{"program", "evidence_root", "argv", "expected_run_identity"}
 var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"}
+var executionContextKeys = []string{"schema_version", "cid", "artifacts"}
+var executionContextArtifactKeys = []string{"path", "role", "sha256"}
+var executionContextRoles = []string{"child-executable", "runtime-library", "data"}
 var dispositeions = []string{"open", "fixed", "intentional", "environmental", "oracle_version", "harness", "unknown"}
 var closurePredicate = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality"
 
@@ -134,15 +142,15 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v17" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v17", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v18" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v18", str(o, "schema_version")))
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
 			push(&v, fmt.Sprintf("missing required field %q", k))
 		}
 	}
-	for _, k := range unknownKeys(o, requiredReceiptKeys) {
+	for _, k := range unknownKeys(o, append(append([]string{}, requiredReceiptKeys...), optionalReceiptKeys...)) {
 		push(&v, fmt.Sprintf("unknown property %q on the receipt (strict evidence)", k))
 	}
 	for _, pair := range [][2]string{{"court", "court"}, {"provenance", "provenance"}, {"authority", "authority"}, {"candidate", "candidate"}, {"environment", "environment"}, {"endoduction", "endoduction"}, {"claims", "claims"}, {"replay", "replay"}} {
@@ -176,6 +184,24 @@ func structuralViolations(doc jcs.Value) []string {
 	}
 	for _, k := range unknownKeys(objKeys(o, "capture_bounds"), captureBoundsKeys) {
 		push(&v, fmt.Sprintf("unknown property %q on capture_bounds", k))
+	}
+	// v18: the DECLARED execution-context closure's own structure (absent
+	// when the court declared no runtime dependencies).
+	if ec, ok := o.Get("execution_context"); ok && ec != nil {
+		for _, k := range unknownKeys(ec, executionContextKeys) {
+			push(&v, fmt.Sprintf("unknown property %q on receipt.execution_context", k))
+		}
+		if !hex64(str(ec, "cid")) {
+			push(&v, "receipt.execution_context.cid must be 64 hex")
+		}
+		for i, a := range arr(recVal(obj(ec), "artifacts")) {
+			for _, k := range unknownKeys(a, executionContextArtifactKeys) {
+				push(&v, fmt.Sprintf("unknown property %q on receipt.execution_context.artifacts[%d]", k, i))
+			}
+			if !hex64(str(a, "sha256")) {
+				push(&v, fmt.Sprintf("receipt.execution_context.artifacts[%d].sha256 must be 64 hex", i))
+			}
+		}
 	}
 	prov := objKeys(o, "provenance")
 	for _, k := range unknownKeys(objKeys(prov, "runner"), runnerKeys) {
@@ -345,8 +371,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v17" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v17", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v18" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v18", str(o, "schema_version")))
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -652,6 +678,32 @@ func semanticViolations(rec jcs.Value) []string {
 		}
 	default:
 		push(&v, fmt.Sprintf("unregistered execution profile %v", str(o, "execution_profile")))
+	}
+
+	// v18: the DECLARED execution-context closure (when carried) is
+	// self-authenticating: the schema version is the protocol one, every
+	// artifact names a protocol role, the artifacts are strictly sorted by
+	// path, and the cid rederives from the document's own artifacts.
+	if ec, ok := o.Get("execution_context"); ok && ec != nil {
+		if str(ec, "schema_version") != "frf-execution-context-v1" {
+			push(&v, fmt.Sprintf("the execution-context closure has unsupported schema_version %v", str(ec, "schema_version")))
+		}
+		var prev *string
+		for _, a := range arr(recVal(obj(ec), "artifacts")) {
+			role := str(a, "role")
+			if !containsString(executionContextRoles, role) {
+				push(&v, fmt.Sprintf("execution-context artifact %s declares role %q; the protocol admits child-executable, runtime-library, or data", str(a, "path"), role))
+			}
+			if prev != nil && *prev >= str(a, "path") {
+				push(&v, fmt.Sprintf("the execution-context artifacts are not strictly sorted by path (%s after %s)", str(a, "path"), *prev))
+			}
+			p := str(a, "path")
+			prev = &p
+		}
+		expected, err := executionContextIdentity(obj(ec))
+		if err != nil || expected != str(ec, "cid") {
+			push(&v, "the execution-context closure cid does not rederive from its own artifacts")
+		}
 	}
 
 	semantic, err := courtSemanticIdentityFromReceipt(o)
