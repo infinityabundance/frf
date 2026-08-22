@@ -160,10 +160,16 @@ func independenceIdentity(record *jcs.Object) (string, error) {
 	return hashPreimage("FRF/INDEPENDENCE/v1", doc)
 }
 
-func envDigest(os, arch, kernel, locale, timezone, umask string) string {
-	return jcs.Sha256Hex([]byte(fmt.Sprintf(
-		"os=%s\narch=%s\nkernel=%s\nlocale=%s\ntimezone=%s\numask=%s",
-		os, arch, kernel, locale, timezone, umask)))
+// envDigest: FRF/ENVIRONMENT/v2 over the canonical-JSON document of the host
+// strata (os/arch/kernel/locale/timezone/umask) AND the declared execution
+// environment map — a declared variable is content-addressed input. The one
+// formula, shared with the reference engine and the Rust verifier.
+func envDigest(os, arch, kernel, locale, timezone, umask string, environment jcs.Value) string {
+	doc := &jcs.Object{
+		Keys:   []string{"os", "architecture", "kernel_release", "locale", "timezone", "umask", "environment"},
+		Values: []jcs.Value{os, arch, kernel, locale, timezone, umask, environment},
+	}
+	return mustPreimage("FRF/ENVIRONMENT/v2", doc)
 }
 
 // trajectoryClassify — the deterministic ordered-axis classification

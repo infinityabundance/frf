@@ -157,17 +157,29 @@ the corpus self-contained: the experiment needs no network and no compiler
 
 | Case | Vulnerable release | Fixed release | The real interaction |
 | --- | --- | --- | --- |
-| `shellshock` (CVE-2014-6271) | bash 4.3.0 (pristine upstream) | bash 4.3.30 (final 4.3 patch) | the side IS the bash binary; the fixture is a script; the trigger is the malicious function-import environment variable — the exact historical condition |
+| `shellshock` (CVE-2014-6271) | bash 4.3.0 (pristine upstream) | bash 4.3.30 (final 4.3 patch) | the side IS the bash binary; the fixture is a script; the trigger is the malicious function-import environment variable — DECLARED in the court's environment (evidence, not orchestration): the defect manifests carry `x: "() { :;}; echo PWNED"` as a content-addressed environment input, and the clean-control manifest runs WITHOUT it |
 | `heartbleed` (CVE-2014-0160) | OpenSSL 1.0.1f | OpenSSL 1.0.1g (the fix release) | the side is a probe statically linked against the real libssl; it performs the exact historical exploit message sequence — ClientHello with the heartbeat extension, then the malformed heartbeat immediately after ServerHelloDone — and reports whether the linked library echoed process memory |
 | `log4shell` (CVE-2021-44228) | Log4j 2.14.1 | Log4j 2.17.1 (JNDI disabled by default) | the side runs the probe on the real jars; the fixture logs a message containing the JNDI lookup; the probe reports whether the lookup error path fired |
+
+Every case declares its execution environment (`PATH` etc.) and its
+environment-matrix coordinates (`environment_points: utc / new-york /
+tokyo` with TZ/LANG) in the court manifest: the sides and every extension
+program run under EXACTLY the declared environment (the ambient host
+environment is never inherited — it is not evidence and would leak
+secrets), and the declared map is content-addressed into the capture's
+environment identity, so a new execution engine reproduces the observation
+from the evidence alone.
 
 `cargo xtask external-experiment-v3` drives each case through the same
 four experiments as v2 — the version ladder, the environment matrix, and
 both authority transitions — PLUS a **clean control**: the VULNERABLE
 side against the clean fixture must produce ZERO residuals. The clean
 control proves the divergence is the historical defect, not a spurious
-difference between two real builds. The historical fix boundary must
-classify exactly as declared:
+difference between two real builds; for Shellshock the clean control also
+runs under a DIFFERENT DECLARED environment (no trigger), so its claim
+surface is genuinely separate from the defect surface — the universe
+blocker respects the environment boundary. The historical fix boundary
+must classify exactly as declared:
 
 ```text
 ladder (buggy -> fixed):      [observed, absent]   boundary-localized/abrupt/start

@@ -187,12 +187,17 @@ fn provenance_drift(store: &Store, capture: &CaptureManifest) -> Result<Vec<Stri
         }
     }
 
-    // The environment: digest over the output-moving strata, and the working
-    // directory the sides ran under.
-    let env_now = host::environment_identity();
+    // The environment: the identity REDERIVES from the RECORDED declared
+    // environment (replay re-spawns the sides with exactly that map — the
+    // ambient host environment is never inherited and never matters to the
+    // observation); the digest equality therefore checks the host strata that
+    // are NOT declared (os/arch/kernel/umask) and confirms the declared map
+    // is what will be executed. The working directory the sides ran under is
+    // gated separately.
+    let env_now = host::environment_identity(&capture.environment.environment);
     if env_now.digest != capture.environment.digest {
         drift.push(format!(
-            "environment digest changed: {} -> {} (os/arch/kernel/locale/timezone/umask)",
+            "environment digest changed: {} -> {} (os/arch/kernel/umask under the recorded declared environment)",
             short(&capture.environment.digest),
             short(&env_now.digest)
         ));
@@ -422,8 +427,18 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let raw_reference_out =
-        host::run_process_in(&authority_image, &capture.arguments, side_cwd, profile)?;
+    // The DECLARED execution environment recorded at observation time: the
+    // sides AND the extension programs are re-spawned with EXACTLY this
+    // environment (the ambient host environment is never inherited — replay
+    // reproduces the observation from the evidence, not from the host).
+    let declared_environment = &capture.environment.environment;
+    let raw_reference_out = host::run_process_in(
+        &authority_image,
+        &capture.arguments,
+        side_cwd,
+        profile,
+        declared_environment,
+    )?;
     let reference_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
         clear_produce(prod)?;
@@ -431,8 +446,13 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     } else {
         None
     };
-    let raw_candidate_out =
-        host::run_process_in(&candidate_image, &capture.arguments, side_cwd, profile)?;
+    let raw_candidate_out = host::run_process_in(
+        &candidate_image,
+        &capture.arguments,
+        side_cwd,
+        profile,
+        declared_environment,
+    )?;
     let candidate_produced = if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
         clear_produce(prod)?;
@@ -471,6 +491,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
             recorded.as_deref(),
             side_cwd,
             profile,
+            declared_environment,
         )
     };
     let reference_compared = normalize_side("reference", &raw_reference_out)?;
@@ -536,8 +557,13 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     semantic.id
                 )));
             }
-            let response_bytes =
-                crate::ext::run_program(&snapshot, &request_bytes, side_cwd, profile)?;
+            let response_bytes = crate::ext::run_program(
+                &snapshot,
+                &request_bytes,
+                side_cwd,
+                profile,
+                declared_environment,
+            )?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
             let response: crate::model::CaptureAdapterResponse =
@@ -672,6 +698,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     &request_cid,
                     side_cwd,
                     profile,
+                    declared_environment,
                 )?;
                 let outcome_str = match &outcome {
                     crate::comparators::ComparatorOutcome::Equivalent => "equivalent",

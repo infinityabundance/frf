@@ -12,17 +12,18 @@ use common::*;
 use std::fs;
 
 #[test]
-fn environment_axis_records_every_observation_event_even_when_the_evidence_is_identical() {
-    // The review's bug, executed: identical evidence correctly shares the
-    // content-addressed run, but each COORDINATE at which an observation
-    // occurred is still an experimental event. Three observations of the
-    // deterministic court at different environment coordinates must yield
-    // THREE points referencing ONE run — deduplicating by run would destroy
-    // the persistence information precisely when the system is stable.
+fn environment_axis_records_every_observation_event() {
+    // Each environment COORDINATE is a DECLARED environment (the manifest's
+    // `environment_points` — a label is not evidence unless the environment
+    // it names is declared), and the declared env is part of the
+    // observation identity. Distinct coordinates are therefore DISTINCT
+    // observations — distinct content-addressed runs, each with its own
+    // declared environment recorded in the capture — and every observation
+    // event is still a point: no persistence information is lost.
     let work = Workdir::new("trajectory-env-accumulate");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let mut run: Option<String> = None;
+    let mut runs: Vec<String> = Vec::new();
     for coord in ["machine-a", "machine-b", "machine-c"] {
         let out = frf(
             &work,
@@ -37,19 +38,30 @@ fn environment_axis_records_every_observation_event_even_when_the_evidence_is_id
             ],
         );
         assert_success(&out, &format!("environment point {coord}"));
-        let fresh = stdout(&out);
-        if let Some(prev) = &run {
-            assert_eq!(
-                &fresh, prev,
-                "identical evidence must produce the same content-addressed run"
-            );
-        }
-        run = Some(fresh);
+        runs.push(stdout(&out));
     }
-    let run = run.unwrap();
+    let run = runs.last().unwrap().clone();
+
+    // Distinct coordinates: distinct declared environments, distinct runs.
+    assert_ne!(
+        runs[0], runs[1],
+        "different env coordinates are different observations"
+    );
+    assert_ne!(runs[1], runs[2]);
+    // Each capture records the DECLARED environment it ran under.
+    for (coord, run) in ["machine-a", "machine-b", "machine-c"].iter().zip(&runs) {
+        let cap: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cap["environment"]["environment"]["HOSTNAME"], *coord,
+            "the capture records the declared environment of the coordinate"
+        );
+    }
 
     // The experiment's history: three parent-linked snapshots, the newest
-    // carrying three points — all referencing the single run.
+    // carrying three points — one per observation event.
     let store = frf::store::Store::new(work.path("frf"));
     let heads = store
         .experiment_heads("cli-malformed-input-environment")
@@ -60,9 +72,10 @@ fn environment_axis_records_every_observation_event_even_when_the_evidence_is_id
     assert_eq!(head.points.len(), 3, "every observation event is a point");
     let coords: Vec<&str> = head.points.iter().map(|p| p.coordinate.as_str()).collect();
     assert_eq!(coords, vec!["machine-a", "machine-b", "machine-c"]);
-    assert!(
-        head.points.iter().all(|p| p.run == run),
-        "all three coordinates reference the single content-addressed run"
+    let point_runs: Vec<&str> = head.points.iter().map(|p| p.run.as_str()).collect();
+    assert_eq!(
+        point_runs,
+        runs.iter().map(|s| s.as_str()).collect::<Vec<_>>()
     );
     // The chain: walking parents reaches the first snapshot, whose parent is
     // None, and every snapshot's points are a prefix of the next's.

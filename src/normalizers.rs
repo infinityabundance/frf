@@ -141,6 +141,7 @@ pub fn interpret(
 /// Run a snapshotted normalizer against one side's raw streams and interpret
 /// its response, under the declared execution profile. Returns the
 /// normalized streams and the raw response bytes.
+#[allow(clippy::too_many_arguments)] // one argument per evidence dimension; the doc is the protocol shape
 pub fn run_side(
     image: &host::ExecImage,
     request_bytes: &[u8],
@@ -149,8 +150,9 @@ pub fn run_side(
     raw_stderr: &[u8],
     cwd: &Path,
     profile: host::ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let response_bytes = ext::run_program(image, request_bytes, cwd, profile)?;
+    let response_bytes = ext::run_program(image, request_bytes, cwd, profile, env)?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
     let response: NormalizerResponse =
@@ -235,6 +237,10 @@ pub fn record_evidence(
 /// which the rebuilt requests must rederive to under exact replay; `None`
 /// skips the check (semantic replay, or a fresh minimization attempt whose
 /// requests are NEW observations).
+/// Re-apply the capture's declared normalizers to one side's raw outcome,
+/// in application order, re-invoking the exact snapshotted implementations
+/// under the declared environment.
+#[allow(clippy::too_many_arguments)] // one argument per evidence dimension; the doc is the protocol shape
 pub fn apply_capture_normalizers(
     store: &Store,
     capture: &CaptureManifest,
@@ -243,6 +249,7 @@ pub fn apply_capture_normalizers(
     verify_request_cids: Option<&[String]>,
     cwd: &Path,
     profile: host::ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<host::ProcessOutcome> {
     let mut stdout = raw_outcome.stdout.clone();
     let mut stderr = raw_outcome.stderr.clone();
@@ -291,6 +298,7 @@ pub fn apply_capture_normalizers(
             &stderr,
             cwd,
             profile,
+            env,
         )?;
         stdout = new_stdout;
         stderr = new_stderr;

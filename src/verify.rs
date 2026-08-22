@@ -2674,7 +2674,9 @@ impl Receipt {
             }
         }
 
-        // The environment digest rederives from the environment fields.
+        // The environment digest rederives from the environment fields — the
+        // host strata AND the declared execution environment map (a declared
+        // variable is content-addressed input).
         let env_expected = host::environment_digest(
             &self.environment.os,
             &self.environment.architecture,
@@ -2682,11 +2684,12 @@ impl Receipt {
             &self.environment.locale,
             &self.environment.timezone,
             &self.environment.umask,
+            &self.environment.environment,
         );
         if env_expected != self.environment.digest {
             fail(
                 &mut violations,
-                "the environment digest does not rederive from os/architecture/kernel_release/locale/timezone/umask",
+                "the environment digest does not rederive from the environment fields (os/architecture/kernel_release/locale/timezone/umask + the declared environment)",
             );
         }
 
@@ -2878,7 +2881,9 @@ mod tests {
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
         let kernel = host::kernel_release();
-        let env_digest = host::environment_digest(os, arch, &kernel, "C", "Etc/UTC", "0022");
+        let empty_env = std::collections::BTreeMap::new();
+        let env_digest =
+            host::environment_digest(os, arch, &kernel, "C", "Etc/UTC", "0022", &empty_env);
         let authority_hash = "a".repeat(64);
         let fixture_hash = "b".repeat(64);
         let candidate_hash = "c".repeat(64);
@@ -2909,6 +2914,8 @@ mod tests {
             },
             produce: None,
             execution_profile: None,
+            environment: None,
+            environment_points: None,
         };
         let semantic = crate::semantics::court_semantic_identity(
             &spec,
@@ -2929,6 +2936,7 @@ mod tests {
             timezone: "Etc/UTC".into(),
             umask: "0022".into(),
             cwd: "frf".into(),
+            environment: empty_env,
             digest: env_digest,
         };
         let comparator = crate::comparators::semantic("exit").unwrap();

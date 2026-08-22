@@ -765,8 +765,9 @@ pub fn run_external(
     request_cid: &str,
     cwd: &Path,
     profile: host::ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> Result<(ComparatorOutcome, Vec<u8>)> {
-    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile)?;
+    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile, env)?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",
@@ -896,6 +897,10 @@ pub struct EvaluationContext<'a> {
     /// axis's instrument runs under the SAME declared harness contract as
     /// the sides (the per-side cgroup v2 envelope for `frf-exec-linux-v2`).
     pub profile: crate::host::ExecProfile,
+    /// The declared execution environment the court's programs run under:
+    /// an externally served axis's instrument is spawned with EXACTLY this
+    /// environment (the ambient host environment is never inherited).
+    pub env: &'a std::collections::BTreeMap<String, String>,
 }
 
 /// The verdict of evaluating one axis.
@@ -1017,6 +1022,7 @@ pub fn evaluate(
                 &request_cid,
                 context.cwd,
                 context.profile,
+                context.env,
             )?;
             let response_cid = host::sha256_bytes(&response_bytes);
             let result = match outcome {

@@ -101,17 +101,35 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
 
     // The single run: no series.
     let Some(coordinate_system) = opts.coordinate_system() else {
-        return run_once(store, manifest_path, None, None, false);
+        return run_once(store, manifest_path, None, None, false, None);
     };
 
     // A single repetition is a single run: one point cannot observe drift or
     // slew, and the paper's restraint is kept (receipts say not-observed).
     if opts.repeat == Some(1) {
-        return run_once(store, manifest_path, None, None, false);
+        return run_once(store, manifest_path, None, None, false, None);
     }
 
     let manifest: CourtManifest = store.parse_yaml(manifest_path)?;
     let court_id = manifest.court.id.clone();
+
+    // The declared environment coordinate for an `--environment-point` run:
+    // the label must name a declared coordinate (a label is not evidence
+    // unless the environment it names is), and the point's effective
+    // environment is the court's declared environment with the coordinate's
+    // vars applied.
+    let point_environment: Option<std::collections::BTreeMap<String, String>> = opts
+        .environment_point
+        .as_ref()
+        .map(|label| {
+            let points = manifest.court.environment_points.clone().unwrap_or_default();
+            points.get(label).cloned().ok_or_else(|| {
+                FrfError::new(format!(
+                    "--environment-point {label:?} is not declared in the manifest's environment_points — a coordinate label is not evidence unless the environment it names is declared"
+                ))
+            })
+        })
+        .transpose()?;
 
     // -- build the ordered points -------------------------------------------
     let mut points: Vec<SeriesPoint> = Vec::new();
@@ -123,7 +141,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
         "repeat_index" => {
             let n = opts.repeat.unwrap();
             for k in 1..=n {
-                let run = run_once(store, manifest_path, None, None, true)?;
+                let run = run_once(store, manifest_path, None, None, true, None)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
                     point_index: k.to_string(),
@@ -140,7 +158,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 ));
             }
             for (i, path) in revisions.iter().enumerate() {
-                let run = run_once(store, manifest_path, Some(path), None, true)?;
+                let run = run_once(store, manifest_path, Some(path), None, true, None)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
                     point_index: (i + 1).to_string(),
@@ -164,7 +182,7 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 store.load_authority(&format!("{}-{}", authority.name, version))?;
             }
             for (i, version) in versions.iter().enumerate() {
-                let run = run_once(store, manifest_path, None, Some(version), true)?;
+                let run = run_once(store, manifest_path, None, Some(version), true, None)?;
                 first_run.get_or_insert_with(|| run.clone());
                 points.push(SeriesPoint {
                     point_index: (i + 1).to_string(),
@@ -179,7 +197,14 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
             } else {
                 opts.time_point.as_ref().unwrap().clone()
             };
-            let run = run_once(store, manifest_path, None, None, true)?;
+            let run = run_once(
+                store,
+                manifest_path,
+                None,
+                None,
+                true,
+                point_environment.as_ref(),
+            )?;
             first_run = Some(run.clone());
             // Accumulate: the experiment's history is a parent-linked chain
             // of immutable series snapshots. The append target is the unique
@@ -713,8 +738,18 @@ fn run_attempt(
             }
         })
         .collect();
-    let raw_reference_out = host::run_process(authority_image, &arguments, profile)?;
-    let raw_candidate_out = host::run_process(candidate_image, &arguments, profile)?;
+    let raw_reference_out = host::run_process(
+        authority_image,
+        &arguments,
+        profile,
+        &capture.environment.environment,
+    )?;
+    let raw_candidate_out = host::run_process(
+        candidate_image,
+        &arguments,
+        profile,
+        &capture.environment.environment,
+    )?;
     // The comparison surface is the NORMALIZED streams: re-apply the exact
     // snapshotted normalizers the court bound (a fresh attempt is a NEW
     // observation — its requests are not checked against the run's evidence).
@@ -726,6 +761,7 @@ fn run_attempt(
         None,
         std::path::Path::new("."),
         profile,
+        &capture.environment.environment,
     )?;
     let candidate_out = crate::normalizers::apply_capture_normalizers(
         store,
@@ -735,6 +771,7 @@ fn run_attempt(
         None,
         std::path::Path::new("."),
         profile,
+        &capture.environment.environment,
     )?;
     let reference = SideCapture::from_outcome(&reference_out);
     let candidate = SideCapture::from_outcome(&candidate_out);
@@ -747,6 +784,7 @@ fn run_attempt(
         raw: Some((&raw_reference_out, &raw_candidate_out)),
         compared: Some((&reference_out, &candidate_out)),
         profile,
+        env: &capture.environment.environment,
     };
     let evaluation = crate::comparators::evaluate(store, plan, &reference, &candidate, &context);
     let (outcome, recordable) = match evaluation {
@@ -857,6 +895,7 @@ fn minimize_external(
         &request_bytes,
         std::path::Path::new("."),
         profile,
+        &capture.environment.environment,
     )?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.
@@ -1167,6 +1206,7 @@ pub fn run_once(
     candidate_override: Option<&str>,
     authority_version_override: Option<&str>,
     reuse: bool,
+    point_environment: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Result<String> {
     let mut manifest: CourtManifest = store.parse_yaml(manifest_path)?;
     if let Some(path) = candidate_override {
@@ -1177,6 +1217,18 @@ pub fn run_once(
         manifest.court.authority = format!("{}-{}", authority.name, version);
     }
     let spec = &manifest.court;
+
+    // The DECLARED EXECUTION ENVIRONMENT: the exact environment every
+    // program this court executes runs under (the sides AND every extension
+    // program), built from scratch — the ambient host environment is never
+    // inherited. An environment point's vars override the base declaration.
+    let mut declared_environment: std::collections::BTreeMap<String, String> =
+        spec.environment.clone().unwrap_or_default();
+    if let Some(point) = point_environment {
+        for (k, v) in point {
+            declared_environment.insert(k.clone(), v.clone());
+        }
+    }
 
     // -- validate the declaration ------------------------------------------
 
@@ -1446,7 +1498,7 @@ pub fn run_once(
     // (provenance: runner + comparator implementations). A receipt emitted
     // later copies both; it never reconstructs them from whatever binary or
     // host happens to be installed.
-    let environment = host::environment_identity();
+    let environment = host::environment_identity(&declared_environment);
     // The comparator SEMANTIC identities: the declared (external) spec for a
     // declared axis, the in-binary registry otherwise. The semantic identity
     // of the QUESTION is built from these — an external program implementing
@@ -1709,7 +1761,8 @@ pub fn run_once(
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
-    let reference_out = host::run_process(&authority_image, &arguments, profile)?;
+    let reference_out =
+        host::run_process(&authority_image, &arguments, profile, &declared_environment)?;
     let mut reference = SideCapture::from_outcome(&reference_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
@@ -1717,7 +1770,8 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
-    let candidate_out = host::run_process(&candidate_image, &arguments, profile)?;
+    let candidate_out =
+        host::run_process(&candidate_image, &arguments, profile, &declared_environment)?;
     let mut candidate = SideCapture::from_outcome(&candidate_out);
     if let Some(prod) = &produce_path {
         let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
@@ -1772,6 +1826,7 @@ pub fn run_once(
                 &stderr,
                 std::path::Path::new("."),
                 profile,
+                &declared_environment,
             )?;
             // The invocation + result records are written once the run id
             // exists (the evidence lives under captures/<run>/).
@@ -1861,6 +1916,7 @@ pub fn run_once(
                 &request_bytes,
                 std::path::Path::new("."),
                 profile,
+                &declared_environment,
             )?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
@@ -1993,6 +2049,7 @@ pub fn run_once(
             raw: Some((&reference_out, &candidate_out)),
             compared: Some((&reference_compared, &candidate_compared)),
             profile,
+            env: &declared_environment,
         };
         let evaluation =
             crate::comparators::evaluate(store, &plan, &reference, &candidate, &context)?;
@@ -2676,8 +2733,13 @@ pub fn challenge(
                 };
                 let request_bytes = crate::canon::canonical(&request)?.into_bytes();
                 let request_cid = crate::ext::request_cid(&request_bytes);
-                let response_bytes =
-                    crate::ext::run_program(&snap.image, &request_bytes, Path::new("."), profile)?;
+                let response_bytes = crate::ext::run_program(
+                    &snap.image,
+                    &request_bytes,
+                    Path::new("."),
+                    profile,
+                    &spec.environment.clone().unwrap_or_default(),
+                )?;
                 let response_cid = host::sha256_bytes(&response_bytes);
                 // The protocol says canonical JSON: the response must BE its
                 // own canonical serialization.
@@ -2776,7 +2838,7 @@ pub fn challenge(
         fs::write(mutant_path, &mutant_bytes)
             .map_err(|e| FrfError::new(format!("cannot write {}: {e}", mutant_path.display())))?;
 
-        let run_result = run_once(store, manifest_path, Some(&mutant_rel), None, false);
+        let run_result = run_once(store, manifest_path, Some(&mutant_rel), None, false, None);
         let _ = fs::remove_file(mutant_path);
         let run = match run_result {
             Ok(run) => run,

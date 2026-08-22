@@ -181,8 +181,11 @@ pub fn capture_adapter_spec_hash(id: &str, relation: &str, relation_version: &st
     )
 }
 
-/// Environment digest: sha256("os={os}\narch={arch}\nkernel={kernel}\n
-/// locale={locale}\ntimezone={timezone}\numask={umask}").
+/// Environment digest: FRF/ENVIRONMENT/v2 over the canonical-JSON document
+/// of the host strata (os/arch/kernel/locale/timezone/umask) AND the
+/// declared execution environment map — a declared variable is
+/// content-addressed input. The one formula, shared with the reference
+/// engine.
 pub fn env_digest(
     os: &str,
     arch: &str,
@@ -190,13 +193,18 @@ pub fn env_digest(
     locale: &str,
     timezone: &str,
     umask: &str,
+    environment: &Value,
 ) -> String {
-    sha256_bytes(
-        format!(
-            "os={os}\narch={arch}\nkernel={kernel}\nlocale={locale}\ntimezone={timezone}\numask={umask}"
-        )
-        .as_bytes(),
-    )
+    let doc = json!({
+        "os": os,
+        "architecture": arch,
+        "kernel_release": kernel,
+        "locale": locale,
+        "timezone": timezone,
+        "umask": umask,
+        "environment": environment.clone(),
+    });
+    preimage("FRF/ENVIRONMENT/v2", &doc)
 }
 
 pub fn interpreter_hash(artifact: &Value) -> Option<String> {

@@ -95,7 +95,7 @@ not these tables.
 |---|---|---|---|
 | artifact | Exact executable/data bytes under objects/sha256/<H>, content-addressed by their bytes | — | active |
 | authority | Admitted reference executable and its provenance | frf-authority-v1 | active |
-| environment | Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + digest) | frf-environment-v2 | active |
+| environment | Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + the DECLARED execution environment the sides ran under + digest) | frf-environment-v3 · FRF/ENVIRONMENT/v2 | active |
 | court | Semantic question + falsifier + envelope (human-authored YAML manifest, not evidence) | — | active |
 | comparator-spec | Meaning of a comparison relation (extractor/relation/classifier/version) | FRF/COMPARATOR-SPEC/v2 | active |
 | normalizer-spec | Meaning of a comparison-surface transform (relation + the streams it applies to) | FRF/NORMALIZER-SPEC/v2 | active |
@@ -142,6 +142,7 @@ not these tables.
 | FRF/RUN/v2 | Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed | active |
 | FRF/OBSERVATION/v1 | Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer) | active |
 | FRF/EXECUTION/v1 | Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes) | active |
+| FRF/ENVIRONMENT/v2 | Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input | active |
 | FRF/COURT/v2 | Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics) | active |
 | FRF/COMPARATOR-SPEC/v2 | Comparator semantic specification | active |
 | FRF/NORMALIZER-SPEC/v2 | Normalizer semantic specification | active |
@@ -196,7 +197,7 @@ not these tables.
 | frf-claim-v7 | superseded |  |
 | frf-runtime-closure-v1 | active |  |
 | frf-runner-v1 | active |  |
-| frf-environment-v2 | active |  |
+| frf-environment-v3 | active |  |
 | frf-provenance-v3 | active |  |
 | frf-challenge-v1 | active |  |
 | frf-mutation-request-v1 | active |  |

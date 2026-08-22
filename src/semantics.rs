@@ -1307,6 +1307,8 @@ mod tests {
             },
             produce: None,
             execution_profile: None,
+            environment: None,
+            environment_points: None,
         }
     }
 
@@ -1581,6 +1583,7 @@ mod tests {
                 timezone: "Etc/UTC".into(),
                 umask: "0022".into(),
                 cwd: "frf".into(),
+                environment: Default::default(),
                 digest: "0".repeat(64),
             },
             court_spec: spec,

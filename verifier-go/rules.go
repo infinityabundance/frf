@@ -110,7 +110,7 @@ var runtimeComponentKeys = []string{"path", "sha256"}
 var interpreterKeys = []string{"kernel_interpreter", "shebang_argument_bytes", "resolver", "downstream_interpreter"}
 var interpreterExecKeys = []string{"path", "sha256"}
 var resolverKeys = []string{"kind", "path", "sha256", "path_digest"}
-var environmentKeys = []string{"schema_version", "os", "architecture", "kernel_release", "locale", "timezone", "umask", "cwd", "digest"}
+var environmentKeys = []string{"schema_version", "os", "architecture", "kernel_release", "locale", "timezone", "umask", "cwd", "environment", "digest"}
 var fixtureKeys = []string{"id", "hash", "arguments", "declared_arguments"}
 var observableKeys = []string{"axis", "raw_reference_hash", "raw_candidate_hash", "comparator", "normalization_rules", "verdict", "comparator_request", "comparator_result"}
 var residualKeys = []string{"id", "axis", "kind", "sign", "grammar_state", "raw_reference_hash", "raw_candidate_hash", "invariant", "reproducer", "residual_fingerprint", "disposition", "disposition_event_id", "reason", "resolution_run_id", "closure_predicate"}
@@ -622,7 +622,7 @@ func semanticViolations(rec jcs.Value) []string {
 	}
 
 	envDoc := objKeys(o, "environment")
-	if envDigest(str(envDoc, "os"), str(envDoc, "architecture"), str(envDoc, "kernel_release"), str(envDoc, "locale"), str(envDoc, "timezone"), str(envDoc, "umask")) != str(envDoc, "digest") {
+	if envDigest(str(envDoc, "os"), str(envDoc, "architecture"), str(envDoc, "kernel_release"), str(envDoc, "locale"), str(envDoc, "timezone"), str(envDoc, "umask"), recVal(envDoc, "environment")) != str(envDoc, "digest") {
 		push(&v, "the environment digest does not rederive")
 	}
 	if !isValidIdentifier(str(o, "execution_profile")) {

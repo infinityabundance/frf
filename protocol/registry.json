@@ -16,8 +16,9 @@
     },
     {
       "id": "environment",
-      "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + digest)",
-      "schema": "frf-environment-v2",
+      "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + the DECLARED execution environment the sides ran under + digest)",
+      "schema": "frf-environment-v3",
+      "identity": "FRF/ENVIRONMENT/v2",
       "status": "active"
     },
     {
@@ -296,6 +297,11 @@
       "status": "active"
     },
     {
+      "domain": "FRF/ENVIRONMENT/v2",
+      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input",
+      "status": "active"
+    },
+    {
       "domain": "FRF/COURT/v2",
       "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
       "status": "active"
@@ -529,7 +535,7 @@
       "status": "active"
     },
     {
-      "id": "frf-environment-v2",
+      "id": "frf-environment-v3",
       "status": "active"
     },
     {
