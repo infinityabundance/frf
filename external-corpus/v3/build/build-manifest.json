@@ -8,6 +8,8 @@
     "log4shell/builds/lib/log4j-core-2.14.1.jar": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
     "log4shell/builds/lib/log4j-core-2.17.1.jar": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
     "log4shell/builds/probe.jar": "ca0abd8173e9d8c1b5aba5cf164d3c4096a8d793956e24df4f5e2ce81700a5d6",
+    "log4shell/builds/run-fixed.sh": "8cb2e2952c016efdb86008837c0c5f598b62398bdd0094cd8b62c0dc6ecdc1be",
+    "log4shell/builds/run-vuln.sh": "6df0b81f1eb312af8e9791c7518021bd0ebea37ed35ca66efb69237eccc0afef",
     "shellshock/builds/bash-4.3.0": "68f22f8e1f9b6231dd6dc411f2e16e9be8aa74c7ee35a68aef4fa8bf81b7c98a",
     "shellshock/builds/bash-4.3.30": "9270b1e7b8f963ebf1365244af6c537e069c1d2d1ed7b962082aa3053edae775"
   },

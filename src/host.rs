@@ -1856,19 +1856,35 @@ echo "zero=$0 one=$1"
         // The profile's RLIMIT_NPROC is applied before exec: the side sees
         // its own declared process-count cap (a hostile side cannot fork a
         // process bomb that exhausts the user's process table while the
-        // harness waits for its own timeout). `ulimit -u` reads the child's
-        // own limit — deterministic and instant.
+        // harness waits for its own timeout). The limit is read from
+        // `/proc/self/limits` — deterministic, instant, and SHELL-AGNOSTIC
+        // (`ulimit -u` is a bash/zsh extension; dash — /bin/sh on Debian and
+        // Ubuntu — does not implement it, so a script that depends on it
+        // fails on exactly the machines CI runs on).
         with_env(&[("FRF_EXEC_RLIMIT_NPROC", "42")], || {
             let script = temp_script("nproc-cap");
-            std::fs::write(&script, "#!/bin/sh\nulimit -u\n").unwrap();
+            // Read the limit with shell BUILTINS only (`read` + `echo`, no
+            // external commands): RLIMIT_NPROC caps new processes for the
+            // calling process's real UID, so once the cap is set the side may
+            // be unable to fork even a single `cat` on a busy machine. A
+            // `while read` loop needs no fork at all.
+            std::fs::write(
+                &script,
+                "#!/bin/sh\nwhile read -r line; do echo \"$line\"; done < /proc/self/limits\n",
+            )
+            .unwrap();
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
             let out =
                 run_process(&ExecImage::from_path(&script), &[], ExecProfile::LinuxV1).unwrap();
-            assert_eq!(
-                String::from_utf8_lossy(&out.stdout).trim(),
-                "42",
-                "the child must run under its declared process-count cap"
+            let text = String::from_utf8_lossy(&out.stdout);
+            let line = text
+                .lines()
+                .find(|l| l.contains("Max processes"))
+                .unwrap_or_else(|| panic!("no Max processes line in /proc/self/limits: {text}"));
+            assert!(
+                line.split_whitespace().any(|tok| tok == "42"),
+                "the child must run under its declared process-count cap; got {line:?}"
             );
             let _ = std::fs::remove_file(&script);
         });
