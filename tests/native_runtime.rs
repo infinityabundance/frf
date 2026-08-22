@@ -241,3 +241,101 @@ fn a_tampered_runtime_closure_is_refused() {
         "the refusal must name the forged closure: {err}"
     );
 }
+
+/// Priority 6 — the sealed-image / native-closure `$ORIGIN` interaction,
+/// proved by a court built to expose it. A binary whose `DT_RUNPATH` is
+/// `$ORIGIN`-relative resolves its dependencies from the directory of the
+/// executable THE LOADER SEES: `/proc/self/fd/<n>` under sealed execution
+/// (the memfd path the side is exec'd from), NEVER the materialized snapshot
+/// path. The recorded closure must resolve against that same sealed path —
+/// so an `$ORIGIN` dependency the sealed mechanism cannot find is a REFUSAL:
+/// the artifact cannot load under the profile's sealed execution, and
+/// recording a closure resolved from the materialized location would
+/// describe an execution that never happened.
+#[test]
+fn an_origin_relative_dependency_is_resolved_against_the_sealed_exec_path() {
+    let work = Workdir::new("native-origin");
+    work.copy_canonical_tree();
+    // Compile a shared library and a binary whose DT_RUNPATH is `$ORIGIN`,
+    // with the library NEXT TO the binary (golden/) — the classic
+    // deployed-package layout that $ORIGIN exists for.
+    let lib = work.path("golden/libfoo.so");
+    let lib_src = work.path("golden/libfoo.c");
+    fs::write(&lib_src, "int foo(void) { return 42; }\n").unwrap();
+    let status = Command::new("gcc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&lib)
+        .arg(&lib_src)
+        .status()
+        .expect("gcc must be available to compile the shared library");
+    assert!(status.success(), "gcc failed to compile libfoo.so");
+    let cand = work.path("golden/origin-cand");
+    let cand_src = work.path("golden/origin-cand.c");
+    fs::write(
+        &cand_src,
+        "#include <stdio.h>\nextern int foo(void);\nint main(void) { printf(\"foo=%d\\n\", foo()); return 0; }\n",
+    )
+    .unwrap();
+    let status = Command::new("gcc")
+        .arg("-o")
+        .arg(&cand)
+        .arg(&cand_src)
+        .arg(format!("-L{}", work.path("golden").display()))
+        .arg("-lfoo")
+        .arg("-Wl,-rpath,$ORIGIN")
+        .status()
+        .expect("gcc must be available to compile the origin binary");
+    assert!(status.success(), "gcc failed to compile the origin binary");
+    // Prove the fixture is the hazard: the RUNPATH is $ORIGIN-relative.
+    let readelf = Command::new("readelf")
+        .args(["-d", work.path("golden/origin-cand").to_str().unwrap()])
+        .output()
+        .expect("readelf must be available");
+    let dyn_text = String::from_utf8_lossy(&readelf.stdout);
+    assert!(
+        dyn_text.contains("RUNPATH") && dyn_text.contains("$ORIGIN"),
+        "the fixture must carry a $ORIGIN-relative RUNPATH"
+    );
+
+    // Stage the library NEXT TO where the candidate object will be
+    // materialized (objects/sha256/): the materialized-path resolution WOULD
+    // find it there — the hazard is precisely that the sealed path does not.
+    let objects_dir = work.path("frf/objects/sha256");
+    fs::create_dir_all(&objects_dir).unwrap();
+    fs::copy(&lib, objects_dir.join("libfoo.so")).unwrap();
+
+    // Admit the (normal) reference + run the court. The CANDIDATE's closure
+    // must resolve against the sealed exec path: libfoo.so is not under
+    // /proc/self/fd, so the closure cannot be bound and the run is REFUSED —
+    // never recorded with a closure the execution contradicts.
+    let fixture = native_fixture(&work);
+    let ref_tool = compile_native_tool(&work, "ref-native", 2);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "authority",
+            "admit",
+            &ref_tool,
+            "--name",
+            "ref-native",
+            "--version",
+            "1.0",
+        ],
+    );
+    assert_success(&out, "native authority admit");
+    let manifest = native_manifest(&work, "golden/origin-cand", &fixture);
+    let out = frf(&work, &["--root", ROOT, "court", "run", &manifest]);
+    assert!(
+        !out.status.success(),
+        "an $ORIGIN-relative dependency the sealed exec path cannot find must refuse the court"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("cannot be bound")
+            || err.contains("refused to resolve")
+            || err.contains("could not resolve"),
+        "the refusal must name the closure-binding failure: {err}"
+    );
+}

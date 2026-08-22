@@ -222,9 +222,15 @@ FRF/RUNTIME-CLOSURE/v1 {
   read-only (`ld.so --list <executable>`) — the same resolution the side's
   own exec would perform, with the observation's cache, default
   directories, and `LD_LIBRARY_PATH` applying. Only the loader executes,
-  never the artifact's code. An unresolvable dependency (`not found`) or a
-  loader that refuses to resolve is a REFUSAL: a closure that cannot be
-  bound is an honest outcome, never a silent gap.
+  never the artifact's code. The `<executable>` is the SEALED EXEC PATH the
+  side actually runs from (`/proc/self/fd/<n>` — the memfd fd the loader
+  child inherits), NEVER the materialized snapshot path: `$ORIGIN`-relative
+  `DT_RUNPATH`/`RPATH` resolution therefore sees the same origin the real
+  execution sees. An unresolvable dependency (`not found`), a loader that
+  refuses to resolve, or an `$ORIGIN` dependency the sealed mechanism cannot
+  find is a REFUSAL: a closure that cannot be bound is an honest outcome,
+  never a silent gap — and a closure resolved from a path the side never
+  runs from would describe an execution that never happened.
 - Every resolved component (loader + libraries) is hashed; components are
   sorted by path, so the identity is a deterministic SET identity. The
   closure's `cid` rederives in any implementation:

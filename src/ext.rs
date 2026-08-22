@@ -50,6 +50,10 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
     let snapshot = store.materialize_object(&bytes, true)?;
     let image = host::ExecImage::seal(&bytes, &impl_hash, &snapshot)?;
     let interpreter = host::interpreter_identity(&bytes)?;
+    // The native runtime closure resolves against the SEALED EXEC PATH
+    // (the program runs via the sealed memfd, so `$ORIGIN`-relative
+    // dependencies must resolve as the loader resolves them at exec time,
+    // never against the materialized snapshot path).
     let artifact = ArtifactIdentity {
         path: store
             .root
@@ -61,7 +65,7 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
             .unwrap_or_else(|_| impl_hash.clone()),
         sha256: impl_hash.clone(),
         interpreter,
-        native_runtime: crate::native::runtime_closure(&snapshot, &bytes)?,
+        native_runtime: crate::native::runtime_closure(image.path(), &bytes)?,
     };
     Ok(ProgramSnapshot {
         impl_hash,
