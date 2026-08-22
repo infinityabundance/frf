@@ -37,21 +37,29 @@
 //!   9. **replay stability** — exact replay of the ladder's buggy run.
 //!  10. **conventional baselines, executed BARE** — golden testing pinned to
 //!      the FIXED release (detect/false-positive), golden testing pinned to
-//!      the VULNERABLE release (the historical snapshot: the fix LOOKS like
-//!      a regression), differential testing (vuln vs fixed: detects the
-//!      divergence but cannot attribute it to a side or classify the
-//!      boundary), and the unit suite asserting fixed behavior (the same
-//!      verdict as the fixed-pinned golden on these fixtures).
-//!  11. **storage overhead** — the full evidence store, the evidence records
-//!      alone, the raw captured output bytes, and the pass/fail baseline
-//!      bytes (one short line per run), with ratios.
-//!  12. **runtime overhead** — bare side execution vs the FRF per-run cost
-//!      (measured across the repeat probe's five fresh executions).
-//!  13. **localization cost** — court evaluations from first observation to
-//!      the verified minimal reproducer, and the wall time of the extra
-//!      steps.
-//!  14. **human investigation cost** — the evidence-object inventory (files
-//!      and bytes per evidence directory) an investigator must open.
+//!      the VULNERABLE release (the historical snapshot: the fix is a
+//!      behavior CHANGE the oracle records — a snapshot test reports change,
+//!      it does not claim the old behavior was correct), and differential
+//!      testing (vuln vs fixed: detects the divergence but cannot attribute
+//!      it to a side or classify the boundary). NO independent unit suite is
+//!      executed; the unit-suite row is a PROJECTION of what a suite pinning
+//!      the fixed behavior would report on these runs, and is labeled as
+//!      such.
+//!  11. **evidence storage amplification** — the full evidence store, the
+//!      evidence records alone, the raw captured output bytes, and the
+//!      pass/fail baseline bytes (one short line per run), with ratios.
+//!  12. **single-host runtime overhead PILOT** — one bare vulnerable
+//!      execution vs the FRF per-run cost (measured across the repeat
+//!      probe's five fresh executions, millisecond resolution): a smoke
+//!      measurement, explicitly not yet a performance study (no warmups,
+//!      samples, medians/quantiles, or machine description).
+//!  13. **localization execution count** — the operation-count proxy from
+//!      first observation to the verified minimal reproducer (court
+//!      evaluations, minimize attempts), and the wall time of the extra
+//!      steps — an operation-count proxy, not measured investigation effort.
+//!  14. **investigation surface** — the evidence-object inventory (files and
+//!      bytes per evidence directory) an investigator must open: a useful
+//!      investigation-surface proxy, not human investigation cost.
 //!
 //! The `log4shell` case needs a JVM; without `java` on PATH it is recorded
 //! in `skipped_cases` and the gates apply to the executed cases only (the
@@ -83,8 +91,9 @@ struct Bare {
 }
 
 /// Execute a side directly (the same argv the court passes, the same cwd,
-/// the same ambient trigger): the golden/differential/unit baselines run on
-/// the same bytes FRF observed.
+/// the same ambient trigger): the golden/differential baselines run on the
+/// same bytes FRF observed (the unit-suite baseline is projected, never
+/// independently executed).
 fn bare_run(work: &Path, side: &str, fixture: &str, trigger: &[&str], case: &str) -> Bare {
     let mut cmd = Command::new(work.join(side));
     cmd.arg(format!("fixtures/{fixture}")).current_dir(work);
@@ -806,16 +815,20 @@ fn case_study(
         "clean_false_positive": !golden_equal(&vuln_clean, &fixed_clean),
     });
     // The HISTORICAL snapshot: a golden suite recorded from the vulnerable
-    // release (as it existed at the time) flags the FIX as a regression.
+    // release (as it existed at the time) reports the fix as a behavior
+    // CHANGE — correctly reporting "behavior changed from my recorded
+    // oracle". A snapshot test does not claim the old behavior was correct;
+    // calling this a false positive would oversell what golden testing
+    // claims.
     let golden_vulnerable = json!({
-        "fix_regression_false_positive": !golden_equal(&fixed_defect, &vuln_defect),
+        "fix_behavior_change_detected": !golden_equal(&fixed_defect, &vuln_defect),
     });
     let differential = json!({
         "defect_detected": !golden_equal(&vuln_defect, &fixed_defect),
         "clean_equal": golden_equal(&vuln_clean, &fixed_clean),
     });
 
-    // -- 10. storage + runtime overhead ------------------------------------
+    // -- 10. evidence storage amplification + the runtime-overhead PILOT ----
     let store_bytes = dir_size(&work.join("ev"));
     let mut record_bytes = 0u64;
     for d in [
@@ -843,8 +856,10 @@ fn case_study(
     let frf_per_run_ms = (repeat_ms / 5).max(1);
     let overhead_ratio = frf_per_run_ms as f64 / bare_ms as f64;
 
-    // -- 11. localization + human investigation cost ------------------------
-    let runs_to_localize = 2 + 5 + minimize_attempts;
+    // -- 11. localization execution count + investigation surface ----------
+    // The operation-count proxy: two ladder observations + five repeat
+    // executions + the minimize attempts. NOT measured localization effort.
+    let localization_execution_count = 2 + 5 + minimize_attempts;
     let (inv_files, inv_bytes, inventory) = evidence_inventory(work);
     let ladder_summary = trajectory_summary(work, "candidate_revision");
     let survived: usize = ladder_summary
@@ -918,7 +933,7 @@ fn case_study(
         "claims": claims,
         "minimization": minimization,
         "localization": {
-            "runs_to_localize": runs_to_localize.to_string(),
+            "localization_execution_count": localization_execution_count.to_string(),
             "minimize_attempts": minimize_attempts.to_string(),
             "extra_wall_ms": (repeat_ms + minimize_ms).to_string(),
         },
@@ -931,9 +946,9 @@ fn case_study(
             "records_over_baseline": format!("{:.2}", record_bytes as f64 / baseline_bytes.max(1) as f64),
             "bare_ms": bare_ms.to_string(),
             "frf_per_run_ms": frf_per_run_ms.to_string(),
-            "runtime_overhead_ratio": format!("{overhead_ratio:.2}"),
+            "single_host_pilot_runtime_overhead_ratio": format!("{overhead_ratio:.2}"),
         },
-        "human_investigation": {
+        "investigation_surface": {
             "evidence_objects": inv_files.to_string(),
             "evidence_bytes": inv_bytes.to_string(),
             "inventory": inventory
@@ -1122,25 +1137,27 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
 
     // The baseline comparison table: the same fixtures measured the way each
     // conventional suite measures them, next to what FRF's evidence adds.
+    // The unit-suite row is PROJECTED from FRF's executed runs — no
+    // independent unit suite was executed — and labeled as such.
     let baseline_comparison = json!({
         "golden_pinned_to_fixed_release": {
             "defects_detected": format!("{defects_detected}/{executed}"),
             "false_positives": false_positives.to_string(),
-            "fix_regression_false_positives": "0".to_string(),
             "kept": "one pass/fail bit per run; the divergence itself is discarded",
         },
         "golden_pinned_to_vulnerable_release": {
-            "fix_regression_false_positives": format!("{defects_detected}/{executed}"),
-            "kept": "the historical snapshot flags the FIX as a regression — the boundary is invisible to a suite that pins current behavior",
+            "fix_behavior_changes_detected": format!("{defects_detected}/{executed}"),
+            "kept": "the historical snapshot reports the fix as a behavior CHANGE from its recorded oracle — a snapshot test correctly detects change; it does not claim the old behavior was correct (no boundary is visible to a suite that pins one release)",
         },
         "differential": {
             "divergences_detected": format!("{defects_detected}/{executed}"),
             "clean_equal": format!("{}/{executed}", executed),
             "kept": "an unattributed difference: no side is the reference, so no side can be wrong, and no boundary or minimal reproducer follows",
         },
-        "unit_suite_asserting_fixed_behavior": {
+        "unit_suite_asserting_fixed_behavior_projected": {
             "defects_detected": format!("{defects_detected}/{executed}"),
             "false_positives": false_positives.to_string(),
+            "kept": "PROJECTED from FRF's executed runs — no independent unit suite was executed; the row models what a suite pinning the fixed behavior would report on these fixtures",
             "cannot": [
                 "classify the fix boundary (which release changed the behavior)",
                 "preserve the disagreement as evidence (a pass/fail bit is discarded)",
@@ -1154,7 +1171,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
     let report = json!({
         "schema_version": "frf-external-experiment-v4",
         "corpus": "external-corpus/v3 (frf-external-corpus-v3: ACTUAL upstream vulnerable + fixed releases)",
-        "study": "the comparative measurement study: FRF court / +challenge / +trajectory / +minimization vs golden, differential, and unit baselines, over the metric table of the empirical program review",
+        "study": "the comparative measurement study: FRF court / +challenge / +trajectory / +minimization vs golden and differential baselines (executed BARE on the same bytes) and a PROJECTED unit-suite baseline (no independent unit suite is executed), over the metric table of the empirical program review; storage is evidence storage amplification, runtime is a single-host pilot (millisecond smoke, not a performance study), localization is an operation-count proxy, and the evidence-object inventory is an investigation-surface proxy",
         "cases_total": cases.len().to_string(),
         "cases_executed": executed.to_string(),
         "skipped_cases": skipped,
@@ -1198,19 +1215,19 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
                     "final_outcome": c["minimization"]["final_outcome"],
                 }))
                 .collect::<Vec<_>>(),
-            "localization_cost_runs": per_case
+            "localization_execution_counts": per_case
                 .iter()
                 .map(|c| json!({
                     "case": c["id"],
-                    "runs_to_localize": c["localization"]["runs_to_localize"],
+                    "localization_execution_count": c["localization"]["localization_execution_count"],
                     "minimize_attempts": c["localization"]["minimize_attempts"],
                 }))
                 .collect::<Vec<_>>(),
-            "human_investigation": {
+            "investigation_surface": {
                 "evidence_objects": per_case
                     .iter()
                     .map(|c| {
-                        c["human_investigation"]["evidence_objects"]
+                        c["investigation_surface"]["evidence_objects"]
                             .as_str()
                             .and_then(|s| s.parse::<u64>().ok())
                             .unwrap_or(0)
@@ -1220,7 +1237,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
                 "evidence_bytes": per_case
                     .iter()
                     .map(|c| {
-                        c["human_investigation"]["evidence_bytes"]
+                        c["investigation_surface"]["evidence_bytes"]
                             .as_str()
                             .and_then(|s| s.parse::<u64>().ok())
                             .unwrap_or(0)
@@ -1230,7 +1247,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             },
         },
         "baseline_comparison": baseline_comparison,
-        "storage_overhead_bytes": {
+        "evidence_storage_amplification": {
             "evidence_store": total_store.to_string(),
             "evidence_records": total_records.to_string(),
             "raw_captured_output": total_raw.to_string(),
@@ -1238,7 +1255,7 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
             "records_over_raw": format!("{:.2}", total_records as f64 / total_raw.max(1) as f64),
             "records_over_baseline": format!("{:.2}", total_records as f64 / total_baseline.max(1) as f64),
         },
-        "runtime_overhead_ms": {
+        "single_host_runtime_overhead_pilot_ms": {
             "bare_sides": total_bare_ms.to_string(),
             "frf_per_run": total_frf_ms.to_string(),
             "ratio": format!("{:.2}", total_frf_ms as f64 / total_bare_ms.max(1) as f64),
