@@ -263,6 +263,72 @@ func verifyBundle(bundle string) ClaimIR {
 					fail("claim %s: snapshot head %s fingerprint does not rederive", claimID, str(ho, "id"))
 				}
 			}
+			// The universe's committed OBJECTS must rederive from the bundle's
+			// own documents: every receipt/run/authority/series/reduction the
+			// blocker scan depended on must be present with its committed
+			// content address.
+			seen := map[string]bool{}
+			for _, ov := range arr(recVal(snapshot, "objects")) {
+				o := obj(ov)
+				kind := str(o, "kind")
+				oid := str(o, "id")
+				committed := str(o, "cid")
+				key := kind + ":" + oid
+				if seen[key] {
+					fail("claim %s: duplicate object %s in the knowledge snapshot", claimID, key)
+				}
+				seen[key] = true
+				switch kind {
+				case "receipt":
+					rec := obj(loadEvidence(safeJoin(bundle, "receipts/"+oid+".json")))
+					digest := ""
+					if parts := strings.Split(oid, "-"); len(parts) >= 2 {
+						digest = parts[len(parts)-1]
+					}
+					if digest != committed {
+						fail("claim %s: committed universe receipt %s cid does not match its identity", claimID, oid)
+					}
+					if rc, err := recordContentIdentity(rec); err != nil || rc != committed {
+						fail("claim %s: committed universe receipt %s does not rederive", claimID, oid)
+					}
+				case "run":
+					cap := obj(loadEvidence(safeJoin(bundle, "captures/"+oid+"/capture.json")))
+					var residuals []*jcs.Object
+					for _, ridV := range arr(recVal(cap, "residuals")) {
+						residuals = append(residuals, obj(loadEvidence(safeJoin(bundle, "residuals/"+ridV.(string)+".json"))))
+					}
+					expected, err := runIdentity(cap, residuals)
+					if err != nil || "run-"+str(cap, "court")+"-"+expected != oid {
+						fail("claim %s: committed universe run %s is not content-addressed", claimID, oid)
+					}
+					digest := ""
+					if parts := strings.Split(oid, "-"); len(parts) >= 2 {
+						digest = parts[len(parts)-1]
+					}
+					if digest != committed {
+						fail("claim %s: committed universe run %s cid does not match its identity", claimID, oid)
+					}
+				case "authority":
+					rec := obj(loadEvidence(safeJoin(bundle, "authorities/"+oid+".json")))
+					if rc, err := recordContentIdentity(rec); err != nil || rc != committed {
+						fail("claim %s: committed universe authority %s does not rederive", claimID, oid)
+					}
+				case "series":
+					ser := obj(loadEvidence(safeJoin(bundle, "series/"+oid+".json")))
+					expected, err := seriesIdentity(str(ser, "experiment_id"), recVal(ser, "parent_series_id"), str(ser, "court"), str(ser, "coordinate_system"), arrP(recVal(ser, "points")))
+					if err != nil || expected != oid || committed != oid {
+						fail("claim %s: committed universe series %s does not rederive", claimID, oid)
+					}
+				case "reduction":
+					rd := obj(loadEvidence(safeJoin(bundle, "reductions/"+oid+".json")))
+					expected, err := reductionIdentity(rd)
+					if err != nil || expected != oid || committed != oid {
+						fail("claim %s: committed universe reduction %s does not rederive", claimID, oid)
+					}
+				default:
+					fail("claim %s: the knowledge universe names an unknown object kind %s", claimID, kind)
+				}
+			}
 			// The claim's admission policy re-derives from the bundle alone:
 			// the capability/witness evidence is referenced by content, never
 			// trusted from the claim file.

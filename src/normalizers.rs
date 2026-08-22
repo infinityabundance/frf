@@ -153,13 +153,9 @@ pub fn run_side(
     let response_bytes = ext::run_program(image, request_bytes, cwd, profile)?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
-    ext::require_canonical_response(&response_bytes, "normalizer response")?;
-    let response: NormalizerResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
-        FrfError::new(format!(
-            "normalizer for id {} produced an unparseable response: {e}",
-            semantic.id
-        ))
-    })?;
+    let response: NormalizerResponse =
+        ext::parse_canonical_response(&response_bytes, "normalizer response")
+            .map_err(|e| FrfError::new(format!("normalizer for id {}: {e}", semantic.id)))?;
     let request_cid = ext::request_cid(request_bytes);
     let (stdout, stderr) = interpret(
         &response,

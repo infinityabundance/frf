@@ -860,13 +860,9 @@ fn minimize_external(
     )?;
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.
-    crate::ext::require_canonical_response(&response_bytes, "minimizer response")?;
-    let response: MinimizerResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
-        FrfError::new(format!(
-            "minimizer {} produced an unparseable response: {e}",
-            semantic.id
-        ))
-    })?;
+    let response: MinimizerResponse =
+        crate::ext::parse_canonical_response(&response_bytes, "minimizer response")
+            .map_err(|e| FrfError::new(format!("minimizer {}: {e}", semantic.id)))?;
     if response.schema_version != crate::model::SCHEMA_MINIMIZER_RESPONSE {
         return Err(FrfError::new(format!(
             "minimizer response has unsupported schema version {:?}",
@@ -1868,13 +1864,10 @@ pub fn run_once(
             )?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
-            crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
             let response: crate::model::CaptureAdapterResponse =
-                serde_json::from_slice(&response_bytes).map_err(|e| {
-                    FrfError::new(format!(
-                        "capture adapter for axis {} produced an unparseable response: {e}",
-                        decl.axis
-                    ))
+                crate::ext::parse_canonical_response(&response_bytes, "capture-adapter response")
+                    .map_err(|e| {
+                    FrfError::new(format!("capture adapter for axis {}: {e}", decl.axis))
                 })?;
             if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
                 return Err(FrfError::new(format!(
@@ -2672,14 +2665,11 @@ pub fn challenge(
                 let response_cid = host::sha256_bytes(&response_bytes);
                 // The protocol says canonical JSON: the response must BE its
                 // own canonical serialization.
-                crate::ext::require_canonical_response(&response_bytes, "mutation response")?;
                 let response: MutationResponse =
-                    serde_json::from_slice(&response_bytes).map_err(|e| {
-                        FrfError::new(format!(
-                            "mutation provider {id} produced an unparseable response: {e}",
-                            id = decl.id
-                        ))
-                    })?;
+                    crate::ext::parse_canonical_response(&response_bytes, "mutation response")
+                        .map_err(|e| {
+                            FrfError::new(format!("mutation provider {id}: {e}", id = decl.id))
+                        })?;
                 if response.schema_version != SCHEMA_MUTATION_RESPONSE {
                     failures.push(format!(
                         "mutation provider {}: response has unsupported schema version {:?}",

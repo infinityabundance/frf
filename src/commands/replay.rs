@@ -540,13 +540,10 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 crate::ext::run_program(&snapshot, &request_bytes, side_cwd, profile)?;
             // The protocol says canonical JSON: the response must BE its own
             // canonical serialization.
-            crate::ext::require_canonical_response(&response_bytes, "capture-adapter response")?;
             let response: crate::model::CaptureAdapterResponse =
-                serde_json::from_slice(&response_bytes).map_err(|e| {
-                    FrfError::new(format!(
-                        "capture adapter for axis {} produced an unparseable response: {e}",
-                        semantic.id
-                    ))
+                crate::ext::parse_canonical_response(&response_bytes, "capture-adapter response")
+                    .map_err(|e| {
+                    FrfError::new(format!("capture adapter for axis {}: {e}", semantic.id))
                 })?;
             if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
                 return Err(FrfError::new(format!(

@@ -1572,7 +1572,9 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 panic!("claim {receipt_id}: duplicate residual heads in the knowledge snapshot");
             }
             // The v2 universe commits every other member as (kind, id, cid)
-            // objects; the reduction records enter through kind == "reduction".
+            // objects; each committed cid must REDERIVE from the bundle's own
+            // object — a universe that names evidence the bundle cannot
+            // reproduce is not the universe the claim was compiled under.
             if let Some(objects) = snapshot["objects"].as_array() {
                 let mut seen: Vec<String> = Vec::new();
                 for o in objects {
@@ -1586,39 +1588,140 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     seen.push(key);
                 }
                 for o in objects {
-                    if as_str(&o["kind"]) != "reduction" {
-                        continue;
-                    }
-                    let rid = as_str(&o["id"]);
-                    let reduction =
-                        load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
-                    if as_str(&reduction["id"]) != rid {
-                        panic!(
-                        "claim {receipt_id}: snapshot reduction {rid} is missing from the bundle"
-                    );
-                    }
-                    let expected = rederive::reduction_identity(
-                        as_str(&reduction["residual_id"]),
-                        as_str(&reduction["source_run"]),
-                        as_str(&reduction["axis"]),
-                        as_str(&reduction["kind"]),
-                        as_str(&reduction["court_semantic_identity"]),
-                        as_str(&reduction["authority_artifact_sha256"]),
-                        as_str(&reduction["candidate_artifact_sha256"]),
-                        as_str(&reduction["environment_digest"]),
-                        as_str(&reduction["comparator_semantic_id"]),
-                        as_str(&reduction["comparator_semantic_hash"]),
-                        as_str(&reduction["comparator_implementation_hash"]),
-                        &reduction["argv_template"],
-                        as_str(&reduction["original_fixture_sha256"]),
-                        as_str(&reduction["final_fixture_sha256"]),
-                        &reduction["attempts"],
-                        &reduction["derivation"],
-                        &reduction["transform"],
-                        &reduction["minimizer"],
-                    );
-                    if expected != rid {
-                        panic!("claim {receipt_id}: reduction {rid} is not content-addressed");
+                    let kind = as_str(&o["kind"]);
+                    let oid = as_str(&o["id"]);
+                    let committed = as_str(&o["cid"]);
+                    match kind {
+                        "receipt" => {
+                            // The receipt id is receipt-<run>-<digest>; the
+                            // committed cid must equal that digest AND the
+                            // canonical body must hash to it.
+                            let rec =
+                                load_evidence(&safe_rel(bundle, &format!("receipts/{oid}.json")));
+                            let rest = oid
+                                .strip_prefix("receipt-")
+                                .and_then(|r| r.rsplit_once('-'))
+                                .map(|(_, d)| d)
+                                .unwrap_or("");
+                            let digest = sha256_bytes(
+                                encode(&rec)
+                                    .unwrap_or_else(|e| {
+                                        panic!("claim {receipt_id}: cannot canonicalize receipt {oid}: {e}")
+                                    })
+                                    .as_bytes(),
+                            );
+                            if committed != rest || committed != digest {
+                                panic!("claim {receipt_id}: committed universe receipt {oid} does not rederive (cid {committed})");
+                            }
+                        }
+                        "run" => {
+                            // The run identity rederives from its capture; the
+                            // committed cid is its digest.
+                            let cap = load_evidence(&safe_rel(
+                                bundle,
+                                &format!("captures/{oid}/capture.json"),
+                            ));
+                            let residuals: Vec<Value> = cap["residuals"]
+                                .as_array()
+                                .cloned()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|id| {
+                                    load_evidence(&safe_rel(
+                                        bundle,
+                                        &format!("residuals/{}.json", as_str(&id)),
+                                    ))
+                                })
+                                .collect();
+                            let expected = format!(
+                                "run-{}-{}",
+                                as_str(&cap["court"]),
+                                run_identity(&cap, &residuals)
+                            );
+                            if expected != oid {
+                                panic!("claim {receipt_id}: committed universe run {oid} is not content-addressed");
+                            }
+                            let digest = oid
+                                .strip_prefix("run-")
+                                .and_then(|r| r.rsplit_once('-'))
+                                .map(|(_, d)| d)
+                                .unwrap_or("");
+                            if committed != digest {
+                                panic!("claim {receipt_id}: committed universe run {oid} cid does not match its identity ({committed})");
+                            }
+                        }
+                        "authority" => {
+                            // An authority id is a LABEL; the committed cid is
+                            // the canonical hash of its record — the exact
+                            // bytes the blocker scan's lineage computation
+                            // reads.
+                            let rec = load_evidence(&safe_rel(
+                                bundle,
+                                &format!("authorities/{oid}.json"),
+                            ));
+                            let actual = sha256_bytes(
+                                encode(&rec)
+                                    .unwrap_or_else(|e| {
+                                        panic!("claim {receipt_id}: cannot canonicalize authority {oid}: {e}")
+                                    })
+                                    .as_bytes(),
+                            );
+                            if actual != committed {
+                                panic!("claim {receipt_id}: committed universe authority {oid} does not rederive (cid {committed})");
+                            }
+                        }
+                        "series" => {
+                            // The series id IS its content address; the
+                            // committed cid must equal it.
+                            let series =
+                                load_evidence(&safe_rel(bundle, &format!("series/{oid}.json")));
+                            let expected = rederive::series_identity(
+                                as_str(&series["experiment_id"]),
+                                series["parent_series_id"].as_str(),
+                                as_str(&series["court"]),
+                                as_str(&series["coordinate_system"]),
+                                &series["points"],
+                            );
+                            if expected != oid || committed != oid {
+                                panic!("claim {receipt_id}: committed universe series {oid} does not rederive (cid {committed})");
+                            }
+                        }
+                        "reduction" => {
+                            let rid = oid;
+                            let reduction =
+                                load_evidence(&safe_rel(bundle, &format!("reductions/{rid}.json")));
+                            if as_str(&reduction["id"]) != rid {
+                                panic!(
+                                "claim {receipt_id}: snapshot reduction {rid} is missing from the bundle"
+                            );
+                            }
+                            let expected = rederive::reduction_identity(
+                                as_str(&reduction["residual_id"]),
+                                as_str(&reduction["source_run"]),
+                                as_str(&reduction["axis"]),
+                                as_str(&reduction["kind"]),
+                                as_str(&reduction["court_semantic_identity"]),
+                                as_str(&reduction["authority_artifact_sha256"]),
+                                as_str(&reduction["candidate_artifact_sha256"]),
+                                as_str(&reduction["environment_digest"]),
+                                as_str(&reduction["comparator_semantic_id"]),
+                                as_str(&reduction["comparator_semantic_hash"]),
+                                as_str(&reduction["comparator_implementation_hash"]),
+                                &reduction["argv_template"],
+                                as_str(&reduction["original_fixture_sha256"]),
+                                as_str(&reduction["final_fixture_sha256"]),
+                                &reduction["attempts"],
+                                &reduction["derivation"],
+                                &reduction["transform"],
+                                &reduction["minimizer"],
+                            );
+                            if expected != rid || committed != rid {
+                                panic!("claim {receipt_id}: committed universe reduction {rid} does not rederive (cid {committed})");
+                            }
+                        }
+                        other => {
+                            panic!("claim {receipt_id}: the knowledge universe names an unknown object kind {other:?}");
+                        }
                     }
                 }
             }

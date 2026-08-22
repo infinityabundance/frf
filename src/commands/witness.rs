@@ -155,12 +155,9 @@ pub fn attest(
     let response_cid = host::sha256_bytes(&response_bytes);
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization.
-    crate::ext::require_canonical_response(&response_bytes, "witness response")?;
-    let response: WitnessResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
-        FrfError::new(format!(
-            "witness {id} produced an unparseable response: {e}"
-        ))
-    })?;
+    let response: WitnessResponse =
+        crate::ext::parse_canonical_response(&response_bytes, "witness response")
+            .map_err(|e| FrfError::new(format!("witness {id}: {e}")))?;
     if response.schema_version != SCHEMA_WITNESS_RESPONSE {
         return Err(FrfError::new(format!(
             "witness response has unsupported schema version {:?}",

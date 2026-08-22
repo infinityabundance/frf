@@ -113,6 +113,23 @@ pub fn require_canonical_response(response_bytes: &[u8], what: &str) -> Result<(
     crate::canon::require_canonical_bytes(response_bytes, what)
 }
 
+/// The ONE loader for an extension program's canonical JSON response: the
+/// bytes must BE the canonical serialization of the parsed document (strict
+/// JSON, duplicate property names refused, byte-identical re-encoding — a
+/// reformatted response is a different evidence identity and is refused),
+/// and the typed projection deserializes from that canonical document. This
+/// is the canonical-response counterpart of `Store::parse_evidence`; direct
+/// `serde_json::from_slice` of an evidence struct anywhere else is a
+/// protocol violation (tests/loader_gate.rs pins that rule).
+pub fn parse_canonical_response<T: serde::de::DeserializeOwned>(
+    response_bytes: &[u8],
+    what: &str,
+) -> Result<T> {
+    require_canonical_response(response_bytes, what)?;
+    serde_json::from_slice(response_bytes)
+        .map_err(|e| FrfError::new(format!("cannot parse {what}: {e}")))
+}
+
 /// Write the four invocation-evidence files under `dir` (created): the
 /// canonical request, the canonical response, the invocation record, and the
 /// result record. All are written with `create_new`: evidence is never

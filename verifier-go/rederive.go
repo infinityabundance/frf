@@ -378,6 +378,17 @@ func arr(v jcs.Value) []jcs.Value {
 	return a
 }
 
+// arrP — arr() as objects (for identities that take []*jcs.Object).
+func arrP(v jcs.Value) []*jcs.Object {
+	var out []*jcs.Object
+	for _, item := range arr(v) {
+		if o, ok := item.(*jcs.Object); ok {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
 func asStrArray(v jcs.Value) []string {
 	var out []string
 	for _, item := range arr(v) {

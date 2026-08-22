@@ -461,51 +461,115 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 runs.push(record.run.clone());
             }
         }
-        // The typed universe objects: reduction records (with their external-
-        // minimizer evidence) and the residual heads' runs enter the closure;
-        // receipts/authorities/series are carried by the runs' walks and the
-        // receipt root itself.
+        // The typed universe objects: the claim's absence search depended on
+        // the EXACT bytes of every committed member, so the bundle carries
+        // them ALL — reduction records (with their external-minimizer
+        // evidence), the committed authorities (even one no run's capture
+        // cites, e.g. a witness's admitted authority), the committed series,
+        // and the committed receipts + runs (whose captures/objects/
+        // residuals/authorities enter via the run walk below).
         for obj in &parsed.knowledge_snapshot.objects {
-            if obj.kind != "reduction" {
-                continue;
-            }
-            let rid = &obj.id;
-            let r_path = store.reduction_path(rid)?;
-            let bytes = read(&r_path, "reduction")?;
-            let rel = format!("reductions/{rid}.json");
-            entries.insert(
-                rel.clone(),
-                ClosureEntry {
-                    rel,
-                    sha256: host::sha256_bytes(&bytes),
-                    kind: "reduction",
-                },
-            );
-            // The external minimizer's invocation evidence, when the
-            // reduction binds one: `reductions/<id>/minimizer/`.
-            let rec = store.load_reduction(rid)?;
-            if rec.minimizer_invocation_id.is_some() {
-                let mdir = store.minimizer_dir(rid)?;
-                for f in [
-                    "request.json",
-                    "response.json",
-                    "invocation.json",
-                    "result.json",
-                ] {
-                    let path = mdir.join(f);
-                    if !path.is_file() {
-                        continue;
-                    }
-                    let bytes = read(&path, "minimizer evidence")?;
-                    let rel = format!("reductions/{rid}/minimizer/{f}");
+            match obj.kind.as_str() {
+                "reduction" => {
+                    let rid = &obj.id;
+                    let r_path = store.reduction_path(rid)?;
+                    let bytes = read(&r_path, "reduction")?;
+                    let rel = format!("reductions/{rid}.json");
                     entries.insert(
                         rel.clone(),
                         ClosureEntry {
                             rel,
                             sha256: host::sha256_bytes(&bytes),
-                            kind: "minimizer-evidence",
+                            kind: "reduction",
                         },
                     );
+                    // The external minimizer's invocation evidence, when the
+                    // reduction binds one: `reductions/<id>/minimizer/`.
+                    let rec = store.load_reduction(rid)?;
+                    if rec.minimizer_invocation_id.is_some() {
+                        let mdir = store.minimizer_dir(rid)?;
+                        for f in [
+                            "request.json",
+                            "response.json",
+                            "invocation.json",
+                            "result.json",
+                        ] {
+                            let path = mdir.join(f);
+                            if !path.is_file() {
+                                continue;
+                            }
+                            let bytes = read(&path, "minimizer evidence")?;
+                            let rel = format!("reductions/{rid}/minimizer/{f}");
+                            entries.insert(
+                                rel.clone(),
+                                ClosureEntry {
+                                    rel,
+                                    sha256: host::sha256_bytes(&bytes),
+                                    kind: "minimizer-evidence",
+                                },
+                            );
+                        }
+                    }
+                }
+                "authority" => {
+                    // The universe commits the authority's canonical RECORD
+                    // (its label is not its bytes); the bundle carries it
+                    // even when no run's capture cites it.
+                    let bytes = read(&store.authority_path(&obj.id)?, "authority")?;
+                    let rel = format!("authorities/{}.json", obj.id);
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: "authority",
+                        },
+                    );
+                }
+                "receipt" => {
+                    // A committed universe receipt document + its run enter
+                    // the closure (the run walk picks up the capture,
+                    // objects, residuals, and the receipt's own authority).
+                    let bytes = read(&store.receipt_path(&obj.id)?, "receipt")?;
+                    let rel = format!("receipts/{}.json", obj.id);
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: "receipt",
+                        },
+                    );
+                    let rec: crate::model::Receipt =
+                        store.parse_evidence(&store.receipt_path(&obj.id)?)?;
+                    if !runs.contains(&rec.run) {
+                        runs.push(rec.run.clone());
+                    }
+                }
+                "run" => {
+                    // A committed universe run enters the walk.
+                    if !runs.contains(&obj.id) {
+                        runs.push(obj.id.clone());
+                    }
+                }
+                "series" => {
+                    // The series id IS its content address; the bundle
+                    // carries the record.
+                    let bytes = read(&store.series_path(&obj.id)?, "series")?;
+                    let rel = format!("series/{}.json", obj.id);
+                    entries.insert(
+                        rel.clone(),
+                        ClosureEntry {
+                            rel,
+                            sha256: host::sha256_bytes(&bytes),
+                            kind: "series",
+                        },
+                    );
+                }
+                other => {
+                    return Err(FrfError::new(format!(
+                        "claim {claim_id}: the knowledge universe names an unknown object kind {other:?} — only receipt/run/authority/series/reduction are universe members"
+                    )));
                 }
             }
         }
