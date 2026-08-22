@@ -60,4 +60,15 @@ gcc -O2 -no-pie -I openssl-1.0.1g/include hb.c -o out/hb-1.0.1g \
   -Wl,--start-group openssl-1.0.1g/libssl.a openssl-1.0.1g/libcrypto.a \
   -Wl,--end-group -ldl -lpthread
 
+# --- the log4shell probe, compiled with the PINNED JDK inside this image ---
+# (the JDK is part of the pinned toolchain — no host javac is involved; the
+# source is UTF-8, declared explicitly; the jar uses FIXED entry timestamps
+# so probe.jar is byte-reproducible: two builds in this image hash equal)
+rm -rf probe-classes && mkdir -p probe-classes
+javac -encoding UTF-8 -cp src/log4j-api-2.14.1.jar:src/log4j-core-2.14.1.jar \
+  -d probe-classes probe/Log4ShellProbe.java
+jar --date=2020-01-01T00:00:00Z --create --file out/probe.jar \
+  -C probe-classes Log4ShellProbe.class \
+  -C probe-classes 'Log4ShellProbe$CapturingListener.class'
+
 echo "BUILD COMPLETE"
