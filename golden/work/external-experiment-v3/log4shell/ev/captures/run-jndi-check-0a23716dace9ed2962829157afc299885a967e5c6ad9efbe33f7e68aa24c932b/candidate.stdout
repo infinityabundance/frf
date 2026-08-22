@@ -1,3 +1,0 @@
-JNDI_LOOKUP_ATTEMPTED
-Error looking up JNDI resource [ldap://127.0.0.1:1/a].
-javax.naming.CommunicationException: 127.0.0.1:1

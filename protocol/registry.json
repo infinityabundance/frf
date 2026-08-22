@@ -680,6 +680,11 @@
       "id": "frf-external-experiment-v3",
       "status": "active",
       "scope": "external empirical program v3 report (real upstream releases)"
+    },
+    {
+      "id": "frf-external-experiment-v4",
+      "status": "active",
+      "scope": "external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus)"
     }
   ],
   "relations": {

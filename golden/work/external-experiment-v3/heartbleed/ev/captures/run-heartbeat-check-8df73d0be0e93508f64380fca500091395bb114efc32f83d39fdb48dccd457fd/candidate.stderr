@@ -1,1 +1,0 @@
-HEARTBLEED: the linked libssl leaked 16384 bytes in the heartbeat response

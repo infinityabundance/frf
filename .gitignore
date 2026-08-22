@@ -24,3 +24,9 @@
 /golden/work/external-experiment.json
 /golden/work/external-experiment-v2/
 /golden/work/external-experiment-v2.json
+# v3/v4 (the ACTUAL upstream releases and the comparative measurement study)
+# regenerate their working dirs and reports the same way.
+/golden/work/external-experiment-v3/
+/golden/work/external-experiment-v3.json
+/golden/work/external-experiment-v4/
+/golden/work/external-experiment-v4.json
