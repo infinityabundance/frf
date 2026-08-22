@@ -66,7 +66,7 @@ fn the_receipt_carries_the_profile_and_the_bounds_that_applied() {
     let capture_bounds: serde_json::Value =
         serde_json::to_value(&capture["capture_bounds"]).unwrap();
     assert_eq!(body["capture_bounds"], capture_bounds);
-    assert_eq!(body["schema_version"], "frf-receipt-v17");
+    assert_eq!(body["schema_version"], "frf-receipt-v18");
 
     // Replay consumes the receipt through the same verified loader, which
     // enforces that the receipt's profile/bounds equal the capture's.
@@ -227,7 +227,7 @@ fn the_v2_profile_records_its_cgroup_envelope_in_capture_and_receipt() {
         body["capture_bounds"],
         serde_json::to_value(&capture["capture_bounds"]).unwrap()
     );
-    assert_eq!(body["schema_version"], "frf-receipt-v17");
+    assert_eq!(body["schema_version"], "frf-receipt-v18");
 
     // Exact replay re-executes under the SAME recorded profile and envelope
     // (the fake root stands in for the delegated subtree).

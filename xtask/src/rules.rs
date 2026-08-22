@@ -40,6 +40,10 @@ const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "claims",
     "replay",
 ];
+/// Optional receipt fields: carried exactly when the observation has them
+/// (a court with no declared execution context produces a receipt without
+/// the field), but never anything beyond the protocol set.
+const OPTIONAL_RECEIPT_KEYS: &[&str] = &["execution_context"];
 const CAPTURE_BOUNDS_KEYS: &[&str] = &[
     "timeout_ms",
     "max_stream_bytes",
@@ -52,6 +56,9 @@ const CAPTURE_BOUNDS_KEYS: &[&str] = &[
     "cgroup_memory_max",
     "cgroup_cpu_max",
 ];
+const EXECUTION_CONTEXT_KEYS: &[&str] = &["schema_version", "cid", "artifacts"];
+const EXECUTION_CONTEXT_ARTIFACT_KEYS: &[&str] = &["path", "role", "sha256"];
+const EXECUTION_CONTEXT_ROLES: &[&str] = &["child-executable", "runtime-library", "data"];
 
 /// Unknown-key rejection per object kind — the structural mirror of the
 /// reference engine's `deny_unknown_fields`: an unknown property is refused,
@@ -80,9 +87,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v17" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v18" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v17",
+            "schema_version is {:?}, expected frf-receipt-v18",
             doc["schema_version"]
         ));
     }
@@ -91,7 +98,11 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
             v.push(format!("missing required field {k:?}"));
         }
     }
-    for k in unknown_keys(doc, REQUIRED_RECEIPT_KEYS) {
+    for k in unknown_keys(doc, &{
+        let mut allowed = REQUIRED_RECEIPT_KEYS.to_vec();
+        allowed.extend_from_slice(OPTIONAL_RECEIPT_KEYS);
+        allowed
+    }) {
         v.push(format!(
             "unknown property {k:?} on the receipt (strict evidence)"
         ));
@@ -143,6 +154,32 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
         v.push(format!(
             "unknown property {k:?} on the admissibility envelope"
         ));
+    }
+    // v18: the DECLARED execution-context closure's own structure (absent
+    // when the court declared no runtime dependencies).
+    if let Some(closure) = doc.get("execution_context").filter(|n| !n.is_null()) {
+        for k in unknown_keys(closure, EXECUTION_CONTEXT_KEYS) {
+            v.push(format!(
+                "unknown property {k:?} on receipt.execution_context"
+            ));
+        }
+        if !hex64(as_str(&closure["cid"])) {
+            v.push("receipt.execution_context.cid must be 64 hex".to_string());
+        }
+        if let Some(artifacts) = closure["artifacts"].as_array() {
+            for (i, a) in artifacts.iter().enumerate() {
+                for k in unknown_keys(a, EXECUTION_CONTEXT_ARTIFACT_KEYS) {
+                    v.push(format!(
+                        "unknown property {k:?} on receipt.execution_context.artifacts[{i}]"
+                    ));
+                }
+                if !hex64(as_str(&a["sha256"])) {
+                    v.push(format!(
+                        "receipt.execution_context.artifacts[{i}].sha256 must be 64 hex"
+                    ));
+                }
+            }
+        }
     }
     for k in unknown_keys(&doc["capture_bounds"], CAPTURE_BOUNDS_KEYS) {
         v.push(format!("unknown property {k:?} on capture_bounds"));
@@ -501,9 +538,9 @@ pub fn kind_identity_parts(
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v17" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v18" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v17",
+            "schema_version is {:?}, expected frf-receipt-v18",
             rec["schema_version"]
         ));
     }
@@ -1066,6 +1103,48 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                     }
                 }
             }
+        }
+    }
+
+    // v18: the DECLARED execution-context closure (when carried) is
+    // self-authenticating: the schema version is the protocol one, every
+    // artifact names a protocol role, the artifacts are strictly sorted by
+    // path, and the cid rederives from the document's own artifacts.
+    if let Some(closure) = rec.get("execution_context").filter(|n| !n.is_null()) {
+        if as_str(&closure["schema_version"]) != "frf-execution-context-v1" {
+            v.push(format!(
+                "the execution-context closure has unsupported schema_version {:?}",
+                closure["schema_version"]
+            ));
+        }
+        if let Some(artifacts) = closure["artifacts"].as_array() {
+            let mut prev: Option<&str> = None;
+            for a in artifacts {
+                let role = as_str(&a["role"]);
+                if !EXECUTION_CONTEXT_ROLES.contains(&role) {
+                    v.push(format!(
+                        "execution-context artifact {} declares role {role:?}; the protocol admits child-executable, runtime-library, or data",
+                        as_str(&a["path"])
+                    ));
+                }
+                if let Some(p) = prev {
+                    if p >= as_str(&a["path"]) {
+                        v.push(format!(
+                            "the execution-context artifacts are not strictly sorted by path ({} after {p})",
+                            as_str(&a["path"])
+                        ));
+                    }
+                }
+                prev = Some(as_str(&a["path"]));
+            }
+        }
+        let expected = crate::rederive::execution_context_identity(closure);
+        if expected != as_str(&closure["cid"]) {
+            v.push(format!(
+                "the execution-context closure cid does not rederive ({} != {})",
+                &expected[..16],
+                &as_str(&closure["cid"])[..16]
+            ));
         }
     }
 

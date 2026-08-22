@@ -72,8 +72,15 @@
     {
       "id": "execution",
       "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed)",
-      "schema": "frf-capture-v12",
+      "schema": "frf-capture-v13",
       "identity": "FRF/RUN/v2",
+      "status": "active"
+    },
+    {
+      "id": "execution-context",
+      "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) — high-assurance means the declared context is bound, not that every file read was captured",
+      "schema": "frf-execution-context-v1",
+      "identity": "FRF/EXECUTION-CONTEXT/v1",
       "status": "active"
     },
     {
@@ -186,8 +193,8 @@
     },
     {
       "id": "receipt",
-      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts \u2014 executable hash is not executable semantics)",
-      "schema": "frf-receipt-v17",
+      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time)",
+      "schema": "frf-receipt-v18",
       "status": "active"
     },
     {
@@ -294,6 +301,11 @@
     {
       "domain": "FRF/EXECUTION/v1",
       "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/EXECUTION-CONTEXT/v1",
+      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) — the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
       "status": "active"
     },
     {
@@ -487,8 +499,20 @@
       "status": "active"
     },
     {
-      "id": "frf-capture-v12",
+      "id": "frf-capture-v13",
       "status": "active"
+    },
+    {
+      "id": "frf-capture-v12",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-execution-context-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-execution-context-v9",
+      "status": "reserved-invalid"
     },
     {
       "id": "frf-residual-v1",
@@ -499,8 +523,12 @@
       "status": "active"
     },
     {
-      "id": "frf-receipt-v17",
+      "id": "frf-receipt-v18",
       "status": "active"
+    },
+    {
+      "id": "frf-receipt-v17",
+      "status": "superseded"
     },
     {
       "id": "frf-receipt-v16",

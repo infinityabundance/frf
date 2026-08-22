@@ -27,6 +27,13 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
+/// Execution-context closure schema: the DECLARED runtime closure of an
+/// execution — the child executables, runtime libraries, and data
+/// dependencies the side's behavior depends on beyond its own bytes (the
+/// interpreter chain and native startup-link closure bind the artifact
+/// ITSELF; this closure binds what it SPAWNS and LOADS). Content-addressed
+/// as FRF/EXECUTION-CONTEXT/v1; snapshotted at observation time.
+pub const SCHEMA_EXECUTION_CONTEXT: &str = "frf-execution-context-v1";
 /// Capture schema. v6 removes the repetition context from the run entirely:
 /// a run knows nothing about which experiment later references it (v5's
 /// `repeat_index`/`repeat_count` moved to the ExecutionSeries protocol
@@ -56,8 +63,14 @@ pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// interpreter chains, and every comparator/normalizer/adapter/minimizer
 /// implementation). The capture records both identities, and the run id
 /// commits the contract — two executions that coincide on outputs but
-/// differ on bounds or profile are different bounded observations.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v12";
+/// differ on bounds or profile are different bounded observations. v13:
+/// the capture also carries the court's DECLARED EXECUTION-CONTEXT CLOSURE
+/// (when declared): the child executables, runtime libraries, and data
+/// dependencies the side's behavior depends on beyond its own bytes,
+/// snapshotted and content-addressed at observation time (FRF/EXECUTION-
+/// CONTEXT/v1) — a declared dependency is bound to the exact bytes, never
+/// assumed.
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v13";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -95,8 +108,13 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// The OpenReceipt protocol version this implementation speaks.
 /// v15: the execution profile adds the per-side process-count limit
 /// (`rlimit_nproc`, RLIMIT_NPROC) — the capture bounds record the complete
-/// resource contract the observation was made under.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v17";
+/// resource contract the observation was made under. v18: the receipt also
+/// carries the court's DECLARED EXECUTION-CONTEXT CLOSURE (when declared):
+/// the child executables, runtime libraries, and data dependencies the
+/// side's behavior depends on beyond its own bytes, snapshotted and
+/// content-addressed at observation time — the transitive execution
+/// context, declared (never assumed) and bound to the exact bytes.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v18";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -1812,6 +1830,15 @@ pub struct CourtSpec {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub environment_points:
         Option<std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>>,
+    /// The DECLARED execution-context closure: the child executables, runtime
+    /// libraries, and data dependencies the side's execution depends on
+    /// beyond its own bytes. Absent = no declared runtime dependencies (the
+    /// side's context is its bytes + interpreter chain + declared
+    /// environment). When declared, every artifact is snapshotted and
+    /// content-addressed at observation time — a declared dependency is
+    /// bound to the exact bytes, never assumed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub execution_context: Option<ExecutionContextDeclaration>,
 }
 
 /// The produced-artifact clause. v0: one output directory per side,
@@ -1960,6 +1987,12 @@ pub struct CaptureManifest {
     /// closure walker falls back to the recorded artifact hashes).
     #[serde(default)]
     pub evidence_refs: Vec<EvidenceRef>,
+    /// The snapshotted execution-context closure (when the court declared
+    /// one): the child executables / runtime libraries / data dependencies
+    /// the side's execution was declared to depend on, content-addressed at
+    /// observation time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub execution_context: Option<ExecutionContextClosure>,
 }
 
 /// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
@@ -2188,6 +2221,69 @@ pub struct ArtifactIdentity {
     /// loader + resolved dependency closure, content-addressed (v17).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub native_runtime: Option<NativeRuntimeClosure>,
+}
+
+/// One declared runtime dependency of a court's execution: a child
+/// executable the side spawns, a runtime library it loads, or a data
+/// dependency it reads. The DECLARATION names the path (working-directory-
+/// relative or absolute) and the role; the observation snapshots the bytes
+/// and records the exact hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionContextArtifactDeclaration {
+    /// Working-directory-relative or absolute path of the artifact.
+    pub path: String,
+    /// The role: `child-executable`, `runtime-library`, or `data` (a
+    /// declared artifact whose role is not in the protocol set is refused).
+    pub role: String,
+}
+
+/// The court's DECLARED execution-context closure: the runtime dependencies
+/// the side's behavior depends on beyond its own bytes. The declaration is
+/// part of the court (the manifest), the snapshot is part of the observation
+/// (the capture) — a declared dependency is bound to the exact bytes at
+/// observation time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionContextDeclaration {
+    /// The declared artifacts, in declaration order (recorded sorted).
+    pub artifacts: Vec<ExecutionContextArtifactDeclaration>,
+}
+
+/// One snapshotted execution-context artifact: the declared path, its role,
+/// and the SHA-256 of its exact bytes at observation time (the bytes live in
+/// the content-addressed object store).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionContextArtifact {
+    pub path: String,
+    pub role: String,
+    pub sha256: String,
+}
+
+/// The observation-time snapshot of the court's declared execution-context
+/// closure: the content-addressed set of runtime dependencies the side's
+/// execution was declared to depend on. The identity is
+/// `FRF/EXECUTION-CONTEXT/v1` over the canonical document minus the cid
+/// (artifacts sorted by path, so the closure is a deterministic function of
+/// the declared set).
+///
+/// This is a DECLARED closure, never a measured file-access trace: it binds
+/// the child executables / runtime libraries / data dependencies the court
+/// author declares the side needs — for JVM evidence, `java` + its native
+/// startup closure + the classpath artifacts; for Python, the interpreter +
+/// the module tree; for a service, the binary + shared libs + config. A
+/// high-assurance claim therefore means "the declared execution context is
+/// bound", not "every file the side ever read was captured".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionContextClosure {
+    pub schema_version: String,
+    /// Content address: `FRF/EXECUTION-CONTEXT/v1` over the canonical
+    /// document minus the cid.
+    pub cid: String,
+    /// Sorted by path.
+    pub artifacts: Vec<ExecutionContextArtifact>,
 }
 
 /// One component of a native runtime closure: a loaded executable or dynamic
@@ -3592,6 +3688,11 @@ pub struct Receipt {
     pub endoduction: ReceiptEndoduction,
     pub claims: ReceiptClaims,
     pub replay: ReceiptReplay,
+    /// The snapshotted execution-context closure (when the court declared
+    /// one), copied from the capture — a receipt never reconstructs the
+    /// runtime context from whatever happens to be installed.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub execution_context: Option<ExecutionContextClosure>,
 }
 
 /// Deserialize the receipt schema version, refusing anything but the

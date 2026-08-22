@@ -47,6 +47,29 @@ pub fn runtime_closure_identity(closure: &Value) -> String {
     preimage("FRF/RUNTIME-CLOSURE/v1", &doc)
 }
 
+/// The identity of a DECLARED execution-context closure:
+/// `FRF/EXECUTION-CONTEXT/v1` over the canonical document minus the `cid`,
+/// with the artifacts sorted by path — the closure is a deterministic
+/// function of the declared SET (two observations that snapshot the same
+/// declared paths to the same bytes share one identity).
+pub fn execution_context_identity(closure: &Value) -> String {
+    let mut artifacts: Vec<&Value> = closure["artifacts"]
+        .as_array()
+        .map(|as_| as_.iter().collect())
+        .unwrap_or_default();
+    #[allow(clippy::needless_borrow)]
+    artifacts.sort_by(|a, b| s(&a["path"]).cmp(&s(&b["path"])));
+    let doc = json!({
+        "schema_version": s(&closure["schema_version"]),
+        "artifacts": artifacts.iter().map(|a| json!({
+            "path": s(&a["path"]),
+            "role": s(&a["role"]),
+            "sha256": s(&a["sha256"]),
+        })).collect::<Vec<_>>(),
+    });
+    preimage("FRF/EXECUTION-CONTEXT/v1", &doc)
+}
+
 /// The protocol identifier grammar: lowercase letter first, then lowercase
 /// letters, digits, `.`, `_`, `-`; 1..=64 characters. Mirrors the reference
 /// engine's ObservableId/ResidualKind validation.

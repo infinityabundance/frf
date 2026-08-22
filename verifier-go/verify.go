@@ -57,6 +57,21 @@ func safeJoin(root, rel string) string {
 	return p
 }
 
+// equalValues: canonical equality — two values are the same protocol value
+// iff their RFC 8785 encodings are the same bytes (the same relation the
+// receipt/capture equality checks use for every other copied block).
+func equalValues(a, b jcs.Value) bool {
+	ca, err := jcs.Canonical(a)
+	if err != nil {
+		return false
+	}
+	cb, err := jcs.Canonical(b)
+	if err != nil {
+		return false
+	}
+	return ca == cb
+}
+
 func sortedNames(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -141,6 +156,14 @@ func verifyBundle(bundle string) ClaimIR {
 		// The receipt's court semantic identity must equal the capture's.
 		fail("receipt %s: court semantic identity does not match the capture", receiptID)
 	}
+	if bodyEC, ok := body.Get("execution_context"); ok && bodyEC != nil {
+		capEC, ok2 := c.Get("execution_context")
+		if !ok2 || capEC == nil || !equalValues(bodyEC, capEC) {
+			fail("receipt %s: the declared execution-context closure does not match the capture (the runtime context is bound at observation time, never reconstructed)", receiptID)
+		}
+	} else if capEC, ok2 := c.Get("execution_context"); ok2 && capEC != nil {
+		fail("receipt %s: the capture carries an execution-context closure the receipt omits", receiptID)
+	}
 	var residuals []*jcs.Object
 	for _, rid := range arr(recVal(c, "residuals")) {
 		residuals = append(residuals, obj(loadEvidence(safeJoin(bundle, "residuals/"+rid.(string)+".json"))))
@@ -167,6 +190,14 @@ func verifyBundle(bundle string) ClaimIR {
 	}
 	if exec != str(c, "execution_identity") {
 		fail("capture %s: the recorded execution_identity does not rederive", run)
+	}
+	// v18: the DECLARED execution-context closure (when carried) is
+	// self-authenticating — its cid rederives from its own artifacts.
+	if ec, ok := c.Get("execution_context"); ok && ec != nil {
+		expected, err := executionContextIdentity(obj(ec))
+		if err != nil || expected != str(ec, "cid") {
+			fail("capture %s: the execution-context closure cid does not rederive", run)
+		}
 	}
 	// Objects are content-addressed.
 	objects := arr(recVal(c, "evidence_refs"))
