@@ -194,6 +194,39 @@ pub fn run_court(work: &Workdir) -> String {
     run_court_manifest(work, MANIFEST)
 }
 
+/// The residual ids of a run, keyed by axis. Residual ids are CONTENT
+/// ADDRESSES (FRF/RESIDUAL/v1 over the run + divergence), so tests resolve
+/// the id they need from the evidence instead of assuming a storage label.
+pub fn residual_ids(work: &Workdir, run: &str) -> Vec<(String, String)> {
+    let cap: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    cap["residuals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| {
+            let id = id.as_str().unwrap().to_string();
+            let rec: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(work.path(&format!("{ROOT}/residuals/{id}.json"))).unwrap(),
+            )
+            .unwrap();
+            (rec["axis"].as_str().unwrap().to_string(), id)
+        })
+        .collect()
+}
+
+/// The residual id of a run's divergence on `axis` (see [`residual_ids`]).
+pub fn residual_id(work: &Workdir, run: &str, axis: &str) -> String {
+    let ids = residual_ids(work, run);
+    let (_, id) = ids
+        .iter()
+        .find(|(a, _)| a == axis)
+        .unwrap_or_else(|| panic!("no {axis} residual in {run}: {ids:?}"));
+    id.clone()
+}
+
 /// Run the resolution court (patched candidate) and return the run id.
 pub fn run_resolution_court(work: &Workdir) -> String {
     run_court_manifest(work, RESOLUTION_MANIFEST)

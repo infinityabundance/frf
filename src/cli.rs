@@ -143,7 +143,8 @@ pub enum CourtCmd {
     /// candidate, authority, comparator, and environment fixed, records every
     /// attempt, and court-verifies the final reproducer
     Minimize {
-        /// Residual id (e.g. cli-exit-0001)
+        /// Residual id (a content address: FRF/RESIDUAL/v1 over the run +
+        /// divergence)
         residual: String,
     },
     /// Challenge the court: the negative controls. For every applicable
@@ -170,7 +171,8 @@ pub enum ResidualCmd {
     /// Set a residual's disposition (requires --reason; `fixed` also requires
     /// --resolution-run — a disposition is not evidence)
     Dispose {
-        /// Residual id (e.g. cli-exit-0001)
+        /// Residual id (a content address: FRF/RESIDUAL/v1 over the run +
+        /// divergence)
         id: String,
         #[arg(long, value_enum)]
         disposition: ClosureArg,

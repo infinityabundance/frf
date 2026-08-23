@@ -119,9 +119,9 @@
     },
     {
       "id": "residual",
-      "meaning": "Preserved disagreement (fingerprinted, lineage-identified)",
+      "meaning": "Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified — no shared sequence counter anywhere in the residual namespace",
       "schema": "frf-residual-v1",
-      "identity": "FRF/RESIDUAL-FINGERPRINT/v1",
+      "identity": "FRF/RESIDUAL/v1",
       "status": "active"
     },
     {
@@ -375,6 +375,11 @@
     {
       "domain": "FRF/MUTATION-SPEC/v1",
       "meaning": "Mutation semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL/v1",
+      "meaning": "Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) — collision-free under concurrent courts and idempotent under re-observation",
       "status": "active"
     },
     {

@@ -715,6 +715,9 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
 ///
 /// Verification proves, in order:
 ///
+/// 0. the id is a CONTENT ADDRESS — it rederives from the record's own
+///    fields (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw
+///    projection hashes);
 /// 1. the residual document parses as strict canonical evidence;
 /// 2. its parent capture verifies (run identity rederives, side files
 ///    rehash, every referenced object is intact);
@@ -753,11 +756,19 @@ impl ResidualVerified {
 /// run does not verify is refused before any field of the residual itself is
 /// trusted.
 pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerified> {
-    // 1. The document must parse as strict canonical evidence (the store
-    //    loader refuses non-canonical bytes and duplicate property names).
+    // 0. The id is a CONTENT ADDRESS (FRF/RESIDUAL/v1): the storage label is
+    //    a claim until recomputed. A record whose id does not rederive from
+    //    its own fields (run, kind, axis, surface, raw projection hashes) is
+    //    refused before any field is trusted.
     let record = store.load_residual(id)?.into_inner();
+    let rederived = crate::semantics::residual_record_identity(&record)?;
+    if rederived != id {
+        return Err(FrfError::new(format!(
+            "residual {id}: the id does not rederive from the record's own fields (got {rederived}) — the name is a claim, and this record is not what it claims"
+        )));
+    }
 
-    // 2. The parent capture verifies: run identity rederives, side files
+    // 1. The parent capture verifies: run identity rederives, side files
     //    rehash, snapshots + extension instruments are intact.
     let capture = load_capture_verified(store, &record.run)?;
 
@@ -3759,7 +3770,10 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
     }
 
     // captures/ — the verified loader (run identity, side files, snapshots,
-    // extension instruments, residuals belong to the run).
+    // extension instruments, residuals belong to the run). Dot-prefixed
+    // entries are skipped: the court stages runs under captures/.staging-*/
+    // before publishing them with an atomic rename, and a crash-leftover
+    // staging dir is not a run.
     let captures_dir = store.root.join("captures");
     if captures_dir.is_dir() {
         let mut n = 0usize;
@@ -3771,6 +3785,9 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
                 continue;
             }
             let run = entry.file_name().to_string_lossy().to_string();
+            if run.starts_with('.') {
+                continue; // a staging tree, not a run
+            }
             match load_capture_verified(store, &run) {
                 Ok(cv) => {
                     for d in cv.detached {

@@ -17,8 +17,12 @@ use common::*;
 
 fn golden_to_claimable(work: &Workdir) -> String {
     admit_reference(work);
-    let _run = run_court(work);
+    let run = run_court(work);
     let resolution_run = run_resolution_court(work);
+    // Residual ids are content addresses: resolve them from the evidence.
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let res_text_id = residual_id(work, &resolution_run, "stderr");
     let out = frf(
         work,
         &[
@@ -26,7 +30,7 @@ fn golden_to_claimable(work: &Workdir) -> String {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -37,8 +41,8 @@ fn golden_to_claimable(work: &Workdir) -> String {
     );
     assert_success(&out, "dispose exit fixed");
     for (id, reason) in [
-        ("cli-text-0001", "documented divergence"),
-        ("cli-text-0002", "documented divergence"),
+        (text_id, "documented divergence"),
+        (res_text_id, "documented divergence"),
     ] {
         let out = frf(
             work,
@@ -47,7 +51,7 @@ fn golden_to_claimable(work: &Workdir) -> String {
                 ROOT,
                 "residual",
                 "dispose",
-                id,
+                &id,
                 "--disposition",
                 "intentional",
                 "--reason",
@@ -251,7 +255,12 @@ fn deleting_referenced_evidence_is_refused() {
     for entry in fs::read_dir(scratch.join("residuals")).unwrap() {
         let p = entry.unwrap().path();
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
-        if name.starts_with("cli-") && name.ends_with(".json") {
+        // Residual records are content addresses (64-hex .json); the derived
+        // *.token.json files are excluded.
+        if name.ends_with(".json")
+            && !name.ends_with(".token.json")
+            && name.trim_end_matches(".json").len() == 64
+        {
             deleted = p.file_name().unwrap().to_string_lossy().into_owned();
             fs::remove_file(&p).unwrap();
             break;

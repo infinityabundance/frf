@@ -1473,8 +1473,9 @@ impl<'de> Deserialize<'de> for ObservableId {
 /// stderr/stdout axes); an external comparator's declaration names its own
 /// classifier, and every residual on that axis carries the classifier's
 /// kind. The kind is part of the residual fingerprint, the lineage, and the
-/// residual id (`cli-{kind}-{seq}`), so a new kind is a new residual class,
-/// never a silent reinterpretation of an old one.
+/// residual id (which is a content address — FRF/RESIDUAL/v1 over the run +
+/// divergence — never a storage sequence), so a new kind is a new residual
+/// class, never a silent reinterpretation of an old one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResidualKind(String);
 
@@ -1498,12 +1499,6 @@ impl ResidualKind {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Residual ids are `{domain}-{kind}-{seq}`; v0 courts are CLI courts, so
-    /// the domain prefix is `cli` (matching Section 12's `cli-exit-*`).
-    pub fn domain_prefix(&self) -> &'static str {
-        "cli"
     }
 
     /// The REGISTERED protocol record of this kind, if the kind is part of
@@ -2998,6 +2993,13 @@ pub struct ProducedSide {
 /// observation never changes epistemic meaning. Dispositions are append-only
 /// [`DispositionEvent`]s under `residuals/<id>.events/`; the current
 /// disposition is the projection of the last event (`open` = no events).
+///
+/// The `id` is a CONTENT ADDRESS (`FRF/RESIDUAL/v1` over the run + the
+/// divergence — kind, axis, surface, and the two raw projection hashes), so
+/// the record is collision-free under concurrent courts and idempotent under
+/// re-observation: the same divergence in the same run is the same residual,
+/// never a new storage slot. There is no shared sequence counter anywhere in
+/// the residual namespace.
 ///
 /// `deny_unknown_fields`: an observation file that carries a stray
 /// `disposition:` (or any other) key fails to load instead of silently

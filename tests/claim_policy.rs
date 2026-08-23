@@ -100,20 +100,24 @@ fn resolution_receipt_env(work: &Workdir, envs: &[(&str, &str)]) -> (String, Str
 
     // The resolution run: the patched candidate under the same question.
     let resolution_run = run_resolution_court_env(work, envs);
+    // Residual ids are content addresses: resolve them from the evidence.
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let res_text_id = residual_id(work, &resolution_run, "stderr");
     dispose(
-        "cli-exit-0001",
+        &exit_id,
         "fixed",
         "candidate patched to preserve reference exit class",
         &["--resolution-run", &resolution_run],
     );
     dispose(
-        "cli-text-0001",
+        &text_id,
         "intentional",
         "clearer diagnostic wording; documented divergence",
         &[],
     );
     dispose(
-        "cli-text-0002",
+        &res_text_id,
         "intentional",
         "clearer diagnostic wording; documented divergence (re-observed)",
         &[],

@@ -500,11 +500,17 @@ fn fixture_not_referenced_warns_but_runs() {
     );
     let out = frf(&work, &["--root", ROOT, "court", "run", &m]);
     assert_success(&out, "court run without fixture reference");
+    let run = stdout(&out);
     assert!(stderr(&out).contains("does not exercise it"));
     // Without a file argument both sides hit their no-input path: same exit
-    // class (2), different wording → exactly one text residual.
-    assert!(work.path("frf/residuals/cli-text-0001.json").is_file());
-    assert!(!work.path("frf/residuals/cli-exit-0001.json").exists());
+    // class (2), different wording → exactly one text residual, no exit
+    // residual (the ids are content addresses).
+    let ids = residual_ids(&work, &run);
+    assert_eq!(ids.len(), 1, "exactly one text residual: {ids:?}");
+    assert_eq!(ids[0].0, "stderr", "the single residual is the text one");
+    assert!(work
+        .path(&format!("frf/residuals/{}.json", ids[0].1))
+        .is_file());
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +523,8 @@ fn closure_kinds_round_trip_and_claim_semantics() {
     work.copy_canonical_tree();
     admit_reference(&work);
     let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
+    let text_id = residual_id(&work, &run, "stderr");
 
     // Close the text residual first so the claim semantics below are decided
     // by the exit residual alone.
@@ -527,7 +535,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             ROOT,
             "residual",
             "dispose",
-            "cli-text-0001",
+            &text_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -555,7 +563,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
                 ROOT,
                 "residual",
                 "dispose",
-                "cli-exit-0001",
+                &exit_id,
                 "--disposition",
                 kind,
                 "--reason",
@@ -566,12 +574,10 @@ fn closure_kinds_round_trip_and_claim_semantics() {
         // The observation record stays immutable; the event carries the
         // disposition.
         assert!(
-            raw_residual(&work, "cli-exit-0001")
-                .get("disposition")
-                .is_none(),
+            raw_residual(&work, &exit_id).get("disposition").is_none(),
             "observation must never carry a disposition"
         );
-        let event = last_event(&work, "cli-exit-0001");
+        let event = last_event(&work, &exit_id);
         assert_eq!(event["disposition"], kind);
         assert_eq!(event["reason"], format!("regression: {kind}"));
         assert!(
@@ -580,7 +586,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
         );
         // The token follows the projection.
         let tok: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
+            &fs::read_to_string(work.path(&format!("frf/residuals/{exit_id}.token.json"))).unwrap(),
         )
         .unwrap();
         assert_eq!(tok["token"], format!("exit/exit-class/class-change/{kind}"));
@@ -606,7 +612,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--reason",
@@ -621,6 +627,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
     // parity receipt: it observed divergence. The positive claim belongs to
     // the resolution run's receipt.
     let resolution_run = run_resolution_court(&work);
+    let res_text_id = residual_id(&work, &resolution_run, "stderr");
     let out = frf(
         &work,
         &[
@@ -628,7 +635,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -638,7 +645,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
         ],
     );
     assert_success(&out, "dispose exit fixed with closure evidence");
-    let event = last_event(&work, "cli-exit-0001");
+    let event = last_event(&work, &exit_id);
     assert_eq!(event["disposition"], "fixed");
     assert_eq!(event["resolution_run_id"], resolution_run);
     assert!(event["closure_predicate"]
@@ -655,7 +662,7 @@ fn closure_kinds_round_trip_and_claim_semantics() {
             ROOT,
             "residual",
             "dispose",
-            "cli-text-0002",
+            &res_text_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -691,6 +698,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
     work.copy_canonical_tree();
     admit_reference(&work);
     let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
 
     // The resolution run must exist.
     let out = frf(
@@ -700,7 +708,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -720,7 +728,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -751,7 +759,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -788,7 +796,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -851,7 +859,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -868,7 +876,7 @@ fn fixed_requires_resolution_run_that_closes_the_residual() {
     );
 
     // And the residual is still open after all refusals.
-    assert_eq!(projected_disposition(&work, "cli-exit-0001"), "open");
+    assert_eq!(projected_disposition(&work, &exit_id), "open");
 }
 
 #[test]
@@ -876,7 +884,8 @@ fn disposition_reason_gate() {
     let work = Workdir::new("reason-gate");
     work.copy_canonical_tree();
     admit_reference(&work);
-    run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
 
     // Missing --reason: clap refuses at parse time.
     let out = frf(
@@ -886,7 +895,7 @@ fn disposition_reason_gate() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "intentional",
         ],
@@ -903,7 +912,7 @@ fn disposition_reason_gate() {
                 ROOT,
                 "residual",
                 "dispose",
-                "cli-exit-0001",
+                &exit_id,
                 "--disposition",
                 "intentional",
                 "--reason",
@@ -922,7 +931,7 @@ fn disposition_reason_gate() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -933,7 +942,7 @@ fn disposition_reason_gate() {
     assert!(stderr(&out).contains("single line"));
 
     // The residual is still open after all refusals (no events appended).
-    assert_eq!(projected_disposition(&work, "cli-exit-0001"), "open");
+    assert_eq!(projected_disposition(&work, &exit_id), "open");
 }
 
 #[test]
@@ -941,10 +950,11 @@ fn dispositions_are_append_only_events() {
     let work = Workdir::new("append-only");
     work.copy_canonical_tree();
     admit_reference(&work);
-    run_court(&work);
+    let run = run_court(&work);
+    let text_id = residual_id(&work, &run, "stderr");
 
     // The observation record is byte-identical before and after disposal.
-    let observation = work.path("frf/residuals/cli-text-0001.json");
+    let observation = work.path(&format!("frf/residuals/{text_id}.json"));
     let before = fs::read(&observation).unwrap();
 
     let dispose = |kind: &str, reason: &str| {
@@ -955,7 +965,7 @@ fn dispositions_are_append_only_events() {
                 ROOT,
                 "residual",
                 "dispose",
-                "cli-text-0001",
+                &text_id,
                 "--disposition",
                 kind,
                 "--reason",
@@ -977,7 +987,7 @@ fn dispositions_are_append_only_events() {
 
     // Three immutable events, in order, each carrying its own reason; the
     // projection is the last one.
-    let events_dir = work.path("frf/residuals/cli-text-0001.events");
+    let events_dir = work.path(&format!("frf/residuals/{text_id}.events"));
     let names: Vec<String> = fs::read_dir(&events_dir)
         .unwrap()
         .flatten()
@@ -991,7 +1001,7 @@ fn dispositions_are_append_only_events() {
         serde_json::from_str(&fs::read_to_string(events_dir.join("0001.json")).unwrap()).unwrap();
     assert_eq!(e1["disposition"], "intentional");
     assert_eq!(e1["reason"], "clearer wording");
-    assert_eq!(projected_disposition(&work, "cli-text-0001"), "unknown");
+    assert_eq!(projected_disposition(&work, &text_id), "unknown");
 
     // The trajectory survives: every event is still there after the last.
     let e2: serde_json::Value =
@@ -1111,14 +1121,17 @@ fn stdout_axis_is_a_declared_comparator() {
     assert_success(&out, "court run with stdout axis");
     let run = stdout(&out);
 
-    // exit, stderr, stdout -> cli-exit-0001, cli-text-0001, cli-text-0002.
-    let exit_res = raw_residual(&work, "cli-exit-0001");
+    // exit, stderr, stdout -> three content-addressed residuals.
+    let exit_id = residual_id(&work, &run, "exit");
+    let stderr_id = residual_id(&work, &run, "stderr");
+    let stdout_id = residual_id(&work, &run, "stdout");
+    let exit_res = raw_residual(&work, &exit_id);
     assert_eq!(exit_res["raw_reference"], "2");
     assert_eq!(exit_res["raw_candidate"], "1");
-    let err_res = raw_residual(&work, "cli-text-0001");
+    let err_res = raw_residual(&work, &stderr_id);
     assert_eq!(err_res["surface"], "first-diagnostic-line");
     assert_eq!(err_res["axis"], "stderr");
-    let out_res = raw_residual(&work, "cli-text-0002");
+    let out_res = raw_residual(&work, &stdout_id);
     assert_eq!(out_res["surface"], "first-stdout-line");
     assert_eq!(out_res["axis"], "stdout");
     assert_eq!(
@@ -1130,7 +1143,7 @@ fn stdout_axis_is_a_declared_comparator() {
 
     // The token routes to the stdout minimizer.
     let tok: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0002.token.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("frf/residuals/{stdout_id}.token.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -1159,7 +1172,7 @@ fn stdout_axis_is_a_declared_comparator() {
     let tokens = rec["endoduction"]["tokens"].as_array().unwrap();
     let out_token = tokens
         .iter()
-        .find(|t| t["residual_id"] == "cli-text-0002")
+        .find(|t| t["residual_id"] == stdout_id)
         .expect("stdout token in receipt");
     assert_eq!(out_token["next_court"], "cli-stdout-minimize");
 }
@@ -1214,7 +1227,7 @@ fn open_residual_blocks_only_its_own_axis() {
     admit_reference(&work);
     let run = run_court(&work);
 
-    // Exactly one residual: text, open.
+    // Exactly one residual: text, open (the ids are content addresses).
     let residuals: Vec<String> = fs::read_dir(work.path("frf/residuals"))
         .unwrap()
         .flatten()
@@ -1222,10 +1235,11 @@ fn open_residual_blocks_only_its_own_axis() {
         .filter(|n| n.ends_with(".json") && !n.ends_with(".token.json"))
         .collect();
     assert_eq!(
-        residuals,
-        vec!["cli-text-0001.json"],
-        "only the stderr axis diverges"
+        residuals.len(),
+        1,
+        "only the stderr axis diverges: {residuals:?}"
     );
+    let text_id = residuals[0].trim_end_matches(".json").to_string();
 
     let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
     assert_success(&out, "receipt emit");
@@ -1237,15 +1251,15 @@ fn open_residual_blocks_only_its_own_axis() {
     let text = stdout(&out);
     assert!(text.contains("malformed-input exit class"), "claim: {text}");
     assert!(!text.contains("first diagnostic line"));
-    assert!(stderr(&out).contains(
-        "cannot claim compatibility for fixture family malformed-input because residual cli-text-0001 (text) is open"
-    ));
+    assert!(stderr(&out).contains(&format!(
+        "cannot claim compatibility for fixture family malformed-input because residual {text_id} (text) is open"
+    )));
 
     // The claim file carries the IR: scope = [exit], exclusions = [text].
     let claim_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     assert_eq!(claim_json["observable_scope"][0], "exit");
-    assert_eq!(claim_json["excluded_evidence"][0], "cli-text-0001");
+    assert_eq!(claim_json["excluded_evidence"][0], text_id);
     // The full scope algebra: the claim's scope carries the executed
     // surface, and the open text residual does NOT block it (different
     // axis — intersection is empty), while it IS recorded as evidence the
@@ -1286,10 +1300,11 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
         .collect();
     residuals.sort();
     assert_eq!(
-        residuals,
-        vec!["cli-exit-0001.json", "cli-text-0001.json"],
-        "run 1 diverges on exit AND stderr"
+        residuals.len(),
+        2,
+        "run 1 diverges on exit AND stderr: {residuals:?}"
     );
+    let exit_id = residual_id(&work, &run1, "exit");
 
     // Run 2: same candidate, same fixture, same environment — now passes.
     let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
@@ -1310,8 +1325,7 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
         "an open residual on the claimed surface must block the claim"
     );
     assert!(
-        stderr(&out).contains("cli-exit-0001")
-            && stderr(&out).contains("intersect this claim's scope"),
+        stderr(&out).contains(&exit_id) && stderr(&out).contains("intersect this claim's scope"),
         "the refusal must name the blocking residual: {}",
         stderr(&out)
     );
@@ -1334,7 +1348,7 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -1393,6 +1407,7 @@ fn harness_invalidates_the_entire_run_evidence() {
     work.write_candidate("#!/bin/sh\n# same exit class, no stderr\nexit 2\n");
     admit_reference(&work);
     let run = run_court(&work);
+    let text_id = residual_id(&work, &run, "stderr");
     let out = frf(
         &work,
         &[
@@ -1400,7 +1415,7 @@ fn harness_invalidates_the_entire_run_evidence() {
             ROOT,
             "residual",
             "dispose",
-            "cli-text-0001",
+            &text_id,
             "--disposition",
             "harness",
             "--reason",
@@ -1952,12 +1967,10 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
     let work = Workdir::new("minimize");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
 
-    let out = frf(
-        &work,
-        &["--root", ROOT, "court", "minimize", "cli-exit-0001"],
-    );
+    let out = frf(&work, &["--root", ROOT, "court", "minimize", &exit_id]);
     assert_success(&out, "court minimize");
     let reduction_id = stdout(&out);
     assert_eq!(reduction_id.len(), 64, "content-addressed reduction id");
@@ -1967,7 +1980,7 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
     )
     .unwrap();
     assert_eq!(rec["schema_version"], "frf-reduction-v4");
-    assert_eq!(rec["residual_id"], "cli-exit-0001");
+    assert_eq!(rec["residual_id"], exit_id);
     assert_eq!(rec["axis"], "exit");
     assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");
     assert_eq!(rec["derivation"]["minimality"]["kind"], "one-minimal");
@@ -2039,10 +2052,9 @@ fn minimize_refuses_a_non_text_fixture() {
     fs::write(&fixture_path, b"\xff\xfe\x00binary\n").unwrap();
     let out = frf(&work, &["--root", ROOT, "court", "run", MANIFEST]);
     assert_success(&out, "court run (binary fixture)");
-    let out = frf(
-        &work,
-        &["--root", ROOT, "court", "minimize", "cli-exit-0001"],
-    );
+    let run = stdout(&out);
+    let exit_id = residual_id(&work, &run, "exit");
+    let out = frf(&work, &["--root", ROOT, "court", "minimize", &exit_id]);
     assert!(!out.status.success(), "binary fixtures are refused");
     assert!(
         stderr(&out).contains("not UTF-8 text"),
@@ -2065,23 +2077,26 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
     let work = Workdir::new("claim-universe");
     work.copy_canonical_tree();
     admit_reference(&work);
-    run_court(&work);
+    let run = run_court(&work);
     let resolution_run = run_resolution_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
+    let text_id = residual_id(&work, &run, "stderr");
+    let res_text_id = residual_id(&work, &resolution_run, "stderr");
     for (id, disposition, reason, resolution) in [
         (
-            "cli-exit-0001",
+            exit_id.clone(),
             "fixed",
             "candidate patched to preserve reference exit class",
             Some(resolution_run.as_str()),
         ),
         (
-            "cli-text-0001",
+            text_id.clone(),
             "intentional",
             "clearer diagnostic wording",
             None,
         ),
         (
-            "cli-text-0002",
+            res_text_id.clone(),
             "intentional",
             "re-observed wording divergence",
             None,
@@ -2124,17 +2139,17 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
         frf::semantics::knowledge_snapshot_identity(&snapshot1_typed).unwrap(),
         cid1
     );
-    // The universe records cli-text-0001 as INTENTIONAL at compile time.
+    // The universe records the text residual as INTENTIONAL at compile time.
     let head_1 = snapshot1["residual_heads"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|h| h["id"] == "cli-text-0001")
+        .find(|h| h["id"] == text_id)
         .unwrap();
     assert_eq!(head_1["disposition"], "intentional");
 
-    // Mutate the universe: RE-DISPOSE an unrelated residual (cli-text-0001
-    // intentional -> environmental: a new event, a new head, a new universe).
+    // Mutate the universe: RE-DISPOSE the text residual (intentional ->
+    // environmental: a new event, a new head, a new universe).
     let out = frf(
         &work,
         &[
@@ -2142,14 +2157,14 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
             ROOT,
             "residual",
             "dispose",
-            "cli-text-0001",
+            &text_id,
             "--disposition",
             "environmental",
             "--reason",
             "reclassified later",
         ],
     );
-    assert_success(&out, "re-dispose cli-text-0001 (universe mutation)");
+    assert_success(&out, "re-dispose the text residual (universe mutation)");
     let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt]);
     assert_success(&out, "claim recompile (universe U2)");
     // TWO claims now coexist for the same receipt — U1's and U2's.
@@ -2170,7 +2185,7 @@ fn claims_bind_the_evidence_universe_they_were_admissible_under() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|h| h["id"] == "cli-text-0001")
+        .find(|h| h["id"] == text_id)
         .unwrap();
     assert_eq!(head_1_new["disposition"], "environmental");
 

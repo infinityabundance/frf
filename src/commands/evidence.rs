@@ -473,6 +473,9 @@ fn withhold_streams(source: &Store, output: &Path) -> Result<crate::model::Publi
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().to_string())
+        // Dot-prefixed entries are staging trees (the court stages a run
+        // under captures/.staging-*/ before its atomic publish), not runs.
+        .filter(|n| !n.starts_with('.'))
         .collect();
     runs.sort();
     for run in runs {

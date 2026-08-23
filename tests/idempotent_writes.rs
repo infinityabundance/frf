@@ -36,7 +36,8 @@ fn witness_attest_is_idempotent_and_refuses_corruption() {
     let work = Workdir::new("idem-witness");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
 
     let program = work.path("golden/witnesses/attest.py");
     fs::create_dir_all(program.parent().unwrap()).unwrap();
@@ -69,7 +70,7 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         "witness",
         "attest",
         "residual",
-        "cli-exit-0001",
+        &exit_id,
         "--id",
         "manual-review",
         "--relation",
@@ -161,10 +162,11 @@ fn reduction_is_idempotent_and_refuses_corruption() {
     let work = Workdir::new("idem-reduction");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
 
     // The golden exit residual routes to the built-in ddmin reducer.
-    let args: Vec<&str> = vec!["--root", ROOT, "court", "minimize", "cli-exit-0001"];
+    let args: Vec<&str> = vec!["--root", ROOT, "court", "minimize", &exit_id];
     let out = frf(&work, &args);
     assert_success(&out, "minimize (first)");
 

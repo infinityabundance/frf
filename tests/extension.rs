@@ -329,7 +329,9 @@ fn a_capture_adapter_serves_a_domain_axis() {
     );
     assert_eq!(cap["residuals"].as_array().unwrap().len(), 1);
     let rid = cap["residuals"][0].as_str().unwrap().to_string();
-    assert!(rid.starts_with("cli-wire-"), "residual id: {rid}");
+    // The residual id is a content address (64 hex), not a storage label.
+    assert_eq!(rid.len(), 64, "residual id: {rid}");
+    assert!(rid.chars().all(|c| c.is_ascii_hexdigit()));
 
     // The adapter + comparator evidence are preserved under the run and the
     // verified loader rehashes the chain (adapter request carried the raw
@@ -648,6 +650,7 @@ fn a_witness_attests_a_content_addressed_subject() {
     write_program(&work, "golden/witnesses/attest.py", WITNESS_PY);
 
     let statement = "the candidate diverges on the malformed fixture (witnessed)";
+    let exit_id = residual_id(&work, &run, "exit");
     let out = frf(
         &work,
         &[
@@ -656,7 +659,7 @@ fn a_witness_attests_a_content_addressed_subject() {
             "witness",
             "attest",
             "residual",
-            "cli-exit-0001",
+            &exit_id,
             "--id",
             "manual-review",
             "--relation",
@@ -677,10 +680,10 @@ fn a_witness_attests_a_content_addressed_subject() {
     let store = Store::new(work.path(ROOT));
     let stmt = store.load_witness_statement(&id).unwrap();
     assert_eq!(stmt.subject.kind, "residual");
-    assert_eq!(stmt.subject.id, "cli-exit-0001");
+    assert_eq!(stmt.subject.id, exit_id);
     // The subject content address is the residual's fingerprint — rederived
     // by the command, never read from the caller.
-    let record = frf::verify::load_residual_verified(&store, "cli-exit-0001")
+    let record = frf::verify::load_residual_verified(&store, &exit_id)
         .unwrap()
         .record()
         .clone();
@@ -750,7 +753,8 @@ fn a_witness_that_declines_is_refused() {
     let work = Workdir::new("ext-witness-decline");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
     write_program(
         &work,
         "golden/witnesses/decline.py",
@@ -775,7 +779,7 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
             "witness",
             "attest",
             "residual",
-            "cli-exit-0001",
+            &exit_id,
             "--id",
             "manual-review",
             "--relation",
@@ -811,7 +815,8 @@ fn the_independence_relation_is_declared_evidence_not_derived() {
     let work = Workdir::new("ext-independence");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
     write_program(&work, "golden/witnesses/attest.py", WITNESS_PY);
     let out = frf(
         &work,
@@ -821,7 +826,7 @@ fn the_independence_relation_is_declared_evidence_not_derived() {
             "witness",
             "attest",
             "residual",
-            "cli-exit-0001",
+            &exit_id,
             "--id",
             "manual-review",
             "--relation",
@@ -962,7 +967,8 @@ fn a_declared_authority_is_recorded_verbatim_and_kind_is_closed() {
     let work = Workdir::new("ext-witness-authority");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let _run = run_court(&work);
+    let run = run_court(&work);
+    let exit_id = residual_id(&work, &run, "exit");
     write_program(
         &work,
         "golden/witnesses/authority.py",
@@ -992,7 +998,7 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
             "witness",
             "attest",
             "residual",
-            "cli-exit-0001",
+            &exit_id,
             "--id",
             "board-review",
             "--relation",
@@ -1063,7 +1069,7 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
             "witness",
             "attest",
             "residual",
-            "cli-exit-0001",
+            &exit_id,
             "--id",
             "bad-board",
             "--relation",
@@ -1115,7 +1121,8 @@ fn receipt_emit_and_dispose_refuse_tampered_evidence() {
     // Tamper with a residual record: `dispose` must refuse (identity +
     // derivation from the parent run are established before a disposition
     // may be appended).
-    let residual_path = work.path(&format!("{ROOT}/residuals/cli-exit-0001.json"));
+    let exit_id = residual_id(&work, &run, "exit");
+    let residual_path = work.path(&format!("{ROOT}/residuals/{exit_id}.json"));
     let mut residual: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&residual_path).unwrap()).unwrap();
     residual["raw_reference"] = serde_json::Value::String("9".into());
@@ -1128,7 +1135,7 @@ fn receipt_emit_and_dispose_refuse_tampered_evidence() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "intentional",
             "--reason",

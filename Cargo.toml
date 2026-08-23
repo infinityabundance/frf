@@ -63,3 +63,8 @@ tar = "0.4"
 [profile.release]
 lto = true
 strip = true
+# Every offset/range arithmetic on attacker-chosen evidence bytes is
+# checked_mul/checked_add in the parsing paths, and the panic is the LAST
+# line of defense: a wrapped read would be a silent misread, so the release
+# build refuses to wrap anywhere.
+overflow-checks = true

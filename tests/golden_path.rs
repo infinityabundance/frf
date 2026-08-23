@@ -100,9 +100,12 @@ fn golden_path_end_to_end() {
     assert_eq!(candidate_hash.len(), 64);
 
     // Two residuals, both open, with endoduction tokens; the observation
-    // records carry NO disposition (dispositions are events).
+    // records carry NO disposition (dispositions are events). The residual
+    // ids are content addresses — resolve them from the capture's evidence.
+    let exit_id = residual_id(&work, &run, "exit");
+    let text_id = residual_id(&work, &run, "stderr");
     let exit_residual: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{exit_id}.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_residual["kind"], "exit");
@@ -116,9 +119,15 @@ fn golden_path_end_to_end() {
         exit_residual["candidate_sha256"].as_str().unwrap(),
         candidate_hash
     );
+    // The content address rederives from the record's own fields.
+    assert_eq!(
+        exit_residual["id"].as_str().unwrap(),
+        exit_id,
+        "the residual id is the FRF/RESIDUAL/v1 content address"
+    );
 
     let text_residual: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{text_id}.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(text_residual["kind"], "text");
@@ -136,14 +145,14 @@ fn golden_path_end_to_end() {
     assert_eq!(cand_line, "error: unknown directive servre at line 4");
 
     let exit_token: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{exit_id}.token.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_token["token"], "exit/exit-class/class-change/open");
     assert_eq!(exit_token["next_court"], "cli-exit-minimize");
 
     let text_token: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.token.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{text_id}.token.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -166,10 +175,10 @@ fn golden_path_end_to_end() {
     );
     let err = stderr(&out);
     assert!(
-        err.contains("cannot claim compatibility for fixture family malformed-input because residual cli-exit-0001 (exit) is open"),
+        err.contains(&format!("because residual {exit_id} (exit) is open")),
         "refusal line: {err}"
     );
-    assert!(err.contains("residual cli-text-0001 (text) is open"));
+    assert!(err.contains(&format!("residual {text_id} (text) is open")));
     assert!(err.contains("does not establish byte-identical stderr"));
 
     // -- 4. dispositions ----------------------------------------------------------
@@ -182,7 +191,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
         ],
@@ -199,7 +208,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--reason",
@@ -222,7 +231,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -242,7 +251,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -262,7 +271,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "open",
             "--reason",
@@ -295,6 +304,7 @@ fn golden_path_end_to_end() {
     // Patch the candidate, re-run the court under the same question/envelope,
     // and only then dispose `fixed` with the run that closes the residual.
     let resolution_run = run_resolution_court(&work);
+    let res_text_id = residual_id(&work, &resolution_run, "stderr");
     let out = frf(
         &work,
         &[
@@ -302,7 +312,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -320,7 +330,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-text-0001",
+            &text_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -335,7 +345,7 @@ fn golden_path_end_to_end() {
             root,
             "residual",
             "dispose",
-            "cli-text-0002",
+            &res_text_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -347,7 +357,7 @@ fn golden_path_end_to_end() {
     // The observation record is untouched; the disposition is an appended
     // event carrying the resolution edge and the verified predicate.
     let exit_residual: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{exit_id}.json"))).unwrap(),
     )
     .unwrap();
     assert!(
@@ -355,7 +365,8 @@ fn golden_path_end_to_end() {
         "observation must remain immutable"
     );
     let event: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.events/0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{exit_id}.events/0001.json")))
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(event["disposition"], "fixed");
@@ -367,7 +378,7 @@ fn golden_path_end_to_end() {
         .contains("fix-court"));
     // The token file follows the projected disposition.
     let exit_token: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-exit-0001.token.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("{root}/residuals/{exit_id}.token.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(exit_token["token"], "exit/exit-class/class-change/fixed");
@@ -391,7 +402,7 @@ fn golden_path_end_to_end() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|r| r["id"] == "cli-exit-0001")
+        .find(|r| r["id"] == exit_id)
         .expect("exit residual in receipt");
     assert_eq!(
         exit_entry["resolution_run_id"].as_str().unwrap(),

@@ -123,6 +123,110 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The staged run-directory guard: the run is built under
+/// `captures/.staging-<nonce>/` and published with ONE atomic rename — a
+/// half-written run directory can never appear at its final path. The guard
+/// removes the staging tree on any error path; on success the caller renames
+/// the staged run into place and disarms it.
+struct StagedRun {
+    root: PathBuf,
+    committed: bool,
+}
+
+impl StagedRun {
+    /// Stage the run directory for `run` next to its final location (same
+    /// filesystem, so the publish rename is atomic).
+    fn new(store: &Store, run: &str) -> Result<StagedRun> {
+        let nonce = format!(
+            "{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let root = store
+            .root
+            .join("captures")
+            .join(format!(".staging-{nonce}"));
+        fs::create_dir_all(&root).map_err(|e| {
+            FrfError::new(format!(
+                "cannot create the staging tree {}: {e}",
+                root.display()
+            ))
+        })?;
+        fs::create_dir_all(root.join("captures").join(run))
+            .map_err(|e| FrfError::new(format!("cannot create the staged run dir: {e}")))?;
+        fs::create_dir_all(root.join("residuals"))
+            .map_err(|e| FrfError::new(format!("cannot create the staged residuals dir: {e}")))?;
+        Ok(StagedRun {
+            root,
+            committed: false,
+        })
+    }
+
+    /// The staged run directory (`<staging>/captures/<run>`).
+    fn run_dir(&self, run: &str) -> PathBuf {
+        self.root.join("captures").join(run)
+    }
+
+    /// The staged residual record path (`<staging>/residuals/<id>.json`).
+    fn residual_path(&self, id: &str) -> PathBuf {
+        self.root.join("residuals").join(format!("{id}.json"))
+    }
+
+    /// The staged token path (`<staging>/residuals/<id>.token.json`).
+    fn token_path(&self, id: &str) -> PathBuf {
+        self.root.join("residuals").join(format!("{id}.token.json"))
+    }
+
+    /// Publish: commit the content-addressed residual/token leaves
+    /// idempotently, then rename the run directory into its final path with
+    /// ONE atomic rename, and remove the (now empty) staging tree. The run
+    /// directory is the anchor: a committed run always has every referenced
+    /// residual present (they are committed first), and a crash before the
+    /// rename leaves only content-addressed orphan leaves that an identical
+    /// re-observation completes (the same divergence derives the same ids).
+    fn publish(&mut self, store: &Store, run: &str, residuals: &[ResidualRecord]) -> Result<()> {
+        // 1. The residual records + their open tokens (content-addressed,
+        //    idempotent commit: absent -> write, identical -> no-op, different
+        //    -> refuse).
+        for r in residuals {
+            let json = store.to_evidence(r)?;
+            store.commit_content_addressed(&store.residual_path(&r.id)?, &json)?;
+            store.commit_content_addressed(
+                &store.token_path(&r.id)?,
+                &store.to_evidence(&crate::kappa::kappa(r, &Disposition::Open))?,
+            )?;
+        }
+        // 2. The run directory: ONE atomic rename. The capture.json inside it
+        //    is the anchor every reference points at.
+        let staged = self.run_dir(run);
+        let final_dir = store.run_dir(run)?;
+        fs::rename(&staged, &final_dir).map_err(|e| {
+            FrfError::new(format!(
+                "cannot publish the run directory {} -> {}: {e}",
+                staged.display(),
+                final_dir.display()
+            ))
+        })?;
+        // 3. The staging tree is empty now (its run dir was renamed away and
+        //    its leaves were committed to their real paths); remove it so no
+        //    dot-directory lingers under captures/.
+        let _ = fs::remove_dir_all(&self.root);
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for StagedRun {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
 /// The series options of `frf court run`. Exactly one may be set; absent,
 /// the court is single-run.
 #[derive(Debug, Clone, Default)]
@@ -2657,12 +2761,6 @@ pub fn run_once(
     // The comparator serving each axis fixes the relation AND the residual
     // classifier (a divergence's kind is part of the question).
     let mut residuals: Vec<ResidualRecord> = Vec::new();
-    // Ids are assigned before anything is written, so a run with two
-    // text-family residuals (stderr + stdout) must not re-read the disk and
-    // hand out the same sequence number twice: track ids already handed out
-    // in this run and keep bumping past them.
-    let mut pending_seq: std::collections::HashMap<ResidualKind, u32> =
-        std::collections::HashMap::new();
     // The externally served axes' invocation evidence, written once the
     // residuals (and therefore their ids) exist.
     struct PendingInvocation {
@@ -2670,7 +2768,9 @@ pub fn run_once(
         response_cid: String,
         request_bytes: Vec<u8>,
         response_bytes: Vec<u8>,
-        residual_ids: Vec<String>,
+        // The indexes (into `residuals`) of the divergences this invocation
+        // observed; the ids are materialized once the run id exists.
+        residual_indices: Vec<usize>,
     }
     let mut pending_invocations: Vec<Option<PendingInvocation>> =
         (0..observables.len()).map(|_| None).collect();
@@ -2728,23 +2828,18 @@ pub fn run_once(
                 response_cid: ev.response_cid.clone(),
                 request_bytes: ev.request_bytes.clone(),
                 response_bytes: ev.response_bytes.clone(),
-                residual_ids: vec![],
+                residual_indices: vec![],
             });
         }
         for (surface, raw_ref, raw_cand) in projections {
-            let seq = match pending_seq.get(&classifier) {
-                Some(s) => s + 1,
-                None => store.next_residual_seq(classifier.clone())?,
-            };
-            pending_seq.insert(classifier.clone(), seq);
+            // The residual id is a CONTENT ADDRESS (FRF/RESIDUAL/v1 over the
+            // run + the divergence), filled once the run id is known — there
+            // is NO shared sequence counter to race, and the same divergence
+            // in the same run is the same residual under any number of
+            // concurrent courts.
             residuals.push(ResidualRecord {
                 schema_version: SCHEMA_RESIDUAL.to_string(),
-                id: format!(
-                    "{}-{}-{:04}",
-                    classifier.domain_prefix(),
-                    classifier.as_str(),
-                    seq
-                ),
+                id: String::new(), // content-addressed once the run id is known
                 court: spec.id.clone(),
                 run: String::new(), // filled once the run id is known
                 axis: axis.clone(),
@@ -2759,8 +2854,7 @@ pub fn run_once(
                 raw_candidate_sha256: String::new(),
             });
             if let Some(p) = &mut pending_invocations[idx] {
-                p.residual_ids
-                    .push(residuals.last().expect("just pushed").id.clone());
+                p.residual_indices.push(residuals.len() - 1);
             }
         }
     }
@@ -2825,41 +2919,42 @@ pub fn run_once(
         )));
     }
 
-    // -- write raw captures (immutable) ----------------------------------------
+    // -- transactional publication: stage -> internally verify -> atomic publish
+    //
+    // The run directory is built under captures/.staging-<nonce>/ and
+    // published with ONE atomic rename: a half-written run can never appear at
+    // its final path. The residual/token leaves are content-addressed
+    // (FRF/RESIDUAL/v1 — there is NO shared sequence counter to race) and are
+    // committed idempotently BEFORE the run-dir rename, so a committed run
+    // always has every referenced residual present. A crash before the rename
+    // leaves only orphaned content-addressed leaves, which an identical
+    // re-observation of the same court completes (the same divergence derives
+    // the same ids) — the store self-heals; it never holds a partial run.
+    let mut staged = StagedRun::new(store, &run)?;
+    let staged_run = staged.run_dir(&run);
 
-    std::fs::create_dir(&run_dir)
-        .map_err(|e| FrfError::new(format!("cannot create {}: {e}", run_dir.display())))?;
-    write_side_files(&run_dir, "reference", &reference_compared, &reference)?;
-    write_side_files(&run_dir, "candidate", &candidate_compared, &candidate)?;
-    // The produced trees: the staged bytes are copied under the run (the
-    // transient produce path is already cleared), immutable and rehashed by
-    // verification.
-    if let Some(prod) = &reference.produced {
-        crate::produced::write_produced_dir(
-            &run_dir,
-            "reference",
-            &staging.dir.join("reference"),
-            &prod.files,
-        )?;
-    }
-    if let Some(prod) = &candidate.produced {
-        crate::produced::write_produced_dir(
-            &run_dir,
-            "candidate",
-            &staging.dir.join("candidate"),
-            &prod.files,
-        )?;
-    }
-
-    // Fill in run id + axis hashes, then persist the immutable observation
-    // records and their (open) endoduction tokens.
+    // Fill in the run id + axis hashes + the CONTENT-ADDRESSED residual ids,
+    // then stage the immutable observation records and their (open)
+    // endoduction tokens.
     for r in &mut residuals {
         r.run = run.clone();
         r.raw_reference_sha256 = host::sha256_bytes(r.raw_reference.as_bytes());
         r.raw_candidate_sha256 = host::sha256_bytes(r.raw_candidate.as_bytes());
+        r.id = crate::semantics::residual_identity(
+            &r.run,
+            &r.kind,
+            &r.axis,
+            r.surface.as_deref(),
+            &r.raw_reference_sha256,
+            &r.raw_candidate_sha256,
+        )?;
         let json = store.to_evidence(r)?;
-        store.write_once(&store.residual_path(&r.id)?, &json)?;
-        store.write_token(r, &Disposition::Open)?;
+        std::fs::write(staged.residual_path(&r.id), &json).map_err(|e| {
+            FrfError::new(format!("cannot stage the residual {}: {e}", &r.id[..16]))
+        })?;
+        let token_json = store.to_evidence(&crate::kappa::kappa(r, &Disposition::Open))?;
+        std::fs::write(staged.token_path(&r.id), &token_json)
+            .map_err(|e| FrfError::new(format!("cannot stage the token {}: {e}", &r.id[..16])))?;
         let token = crate::kappa::kappa(r, &Disposition::Open);
         eprintln!(
             "residual {} ({}) open: reference={} candidate={} -> token {} -> {}",
@@ -2872,15 +2967,41 @@ pub fn run_once(
         );
     }
 
+    // The side files + produced trees, staged (immutable; rehashed by
+    // verification).
+    write_side_files(&staged_run, "reference", &reference_compared, &reference)?;
+    write_side_files(&staged_run, "candidate", &candidate_compared, &candidate)?;
+    if let Some(prod) = &reference.produced {
+        crate::produced::write_produced_dir(
+            &staged_run,
+            "reference",
+            &staging.dir.join("reference"),
+            &prod.files,
+        )?;
+    }
+    if let Some(prod) = &candidate.produced {
+        crate::produced::write_produced_dir(
+            &staged_run,
+            "candidate",
+            &staging.dir.join("candidate"),
+            &prod.files,
+        )?;
+    }
+
     // -- comparator invocation evidence (externally served axes) ----------------
     // The canonical request the comparator received, its canonical response,
     // and the content-addressed invocation + result records that bind them to
-    // this run's residuals. Written once, immutable, canonical JSON — the
-    // instrument is part of the evidence.
+    // this run's residuals. Staged, immutable, canonical JSON — the instrument
+    // is part of the evidence.
     for (idx, axis) in observables.iter().enumerate() {
         let Some(pending) = &mut pending_invocations[idx] else {
             continue;
         };
+        let residual_ids: Vec<String> = pending
+            .residual_indices
+            .iter()
+            .map(|&i| residuals[i].id.clone())
+            .collect();
         let invocation_id = crate::semantics::comparator_invocation_identity(
             &crate::semantics::ComparatorInvocationContent {
                 axis,
@@ -2897,12 +3018,12 @@ pub fn run_once(
             &crate::semantics::ComparatorResultContent {
                 request_cid: &pending.invocation.request_cid,
                 response_cid: &pending.response_cid,
-                outcome: if pending.residual_ids.is_empty() {
+                outcome: if residual_ids.is_empty() {
                     "equivalent"
                 } else {
                     "divergent"
                 },
-                residual_observation_ids: &pending.residual_ids,
+                residual_observation_ids: &residual_ids,
             },
         )?;
         let result = ComparatorResult {
@@ -2910,14 +3031,14 @@ pub fn run_once(
             result_id,
             request_cid: pending.invocation.request_cid.clone(),
             response_cid: pending.response_cid.clone(),
-            outcome: if pending.residual_ids.is_empty() {
+            outcome: if residual_ids.is_empty() {
                 "equivalent".to_string()
             } else {
                 "divergent".to_string()
             },
-            residual_observation_ids: pending.residual_ids.clone(),
+            residual_observation_ids: residual_ids,
         };
-        let dir = store.comparator_dir(&run, axis.as_str())?;
+        let dir = staged_run.join("comparator").join(axis.as_str());
         std::fs::create_dir_all(&dir)
             .map_err(|e| FrfError::new(format!("cannot create {}: {e}", dir.display())))?;
         store.write_once(
@@ -2947,15 +3068,15 @@ pub fn run_once(
     // The exact instruments that built the COMPARISON SURFACE: each
     // normalizer's canonical request (one side's raw streams at that point of
     // the application chain), its canonical response, and the content-
-    // addressed invocation + result records — written once, immutable,
-    // under `captures/<run>/normalizer/<id>/<side>/`. The capture adapters
-    // that produced the ADAPTED observations are the same shape, under
+    // addressed invocation + result records — staged, immutable, under
+    // `captures/<run>/normalizer/<id>/<side>/`. The capture adapters that
+    // produced the ADAPTED observations are the same shape, under
     // `captures/<run>/capture-adapter/<axis>/<side>/`. Verification rehashes
     // every file and rederives every identity without executing anything.
     for pending in &pending_normalizers {
         crate::ext::write_evidence(
             store,
-            &run_dir
+            &staged_run
                 .join("normalizer")
                 .join(&pending.id)
                 .join(&pending.side),
@@ -2972,7 +3093,7 @@ pub fn run_once(
     for pending in &pending_adapters {
         crate::ext::write_evidence(
             store,
-            &run_dir
+            &staged_run
                 .join("capture-adapter")
                 .join(&pending.axis)
                 .join(&pending.side),
@@ -3085,10 +3206,51 @@ pub fn run_once(
         container_image,
     };
     let json = store.to_evidence(&capture)?;
-    store.write_once(&run_dir.join("capture.json"), &json)?;
+    store.write_once(&staged_run.join("capture.json"), &json)?;
+
+    // -- internally verify the staged run with the REAL verified loaders ------
+    // A court refuses to publish evidence it cannot verify: the staged tree
+    // mirrors the store layout (captures/<run>, residuals/) with objects/
+    // bound to the store's content-addressed objects (immutable, shared), and
+    // every verified loader must accept the staged run exactly as it will be
+    // committed — the run identity rederives, every side file + snapshot +
+    // extension instrument verifies, and every residual derives from the
+    // verified parent run with its content address rederived. The harness /
+    // attempts namespaces are CONTENT-ADDRESSED leaves written during
+    // execution (before the run id exists, so they cannot be staged under the
+    // run); they are bound to the store's own records, exactly as they will
+    // be read after publication.
+    let staging_root = staged.root.clone();
+    for sub in ["objects", "harness", "attempts"] {
+        let real = store.root.join(sub);
+        if !real.is_dir() {
+            continue; // the namespace does not exist in the store; absent is the honest staged state too
+        }
+        let target = std::fs::canonicalize(&real)
+            .map_err(|e| FrfError::new(format!("cannot resolve the {sub} dir: {e}")))?;
+        std::os::unix::fs::symlink(&target, staging_root.join(sub))
+            .map_err(|e| FrfError::new(format!("cannot bind the staged {sub} dir: {e}")))?;
+    }
+    let temp_store = Store::new(staging_root.clone());
+    crate::verify::load_capture_verified(&temp_store, &run).map_err(|e| {
+        FrfError::new(format!(
+            "the staged run does not verify internally — refusing to publish: {e}"
+        ))
+    })?;
+    for r in &residuals {
+        crate::verify::load_residual_verified(&temp_store, &r.id).map_err(|e| {
+            FrfError::new(format!(
+                "the staged residual {} does not verify internally — refusing to publish: {e}",
+                &r.id[..16]
+            ))
+        })?;
+    }
+
+    // -- publish: content-addressed leaves first, then the ONE atomic rename --
+    staged.publish(store, &run, &residuals)?;
 
     eprintln!(
-        "court {} run: captures, residuals, and tokens written under {}",
+        "court {} run: captures, residuals, and tokens published under {}",
         spec.id,
         run_dir.display()
     );

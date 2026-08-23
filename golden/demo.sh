@@ -94,6 +94,19 @@ if "$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_OPEN" 2>golden/work/refusal
 fi
 cat golden/work/refusal.txt
 
+# Residual ids are CONTENT ADDRESSES (FRF/RESIDUAL/v1 over the run +
+# divergence), so the kit resolves the ids it needs from the evidence
+# instead of assuming storage labels.
+residual_id_of() { # <run> <axis>
+  run=$1; axis=$2
+  for id in $(grep -o '"residuals":\[[^]]*\]' "$ROOT/captures/$run/capture.json" | sed 's/.*\[\([^]]*\)\].*/\1/' | tr -d '"' | tr ',' ' '); do
+    ax=$(grep -o '"axis":"[^"]*"' "$ROOT/residuals/$id.json" | sed 's/.*:"\([^"]*\)".*/\1/')
+    if [ "$ax" = "$axis" ]; then echo "$id"; return 0; fi
+  done
+  echo "FATAL: no $axis residual in $run" >&2
+  exit 1
+}
+
 step "4. resolve: patch the candidate's exit class, verify with a NEW court run, then dispose"
 sed -e 's/exit 1$/exit 2/' \
     -e "s/(1 instead of the reference's 2)/(2, matching the reference)/" \
@@ -103,14 +116,17 @@ chmod +x golden/work/candidate-fixed.sh
 echo "-- re-run the court against the patched candidate (the exit axis must close; the wording divergence is re-observed)"
 RESOLUTION_RUN=$("$FRF_BIN" --root "$ROOT" court run frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml)
 echo "resolution run: $RESOLUTION_RUN"
-echo "-- dispose cli-exit-0001 as fixed, backed by that run (a disposition is not evidence)"
-"$FRF_BIN" --root "$ROOT" residual dispose cli-exit-0001 --disposition fixed \
+EXIT_ID=$(residual_id_of "$RUN_ID" exit)
+TEXT_ID=$(residual_id_of "$RUN_ID" stderr)
+RES_TEXT_ID=$(residual_id_of "$RESOLUTION_RUN" stderr)
+echo "-- dispose the exit residual as fixed, backed by that run (a disposition is not evidence)"
+"$FRF_BIN" --root "$ROOT" residual dispose "$EXIT_ID" --disposition fixed \
   --resolution-run "$RESOLUTION_RUN" \
   --reason "candidate patched to preserve reference exit class (golden/work/candidate-fixed.sh)"
 echo "-- dispose the wording divergence as intentional (documented, never parity)"
-"$FRF_BIN" --root "$ROOT" residual dispose cli-text-0001 --disposition intentional \
+"$FRF_BIN" --root "$ROOT" residual dispose "$TEXT_ID" --disposition intentional \
   --reason "clearer diagnostic wording; documented divergence"
-"$FRF_BIN" --root "$ROOT" residual dispose cli-text-0002 --disposition intentional \
+"$FRF_BIN" --root "$ROOT" residual dispose "$RES_TEXT_ID" --disposition intentional \
   --reason "clearer diagnostic wording; documented divergence (re-observed by the resolution run)"
 
 step "5. the original receipt stays what it was; the claim comes from the run that observed the pass"
@@ -169,7 +185,7 @@ step "8. minimization — the routed reducer turns the failure into a reproducer
 # ddmin reduces the fixture (holding candidate/authority/comparator/
 # environment fixed) until the divergence lineage stops surviving. Every
 # attempt is recorded; the final reproducer is court-verified.
-MIN_ID=$("$FRF_BIN" --root "$ROOT" court minimize cli-exit-0001)
+MIN_ID=$("$FRF_BIN" --root "$ROOT" court minimize "$EXIT_ID")
 echo "reduction: $MIN_ID"
 echo "-- the reproducer (1 line vs the original 3):"
 cat "$ROOT"/objects/sha256/$(grep -o '"final_fixture_sha256":"[0-9a-f]*"' "$ROOT"/reductions/$MIN_ID.json | head -1 | cut -d'"' -f4)

@@ -44,6 +44,15 @@ pub fn is_elf(bytes: &[u8]) -> bool {
 /// the dynamic loader the kernel will invoke. Self-contained parsing (no
 /// external parser); a malformed ELF is a refusal (an artifact that is not
 /// what it claims is not evidence).
+///
+/// FAIL-CLOSED ARITHMETIC: every offset/range conversion is `usize::try_from`
+/// + `checked_mul`/`checked_add`, because every numeric field here is read
+/// from the artifact's own bytes. A wrapped header-table offset would read a
+/// `p_type` from a different, attacker-chosen position and record a
+/// wrong-but-plausible loader path as part of the runtime closure; a wrapped
+/// `PT_INTERP` range would make `start > end` and panic at the slice. Neither
+/// may happen: a malformed ELF is a refusal, never a misread and never a
+/// panic.
 fn interp_path(bytes: &[u8]) -> Result<String> {
     if bytes.len() < 64 || bytes[..4] != ELF_MAGIC {
         return Err(FrfError::new("not an ELF executable"));
@@ -54,8 +63,17 @@ fn interp_path(bytes: &[u8]) -> Result<String> {
             "unsupported ELF class {class}: only ELF64 is bound"
         )));
     }
-    // ELF64 header fields (little-endian; the reference platform is
-    // x86-64/aarch64, both LE).
+    // EI_DATA: the declared byte order. Every field below is decoded
+    // little-endian (the reference platform is x86-64/aarch64, both LE), so a
+    // file that declares a different byte order is REFUSED here, never
+    // misread — and ELFDATANONE (0) is refused too: an artifact that does not
+    // declare its byte order is not what it claims.
+    let ei_data = bytes[5];
+    if ei_data != 1 {
+        return Err(FrfError::new(format!(
+            "malformed ELF: unsupported EI_DATA {ei_data} — only ELFDATA2LSB (1) is bound (the reference platform is little-endian)"
+        )));
+    }
     let e_phoff = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
     let e_phentsize = u16::from_le_bytes(bytes[54..56].try_into().unwrap());
     let e_phnum = u16::from_le_bytes(bytes[56..58].try_into().unwrap());
@@ -64,9 +82,15 @@ fn interp_path(bytes: &[u8]) -> Result<String> {
             "malformed ELF: program header size {e_phentsize} < 56"
         )));
     }
+    let e_phoff_usize = usize::try_from(e_phoff)
+        .map_err(|_| FrfError::new("malformed ELF: e_phoff does not fit this platform"))?;
+    let e_phentsize_usize = usize::from(e_phentsize);
     for i in 0..e_phnum {
-        let off = e_phoff as usize + i as usize * e_phentsize as usize;
-        if off + 56 > bytes.len() {
+        let off = (i as usize)
+            .checked_mul(e_phentsize_usize)
+            .and_then(|p| e_phoff_usize.checked_add(p))
+            .ok_or_else(|| FrfError::new("malformed ELF: program header offset overflows"))?;
+        if off.checked_add(56).is_none_or(|end| end > bytes.len()) {
             return Err(FrfError::new(
                 "malformed ELF: program headers overrun the file",
             ));
@@ -76,8 +100,14 @@ fn interp_path(bytes: &[u8]) -> Result<String> {
             // PT_INTERP: p_offset, p_filesz
             let p_offset = u64::from_le_bytes(bytes[off + 8..off + 16].try_into().unwrap());
             let p_filesz = u64::from_le_bytes(bytes[off + 32..off + 40].try_into().unwrap());
-            let start = p_offset as usize;
-            let end = start + p_filesz as usize;
+            let start = usize::try_from(p_offset).map_err(|_| {
+                FrfError::new("malformed ELF: PT_INTERP p_offset does not fit this platform")
+            })?;
+            let end = start
+                .checked_add(usize::try_from(p_filesz).map_err(|_| {
+                    FrfError::new("malformed ELF: PT_INTERP p_filesz does not fit this platform")
+                })?)
+                .ok_or_else(|| FrfError::new("malformed ELF: PT_INTERP range overflows"))?;
             if end > bytes.len() {
                 return Err(FrfError::new("malformed ELF: PT_INTERP overruns the file"));
             }
@@ -234,5 +264,145 @@ mod tests {
         assert!(runtime_closure(Path::new("/nonexistent"), bytes)
             .unwrap()
             .is_none());
+    }
+
+    // -- the PT_INTERP parser: fail-closed on adversarial bytes ---------------
+    //
+    // Every malformation below must be a REFUSAL — never a panic and never a
+    // read from a wrapped offset. The header/range arithmetic is checked
+    // (`usize::try_from` + `checked_mul`/`checked_add`), so an
+    // attacker-chosen `e_phoff`, `p_offset`, or `p_filesz` cannot wrap into a
+    // different, plausible-looking loader path.
+
+    /// A minimal ELF64 with one program-header slot, for the control and the
+    /// adversarial cases. `ph` places one 56-byte program header at offset 64
+    /// (a PT_INTERP entry also gets its interp bytes appended after the
+    /// table, at offset 120).
+    fn elf64(
+        ei_data: u8,
+        e_phoff: u64,
+        e_phentsize: u16,
+        e_phnum: u16,
+        ph: Option<(u32, u64, u64, &[u8])>,
+    ) -> Vec<u8> {
+        let mut bytes = vec![0u8; 64];
+        bytes[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        bytes[4] = 2; // ELFCLASS64
+        bytes[5] = ei_data;
+        bytes[6] = 1; // EV_CURRENT
+        bytes[32..40].copy_from_slice(&e_phoff.to_le_bytes());
+        bytes[54..56].copy_from_slice(&e_phentsize.to_le_bytes());
+        bytes[56..58].copy_from_slice(&e_phnum.to_le_bytes());
+        if let Some((p_type, p_offset, p_filesz, interp)) = ph {
+            let table = 64usize;
+            bytes.resize(table + 56, 0);
+            let mut ph = [0u8; 56];
+            ph[0..4].copy_from_slice(&p_type.to_le_bytes());
+            ph[8..16].copy_from_slice(&p_offset.to_le_bytes());
+            ph[32..40].copy_from_slice(&p_filesz.to_le_bytes());
+            bytes[table..table + 56].copy_from_slice(&ph);
+            if p_type == 3 {
+                let data = table + 56;
+                bytes.resize(data + interp.len() + 1, 0);
+                bytes[data..data + interp.len()].copy_from_slice(interp);
+                bytes[data + interp.len()] = 0;
+            }
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_well_formed_elf64_yields_the_interp_path() {
+        let interp = b"/lib64/ld-linux-x86-64.so.2";
+        let bytes = elf64(1, 64, 56, 1, Some((3, 120, interp.len() as u64, interp)));
+        assert_eq!(interp_path(&bytes).unwrap(), "/lib64/ld-linux-x86-64.so.2");
+    }
+
+    #[test]
+    fn e_phoff_at_u64_max_is_refused_not_wrapped() {
+        // A PT_INTERP entry at e_phoff=u64::MAX: the table offset must refuse
+        // (on 64-bit the `off + 56` bound check overflows and refuses; on
+        // 32-bit the u64->usize conversion refuses). The old code wrapped and
+        // could slice with start > end — a panic — or, after the wrap landed
+        // back in bounds, read a p_type from the wrong place.
+        let bytes = elf64(1, u64::MAX, 56, 1, Some((3, 0, 1, b"/lib/ld.so")));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(err.0.contains("malformed ELF"), "{err}");
+    }
+
+    #[test]
+    fn header_table_offset_overflow_is_refused() {
+        // e_phoff just below usize::MAX with a MULTI-entry table: the
+        // `i * e_phentsize + e_phoff` chain must refuse on overflow instead of
+        // wrapping to an in-bounds but wrong offset (the silent-misread
+        // failure mode).
+        let bytes = elf64(1, u64::MAX - 100, 56, 2, Some((3, 0, 1, b"/lib/ld.so")));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(err.0.contains("malformed ELF"), "{err}");
+    }
+
+    #[test]
+    fn p_offset_plus_p_filesz_overflow_is_refused() {
+        // p_offset near u64::MAX with a nonzero p_filesz: the PT_INTERP range
+        // must refuse on overflow (the old `start + p_filesz` wrapped end
+        // below start and panicked at the slice).
+        let bytes = elf64(1, 64, 56, 1, Some((3, u64::MAX, 1, b"/lib/ld.so")));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(err.0.contains("malformed ELF"), "{err}");
+    }
+
+    #[test]
+    fn truncated_program_header_table_is_refused() {
+        // e_phnum=2 but the file holds only one header slot: the second
+        // entry overruns the file and must be refused, never read past EOF.
+        let bytes = elf64(1, 64, 56, 2, Some((1, 0, 0, b""))); // PT_LOAD, not interp
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(err.0.contains("malformed ELF"), "{err}");
+    }
+
+    #[test]
+    fn big_endian_elf64_is_refused_not_misread() {
+        // EI_DATA=2 (ELFDATA2MSB): the fields are decoded little-endian, so a
+        // big-endian file must be REFUSED — the old parser silently misread
+        // every field of it (a wrong-but-plausible loader path).
+        let interp = b"/lib64/ld-linux-x86-64.so.2";
+        let bytes = elf64(2, 64, 56, 1, Some((3, 120, interp.len() as u64, interp)));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(
+            err.0.contains("EI_DATA") && err.0.contains("ELFDATA2LSB"),
+            "the refusal must name the byte-order contract: {err}"
+        );
+    }
+
+    #[test]
+    fn undeclared_byte_order_is_refused() {
+        // EI_DATA=0 (ELFDATANONE): an artifact that does not declare its byte
+        // order is not what it claims.
+        let bytes = elf64(0, 64, 56, 1, Some((3, 120, 3, b"/lib/ld.so")));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(
+            err.0.contains("EI_DATA"),
+            "the refusal must name EI_DATA: {err}"
+        );
+    }
+
+    #[test]
+    fn interp_range_beyond_the_file_is_refused() {
+        // p_offset/p_filesz name a range past EOF: refused, never sliced.
+        let bytes = elf64(1, 64, 56, 1, Some((3, 120, 1_000_000, b"/lib/ld.so")));
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(
+            err.0.contains("PT_INTERP overruns"),
+            "the refusal must name the overrun: {err}"
+        );
+    }
+
+    #[test]
+    fn a_bare_elf64_header_without_phdrs_is_refused() {
+        // No program-header table at all (e_phnum=1 but e_phoff past EOF):
+        // the table overruns and must be refused.
+        let bytes = elf64(1, 1_000_000, 56, 1, None);
+        let err = interp_path(&bytes).unwrap_err();
+        assert!(err.0.contains("malformed ELF"), "{err}");
     }
 }

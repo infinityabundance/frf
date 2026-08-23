@@ -34,6 +34,10 @@ fn golden_to_claim(work: &Workdir) -> (String, String, String, String) {
     admit_reference(work);
     let run = run_court(work);
     let resolution_run = run_resolution_court(work);
+    // Residual ids are content addresses: resolve them from the evidence.
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let res_text_id = residual_id(work, &resolution_run, "stderr");
     let out = frf(
         work,
         &[
@@ -41,7 +45,7 @@ fn golden_to_claim(work: &Workdir) -> (String, String, String, String) {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -53,11 +57,11 @@ fn golden_to_claim(work: &Workdir) -> (String, String, String, String) {
     assert_success(&out, "dispose exit fixed");
     for (id, reason) in [
         (
-            "cli-text-0001",
+            text_id.clone(),
             "clearer diagnostic wording; documented divergence",
         ),
         (
-            "cli-text-0002",
+            res_text_id.clone(),
             "clearer diagnostic wording; documented divergence (re-observed)",
         ),
     ] {
@@ -68,7 +72,7 @@ fn golden_to_claim(work: &Workdir) -> (String, String, String, String) {
                 ROOT,
                 "residual",
                 "dispose",
-                id,
+                &id,
                 "--disposition",
                 "intentional",
                 "--reason",

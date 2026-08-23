@@ -124,10 +124,12 @@ fn an_orphaned_residual_refuses_the_whole_store_status() {
     let work = Workdir::new("whole-store-residual");
     work.copy_canonical_tree();
     admit_reference(&work);
-    run_court(&work);
+    let run = run_court(&work);
 
-    // A real residual record's bytes, planted under an id no run references.
-    let real = fs::read(work.path(&format!("{ROOT}/residuals/cli-exit-0001.json"))).unwrap();
+    // A real residual record's bytes, planted under an id no run references
+    // (and whose content address does not rederive from its fields).
+    let exit_id = residual_id(&work, &run, "exit");
+    let real = fs::read(work.path(&format!("{ROOT}/residuals/{exit_id}.json"))).unwrap();
     fs::write(
         work.path(&format!("{ROOT}/residuals/cli-exit-9999.json")),
         &real,

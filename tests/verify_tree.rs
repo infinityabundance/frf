@@ -399,10 +399,14 @@ fn residuals_and_tokens_are_self_consistent() {
             path.file_stem().unwrap().to_string_lossy(),
             "filename must match id"
         );
-        assert!(
-            r.id.starts_with(&format!("{}-{}", r.kind.domain_prefix(), r.kind.as_str())),
-            "id shape for {}",
-            r.id
+        // The id is a CONTENT ADDRESS: 64 hex that rederives from the
+        // record's own fields (FRF/RESIDUAL/v1 over run + divergence).
+        assert_eq!(r.id.len(), 64, "id shape for {}", r.id);
+        assert!(r.id.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            frf::semantics::residual_record_identity(&r).unwrap(),
+            r.id,
+            "the residual id must rederive from its own fields"
         );
         match r.kind.as_str() {
             "exit" => {

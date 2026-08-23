@@ -386,10 +386,10 @@ fn a_mode_divergence_is_preserved_alongside_a_content_divergence() {
 
     // Both residuals re-derive through the one comparison relation: the
     // verified read accepts them (and would refuse a residual the comparator
-    // did not generate).
+    // did not generate). The ids are content addresses.
     let store = Store::new(work.path(ROOT));
-    for id in ["cli-text-0001", "cli-text-0002"] {
-        let verified = frf::verify::load_residual_verified(&store, id).unwrap();
+    for (_, id) in residual_ids(&work, &run) {
+        let verified = frf::verify::load_residual_verified(&store, &id).unwrap();
         assert_eq!(verified.record().run, run);
         assert_eq!(verified.record().axis.as_str(), "filesystem.tree");
     }

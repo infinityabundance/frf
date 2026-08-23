@@ -72,7 +72,7 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     let work_builtin = Workdir::new("cmp-builtin");
     work_builtin.copy_canonical_tree();
     admit_reference(&work_builtin);
-    run_court(&work_builtin);
+    let run_builtin = run_court(&work_builtin);
 
     // The same court with the stderr axis served by a PYTHON comparator, in
     // a separate store (identical evidence would collide on run ids — the
@@ -97,8 +97,11 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
 
     // Same question, different implementation: the external comparator
     // produced the SAME residual fingerprint for the stderr divergence.
-    let fp_builtin = residual_fingerprint(&work_builtin, "cli-text-0001");
-    let fp_ext = residual_fingerprint(&work_ext, "cli-text-0001");
+    // Residual ids are content addresses, so resolve them from the runs.
+    let text_builtin = residual_id(&work_builtin, &run_builtin, "stderr");
+    let text_ext = residual_id(&work_ext, &run_ext, "stderr");
+    let fp_builtin = residual_fingerprint(&work_builtin, &text_builtin);
+    let fp_ext = residual_fingerprint(&work_ext, &text_ext);
     assert_eq!(
         fp_builtin, fp_ext,
         "the external comparator must produce the same residual fingerprint"
@@ -210,7 +213,8 @@ fn an_external_comparator_serves_the_same_question_with_its_own_identity() {
     assert_eq!(result.outcome, "divergent");
     assert_eq!(
         result.residual_observation_ids,
-        vec!["cli-text-0001".to_string()]
+        vec![text_ext.clone()],
+        "the comparator result binds the content-addressed residual id"
     );
     assert_eq!(result.request_cid, invocation.request_cid);
     // The preserved response names the exact request it answers.
@@ -261,18 +265,19 @@ fn a_new_axis_is_a_protocol_identifier() {
     assert_success(&out, "court run (wire axis)");
     let run = stdout(&out);
 
-    // The residual: kind `wire`, id `cli-wire-0001`, surface from the
+    // The residual: kind `wire`, a content-addressed id, surface from the
     // comparator's extractor, and the honest generic κ row (no fabricated
     // minimizer target).
+    let wire_id = residual_id(&work, &run, "wire");
     let rec: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("frf/residuals/{wire_id}.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(rec["axis"], "wire");
     assert_eq!(rec["kind"], "wire");
     assert_eq!(rec["surface"], "stderr-bytes");
     let token: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-wire-0001.token.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("frf/residuals/{wire_id}.token.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(token["token"], "wire/wire-divergence/observed/open");
@@ -389,8 +394,9 @@ fn a_new_extractor_is_a_new_question() {
     );
     // The residual follows the comparator's extractor: the surface it
     // declared, and a fingerprint different from the first-line comparator's.
+    let text_id = residual_id(&work, &run, "stderr");
     let rec: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path("frf/residuals/cli-text-0001.json")).unwrap(),
+        &fs::read_to_string(work.path(&format!("frf/residuals/{text_id}.json"))).unwrap(),
     )
     .unwrap();
     assert_eq!(rec["surface"], "stderr-bytes");

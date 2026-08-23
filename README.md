@@ -110,7 +110,7 @@ not these tables.
 | observation-identity | What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them | FRF/OBSERVATION/v1 | active |
 | execution-identity | Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract | FRF/EXECUTION/v1 | active |
 | observation | Raw captured result (side capture + produced-artifact tree) | frf-produced-v1 | active |
-| residual | Preserved disagreement (fingerprinted, lineage-identified) | frf-residual-v1 · FRF/RESIDUAL-FINGERPRINT/v1 | active |
+| residual | Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified — no shared sequence counter anywhere in the residual namespace | frf-residual-v1 · FRF/RESIDUAL/v1 | active |
 | residual-lineage | Stable comparison question/surface/feature across revisions and environments | FRF/RESIDUAL-LINEAGE/v1 | active |
 | disposition-event | Interpretation/state transition of a residual (hash-chained append-only events) | frf-disposition-v2 · FRF/DISPOSITION-EVENT/v1 | active |
 | resolution | Evidence that a residual closed (a fixed event + its resolution run) | — | active |
@@ -157,6 +157,7 @@ not these tables.
 | FRF/CAPTURE-ADAPTER-SPEC/v2 | Capture-adapter semantic specification | active |
 | FRF/WITNESS-SPEC/v2 | Witness semantic specification | active |
 | FRF/MUTATION-SPEC/v1 | Mutation semantic specification | active |
+| FRF/RESIDUAL/v1 | Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) — collision-free under concurrent courts and idempotent under re-observation | active |
 | FRF/RESIDUAL-FINGERPRINT/v1 | Exact residual observation fingerprint | active |
 | FRF/RESIDUAL-LINEAGE/v1 | Stable residual lineage across revisions/environments | active |
 | FRF/KIND/v1 | Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary | active |

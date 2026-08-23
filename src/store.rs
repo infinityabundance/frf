@@ -873,6 +873,12 @@ impl Store {
                     let entry =
                         entry.map_err(|e| FrfError::new(format!("cannot read {sub}: {e}")))?;
                     let name = entry.file_name().to_string_lossy().into_owned();
+                    // Dot-prefixed entries are staging/scratch trees (the
+                    // court stages a run under captures/.staging-*/ before its
+                    // atomic publish), never protocol objects.
+                    if name.starts_with('.') {
+                        continue;
+                    }
                     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                         out.push(name);
                     } else if name.ends_with(".json") {
@@ -1990,6 +1996,48 @@ impl Store {
         }
     }
 
+    /// Commit a CONTENT-ADDRESSED evidence document idempotently: write it if
+    /// absent; if the file already holds the IDENTICAL bytes, the content is
+    /// already committed and the write is a no-op; different bytes at the
+    /// same content address are a refusal (a content address can only ever
+    /// hold its own content). This is the court's residual/token commit path:
+    /// ids are content addresses (`FRF/RESIDUAL/v1`), so two concurrent
+    /// courts observing the same divergence cannot race a sequence counter —
+    /// and a crashed run's leftover leaf file is either absent or
+    /// byte-identical, never half-committed.
+    pub fn commit_content_addressed(&self, path: &Path, contents: &str) -> Result<()> {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut f) => f
+                .write_all(contents.as_bytes())
+                .and_then(|_| f.flush())
+                .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let existing = fs::read(path).map_err(|re| {
+                    FrfError::new(format!(
+                        "cannot re-read the existing {}: {re}",
+                        path.display()
+                    ))
+                })?;
+                if existing == contents.as_bytes() {
+                    Ok(())
+                } else {
+                    Err(FrfError::new(format!(
+                        "{} already exists with DIFFERENT bytes; refusing to overwrite a content address",
+                        path.display()
+                    )))
+                }
+            }
+            Err(e) => Err(FrfError::new(format!(
+                "cannot create {}: {e}",
+                path.display()
+            ))),
+        }
+    }
+
     /// Write a derived artifact. Since claims became content-addressed
     /// immutable objects (`frf-claim-v8`), the only remaining derived
     /// artifact here is the κ TOKEN: a pure function of immutable inputs
@@ -2180,28 +2228,6 @@ impl Store {
             )));
         }
         Ok(Unverified::new(self.parse_evidence(&path)?))
-    }
-
-    /// Next zero-padded sequence number for a residual kind: max existing
-    /// `{domain}-{kind}-{n}` plus one. Deterministic for a given store state;
-    /// residuals are never deleted, so ids never collide.
-    pub fn next_residual_seq(&self, kind: ResidualKind) -> Result<u32> {
-        let prefix = format!("{}-{}-", kind.domain_prefix(), kind.as_str());
-        let dir = self.root.join("residuals");
-        let mut max = 0u32;
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                if let Some(rest) = name.strip_prefix(&prefix) {
-                    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                    if let Ok(n) = digits.parse::<u32>() {
-                        max = max.max(n);
-                    }
-                }
-            }
-        }
-        Ok(max + 1)
     }
 
     /// The resolution-comparability predicate behind a `fixed` disposition.
@@ -2447,35 +2473,6 @@ mod tests {
             assert_eq!(dm & 0o222, 0, "data object must not be writable");
             assert_eq!(em & 0o111, 0o111, "executed object must be executable");
         }
-    }
-
-    #[test]
-    fn residual_sequence_counts_by_kind() {
-        let store = temp_store();
-        store.ensure_tree().unwrap();
-        assert_eq!(store.next_residual_seq(ResidualKind::exit()).unwrap(), 1);
-        let rec = ResidualRecord {
-            schema_version: SCHEMA_RESIDUAL.into(),
-            id: "cli-exit-0001".into(),
-            court: "c".into(),
-            run: "r".into(),
-            axis: ObservableId::exit(),
-            kind: ResidualKind::exit(),
-            surface: None,
-            authority: "a".into(),
-            scope: "s".into(),
-            candidate_sha256: "c".repeat(64),
-            raw_reference: "2".into(),
-            raw_candidate: "1".into(),
-            raw_reference_sha256: "0".repeat(64),
-            raw_candidate_sha256: "1".repeat(64),
-        };
-        let json = store.to_evidence(&rec).unwrap();
-        store
-            .write_once(&store.residual_path("cli-exit-0001").unwrap(), &json)
-            .unwrap();
-        assert_eq!(store.next_residual_seq(ResidualKind::exit()).unwrap(), 2);
-        assert_eq!(store.next_residual_seq(ResidualKind::text()).unwrap(), 1);
     }
 
     #[test]

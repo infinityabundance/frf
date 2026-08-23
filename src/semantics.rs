@@ -10,6 +10,7 @@
 //!   FRF/EXECUTION/v1           execution identity (under what contract)
 //!   FRF/COURT/v2               court semantic identity (the question)
 //!   FRF/COMPARATOR-SPEC/v2     comparator relation specification
+//!   FRF/RESIDUAL/v1            residual record identity (content address)
 //!   FRF/RESIDUAL-FINGERPRINT/v1  residual fingerprint
 //!   FRF/KIND/v1                residual-kind protocol record
 //!   FRF/FIXTURE/v1             exact fixture input identity
@@ -649,6 +650,47 @@ pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
         r.surface.as_deref(),
         &r.raw_reference,
         &r.raw_candidate,
+    )
+}
+
+/// The residual record's CONTENT ADDRESS: the divergence is the evidence, so
+/// the residual id is a function of the divergence itself — `FRF/RESIDUAL/v1`
+/// over (run, kind, axis, surface, and the two raw projection hashes), never
+/// of a storage sequence. Two courts that observe the same divergence in the
+/// same run derive the SAME id (the record is idempotent and collision-free:
+/// there is no shared counter to race), and a residual's identity as evidence
+/// is exactly what the run identity already commits about it — the run
+/// identity's residual projection uses kind + raw projections only, never the
+/// storage label, so this introduces no identity cycle.
+pub fn residual_identity(
+    run: &str,
+    kind: &ResidualKind,
+    axis: &ObservableId,
+    surface: Option<&str>,
+    raw_reference_sha256: &str,
+    raw_candidate_sha256: &str,
+) -> Result<String> {
+    let doc = json!({
+        "run": run,
+        "kind": kind.as_str(),
+        "axis": axis.as_str(),
+        "surface": surface,
+        "raw_reference_sha256": raw_reference_sha256,
+        "raw_candidate_sha256": raw_candidate_sha256,
+    });
+    hash_preimage("FRF/RESIDUAL/v1", &doc)
+}
+
+/// The content address of a stored residual record, recomputed from the
+/// record's own fields (the id is a claim until recomputed).
+pub fn residual_record_identity(r: &ResidualRecord) -> Result<String> {
+    residual_identity(
+        &r.run,
+        &r.kind,
+        &r.axis,
+        r.surface.as_deref(),
+        &r.raw_reference_sha256,
+        &r.raw_candidate_sha256,
     )
 }
 

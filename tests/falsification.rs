@@ -62,8 +62,12 @@ fn claim_cid(work: &Workdir, receipt: &str) -> String {
 /// Drive the golden path to the final resolution receipt (exit axis clean).
 fn resolution_receipt(work: &Workdir) -> (String, String) {
     admit_reference(work);
-    let _run = run_court(work);
+    let run = run_court(work);
     let resolution_run = run_resolution_court(work);
+    // Residual ids are content addresses: resolve them from the evidence.
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let res_text_id = residual_id(work, &resolution_run, "stderr");
     // The exit residual is disposed FIXED with the closing resolution run;
     // the text residuals are documented intentional (a resolution-run is
     // only valid for a fixed disposition).
@@ -74,7 +78,7 @@ fn resolution_receipt(work: &Workdir) -> (String, String) {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -83,8 +87,8 @@ fn resolution_receipt(work: &Workdir) -> (String, String) {
             "candidate patched to preserve reference exit class",
         ],
     );
-    assert_success(&out, "dispose cli-exit-0001 fixed");
-    for id in ["cli-text-0001", "cli-text-0002"] {
+    assert_success(&out, "dispose exit fixed");
+    for id in [text_id, res_text_id] {
         let out = frf(
             work,
             &[
@@ -92,7 +96,7 @@ fn resolution_receipt(work: &Workdir) -> (String, String) {
                 ROOT,
                 "residual",
                 "dispose",
-                id,
+                &id,
                 "--disposition",
                 "intentional",
                 "--reason",
@@ -376,7 +380,8 @@ fn false_resolution_is_unproducible() {
     let work = Workdir::new("falsify-false-resolution");
     work.copy_canonical_tree();
     admit_reference(&work);
-    let run = run_court(&work); // residuals cli-exit-0001, cli-text-0001
+    let run = run_court(&work); // the run's two residuals (exit + stderr)
+    let exit_id = residual_id(&work, &run, "exit");
 
     // "Fix" the residual with the run that OBSERVED it (no closure): refuse.
     let out = frf(
@@ -386,7 +391,7 @@ fn false_resolution_is_unproducible() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -413,7 +418,7 @@ fn false_resolution_is_unproducible() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -606,6 +611,7 @@ fn adversarial_state_machine_transitions() {
     // observe D -> dispose intentional -> parity from the SAME run:
     // MUST FAIL. An intentional disposition documents the divergence; it
     // cannot turn the run into parity.
+    let exit_id = residual_id(&work, &run, "exit");
     let out = frf(
         &work,
         &[
@@ -613,7 +619,7 @@ fn adversarial_state_machine_transitions() {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "intentional",
             "--reason",
@@ -706,20 +712,9 @@ fn external_minimizer_minimal_claim_is_never_proof() {
     assert_success(&out, "external-minimizer court run");
     let run = stdout(&out);
 
-    // The exit residual routes to the declared minimizer.
-    let capture: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
-    )
-    .unwrap();
-    let residual = capture["residuals"]
-        .as_array()
-        .expect("the capture must record residuals")
-        .iter()
-        .find(|r| r.as_str().unwrap().starts_with("cli-exit-"))
-        .expect("the exit residual must exist")
-        .as_str()
-        .unwrap()
-        .to_string();
+    // The exit residual routes to the declared minimizer. Residual ids are
+    // content addresses: resolve the exit residual from the capture.
+    let residual = residual_id(&work, &run, "exit");
 
     let out = frf(&work, &["--root", ROOT, "court", "minimize", &residual]);
     assert_success(&out, "external minimize");
@@ -915,19 +910,9 @@ fn run_boundary_minimize(work: &Workdir, court: &str) -> (String, String) {
     );
     assert_success(&out, &format!("boundary court {court} run"));
     let run = stdout(&out);
-    let capture: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
-    )
-    .unwrap();
-    let residual = capture["residuals"]
-        .as_array()
-        .expect("the capture must record residuals")
-        .iter()
-        .find(|r| r.as_str().unwrap().starts_with("cli-exit-"))
-        .expect("the exit residual must exist")
-        .as_str()
-        .unwrap()
-        .to_string();
+    // The residual id is a content address: resolve the exit residual from
+    // the capture's evidence.
+    let residual = residual_id(work, &run, "exit");
     let out = frf(work, &["--root", ROOT, "court", "minimize", &residual]);
     assert_success(&out, &format!("boundary minimize {court}"));
     (residual, stdout(&out))

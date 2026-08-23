@@ -107,24 +107,37 @@ fn every_residual_verifies_against_its_parent_run() {
     }
 }
 
+/// The golden court's EXIT residual id (the exit axis's content address).
+fn exit_residual_id(work: &Workdir, ids: &[String]) -> String {
+    ids.iter()
+        .find(|id| {
+            let rec: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(work.path(&format!("{ROOT}/residuals/{id}.json"))).unwrap(),
+            )
+            .unwrap();
+            rec["axis"] == "exit"
+        })
+        .expect("the golden court has an exit residual")
+        .clone()
+}
+
 #[test]
 fn a_hand_edited_residual_is_refused() {
     let work = Workdir::new("rv-tamper");
     work.copy_canonical_tree();
     admit_reference(&work);
     let ids = golden_residuals(&work);
-    assert!(ids.contains(&"cli-exit-0001".to_string()));
+    let exit = exit_residual_id(&work, &ids);
 
     // A divergence that does not rederive from the verified sides: the
     // recorded raw projections no longer equal what the comparator derived.
-    rewrite_canonical_residual(&work, "cli-exit-0001", |v| {
+    rewrite_canonical_residual(&work, &exit, |v| {
         v["raw_candidate"] = serde_json::Value::String("999".to_string());
     });
-    let err = refusal(&store(&work), "cli-exit-0001");
-    let msg = err;
+    let err = refusal(&store(&work), &exit);
     assert!(
-        msg.contains("does not rederive") || msg.contains("hash to"),
-        "unexpected refusal: {msg}"
+        err.contains("does not rederive") || err.contains("hash to"),
+        "unexpected refusal: {err}"
     );
 }
 
@@ -134,15 +147,17 @@ fn an_undeclared_axis_is_refused() {
     work.copy_canonical_tree();
     admit_reference(&work);
     let ids = golden_residuals(&work);
-    assert!(ids.contains(&"cli-exit-0001".to_string()));
+    let exit = exit_residual_id(&work, &ids);
 
-    // Point the residual at an axis the court never declared.
-    rewrite_canonical_residual(&work, "cli-exit-0001", |v| {
+    // Point the residual at an axis the court never declared: the content
+    // address no longer rederives (the axis is part of FRF/RESIDUAL/v1), and
+    // the undeclared axis is additionally refused by the derivation walk.
+    rewrite_canonical_residual(&work, &exit, |v| {
         v["axis"] = serde_json::Value::String("dns.wire".to_string());
     });
-    let err = refusal(&store(&work), "cli-exit-0001");
+    let err = refusal(&store(&work), &exit);
     assert!(
-        err.contains("was not declared"),
+        err.contains("was not declared") || err.contains("does not rederive"),
         "unexpected refusal: {err}"
     );
 }
