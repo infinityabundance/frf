@@ -7,11 +7,16 @@
 //! to reproduce byte-for-byte: identical sides, identical residual
 //! fingerprints, no new residuals, no missing residuals.
 //!
-//! Replay is not a re-observation: it writes nothing. If it succeeds, the
-//! run's evidence is reproducible; if it fails, the failure names the
-//! dimension that drifted (corrupt object, changed environment, changed
-//! output). Original repository paths are provenance, not replay
-//! dependencies — everything a replay needs lives under `objects/`.
+//! Replay is not a re-observation: it writes no capture, no residual, no
+//! receipt — and if it succeeds, the run's evidence is reproducible. It
+//! writes ONE kind of record, and only when a declared bound fires during
+//! the re-execution: the content-addressed harness event (`harness/<id>.json`)
+//! that makes a replay refusal (or a replayed resource-limit signal) as
+//! provable as the original observation's. If the replayed observation
+//! differs, the failure names the dimension that drifted (corrupt object,
+//! changed environment, changed output). Original repository paths are
+//! provenance, not replay dependencies — everything a replay needs lives
+//! under `objects/`.
 //!
 //! Two reproduction policies, never conflated:
 //!
@@ -432,29 +437,133 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     // environment (the ambient host environment is never inherited — replay
     // reproduces the observation from the evidence, not from the host).
     let declared_environment = &capture.environment.environment;
-    let raw_reference_out = host::run_process_in(
+    // The produced-tree caps the observation was made under (v19): replay
+    // enforces the SAME recorded bounds — a produced tree that exceeded the
+    // original cap could not have been observed, and replay refuses to
+    // observe a tree it would have refused then.
+    let produced_limits = crate::produced::ProducedLimits {
+        max_files: capture
+            .capture_bounds
+            .produced_max_files
+            .parse()
+            .unwrap_or(u64::MAX),
+        max_bytes: capture
+            .capture_bounds
+            .produced_max_bytes
+            .parse()
+            .unwrap_or(u64::MAX),
+        max_file_bytes: capture
+            .capture_bounds
+            .produced_max_file_bytes
+            .parse()
+            .unwrap_or(u64::MAX),
+    };
+    // A bound that fires during REPLAY leaves the same content-addressed
+    // harness event the court would have written (the record is
+    // content-addressed, so an identical violation is the identical record —
+    // write_harness_event is idempotent). A refusal during replay is as
+    // provable as a refusal during the original observation.
+    let record_violation = |side: &str, v: &host::HarnessViolation| -> Result<()> {
+        let mut event = HarnessEvent {
+            schema_version: crate::model::SCHEMA_HARNESS_EVENT.to_string(),
+            id: String::new(),
+            event_kind: v.event_kind.to_string(),
+            side: side.to_string(),
+            target: v.target.clone(),
+            cap: v.cap.clone(),
+            observed: v.observed.clone(),
+            court: capture.court.clone(),
+            execution_profile: capture.execution_profile.clone(),
+            runner: capture.provenance.runner.frf_executable_hash.clone(),
+            detail: v.detail.clone(),
+        };
+        event.id = crate::semantics::harness_event_identity(
+            &event.event_kind,
+            &event.side,
+            &event.court,
+            &event.execution_profile,
+            &event.cap,
+            &event.observed,
+            &event.target,
+            &event.detail,
+            &event.runner,
+        )?;
+        store.write_harness_event(&event)?;
+        eprintln!(
+            "replay harness event {}: {} ({} side {}, cap {}, observed {})",
+            event.id, event.event_kind, side, event.target, event.cap, event.observed
+        );
+        Ok(())
+    };
+    let raw_reference_out = match host::run_process_in(
         &authority_image,
         &capture.arguments,
         side_cwd,
         profile,
         declared_environment,
-    )?;
+    ) {
+        Ok(out) => out,
+        Err(e) => {
+            if let Some(v) = &e.violation {
+                record_violation("reference", v)?;
+            }
+            return Err(e.into());
+        }
+    };
+    if let Some(v) = &raw_reference_out.violation {
+        record_violation("reference", v)?;
+    }
     let reference_produced = if let Some(prod) = &produce_path {
-        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
+        let files = match crate::produced::capture_produced_tree(
+            prod,
+            &staging.dir.join("reference"),
+            produced_limits,
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_violation("reference", v)?;
+                }
+                return Err(e.into());
+            }
+        };
         clear_produce(prod)?;
         Some(crate::produced::produced_side(files)?)
     } else {
         None
     };
-    let raw_candidate_out = host::run_process_in(
+    let raw_candidate_out = match host::run_process_in(
         &candidate_image,
         &capture.arguments,
         side_cwd,
         profile,
         declared_environment,
-    )?;
+    ) {
+        Ok(out) => out,
+        Err(e) => {
+            if let Some(v) = &e.violation {
+                record_violation("candidate", v)?;
+            }
+            return Err(e.into());
+        }
+    };
+    if let Some(v) = &raw_candidate_out.violation {
+        record_violation("candidate", v)?;
+    }
     let candidate_produced = if let Some(prod) = &produce_path {
-        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
+        let files = match crate::produced::capture_produced_tree(
+            prod,
+            &staging.dir.join("candidate"),
+            produced_limits,
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_violation("candidate", v)?;
+                }
+                return Err(e.into());
+            }
+        };
         clear_produce(prod)?;
         Some(crate::produced::produced_side(files)?)
     } else {

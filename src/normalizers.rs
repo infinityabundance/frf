@@ -307,5 +307,6 @@ pub fn apply_capture_normalizers(
         stdout,
         stderr,
         exit: raw_outcome.exit.clone(),
+        violation: None,
     })
 }

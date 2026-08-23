@@ -11,6 +11,52 @@
 //!   no explanation, no repair, no "who is right".
 //! - `{fixture}` substitution is literal; arguments never pass through a shell.
 
+/// Write the content-addressed harness-event evidence record for a bound the
+/// harness ENFORCED during an observation attempt (the evidentiary overflow):
+/// the side, the declared cap, the observed value, the court, the profile,
+/// and the runner. The run is still refused (fail-closed) — but the refusal
+/// is now itself provable evidence under `harness/<id>.json`. Returns the
+/// event's content address.
+fn record_harness_event(
+    store: &crate::store::Store,
+    side: &str,
+    court: &str,
+    execution_profile: &str,
+    runner_hash: &str,
+    v: &crate::host::HarnessViolation,
+) -> Result<String> {
+    let mut event = HarnessEvent {
+        schema_version: crate::model::SCHEMA_HARNESS_EVENT.to_string(),
+        id: String::new(),
+        event_kind: v.event_kind.to_string(),
+        side: side.to_string(),
+        target: v.target.clone(),
+        cap: v.cap.clone(),
+        observed: v.observed.clone(),
+        court: court.to_string(),
+        execution_profile: execution_profile.to_string(),
+        runner: runner_hash.to_string(),
+        detail: v.detail.clone(),
+    };
+    event.id = crate::semantics::harness_event_identity(
+        &event.event_kind,
+        &event.side,
+        &event.court,
+        &event.execution_profile,
+        &event.cap,
+        &event.observed,
+        &event.target,
+        &event.detail,
+        &event.runner,
+    )?;
+    store.write_harness_event(&event)?;
+    eprintln!(
+        "harness event {}: {} ({} side {}, cap {}, observed {})",
+        event.id, event.event_kind, side, event.target, event.cap, event.observed
+    );
+    Ok(event.id)
+}
+
 use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
@@ -1845,20 +1891,123 @@ pub fn run_once(
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
+    // The produced-tree caps (v19): the enforced bounds are recorded in the
+    // capture (capture_bounds) and enforced identically by replay.
+    let produced_limits = crate::produced::ProducedLimits {
+        max_files: host::produced_max_files(),
+        max_bytes: host::produced_max_bytes(),
+        max_file_bytes: host::produced_max_file_bytes(),
+    };
+    // A side run that REFUSED (stream overflow, timeout): write the
+    // content-addressed harness event — the evidentiary overflow — then
+    // propagate the refusal. A run whose observation is COMPLETE but whose
+    // side died by a resource-limit signal records the event alongside and
+    // continues; the event's content address is bound into the capture's
+    // `harness_events` (v15) so the run's bundle carries the bound-firing
+    // evidence.
+    let mut harness_events: Vec<String> = Vec::new();
     let reference_out =
-        host::run_process(&authority_image, &arguments, profile, &declared_environment)?;
+        match host::run_process(&authority_image, &arguments, profile, &declared_environment) {
+            Ok(out) => out,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_harness_event(
+                        store,
+                        "reference",
+                        &spec.id,
+                        profile.as_str(),
+                        &runner.frf_executable_hash,
+                        v,
+                    )?;
+                }
+                return Err(e.into());
+            }
+        };
+    if let Some(v) = &reference_out.violation {
+        harness_events.push(record_harness_event(
+            store,
+            "reference",
+            &spec.id,
+            profile.as_str(),
+            &runner.frf_executable_hash,
+            v,
+        )?);
+    }
     let mut reference = SideCapture::from_outcome(&reference_out);
     if let Some(prod) = &produce_path {
-        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("reference"))?;
+        let files = match crate::produced::capture_produced_tree(
+            prod,
+            &staging.dir.join("reference"),
+            produced_limits,
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_harness_event(
+                        store,
+                        "reference",
+                        &spec.id,
+                        profile.as_str(),
+                        &runner.frf_executable_hash,
+                        v,
+                    )?;
+                }
+                return Err(e.into());
+            }
+        };
         reference.produced = Some(crate::produced::produced_side(files)?);
         clear_produce(prod)?;
     }
 
     let candidate_out =
-        host::run_process(&candidate_image, &arguments, profile, &declared_environment)?;
+        match host::run_process(&candidate_image, &arguments, profile, &declared_environment) {
+            Ok(out) => out,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_harness_event(
+                        store,
+                        "candidate",
+                        &spec.id,
+                        profile.as_str(),
+                        &runner.frf_executable_hash,
+                        v,
+                    )?;
+                }
+                return Err(e.into());
+            }
+        };
+    if let Some(v) = &candidate_out.violation {
+        harness_events.push(record_harness_event(
+            store,
+            "candidate",
+            &spec.id,
+            profile.as_str(),
+            &runner.frf_executable_hash,
+            v,
+        )?);
+    }
     let mut candidate = SideCapture::from_outcome(&candidate_out);
     if let Some(prod) = &produce_path {
-        let files = crate::produced::capture_produced_tree(prod, &staging.dir.join("candidate"))?;
+        let files = match crate::produced::capture_produced_tree(
+            prod,
+            &staging.dir.join("candidate"),
+            produced_limits,
+        ) {
+            Ok(files) => files,
+            Err(e) => {
+                if let Some(v) = &e.violation {
+                    record_harness_event(
+                        store,
+                        "candidate",
+                        &spec.id,
+                        profile.as_str(),
+                        &runner.frf_executable_hash,
+                        v,
+                    )?;
+                }
+                return Err(e.into());
+            }
+        };
         candidate.produced = Some(crate::produced::produced_side(files)?);
         // The transient output directory is never evidence; the run-dir
         // copies below are.
@@ -1940,6 +2089,7 @@ pub fn run_once(
             stdout,
             stderr,
             exit: outcome.exit.clone(),
+            violation: None,
         })
     };
     let reference_compared = normalize_side("reference", &reference_out)?;
@@ -2512,6 +2662,7 @@ pub fn run_once(
         reference,
         candidate,
         residuals: residuals.iter().map(|r| r.id.clone()).collect(),
+        harness_events,
         evidence_refs,
         execution_context,
     };

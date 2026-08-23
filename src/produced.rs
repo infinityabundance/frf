@@ -21,9 +21,23 @@
 //! its content — a tree with the same files is the same tree).
 
 use crate::error::{FrfError, Result};
+use crate::host::{self, HarnessViolation, RunError};
 use crate::model::{ProducedFile, ProducedSide};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+
+/// The produced-tree overflow bounds (v19): the filesystem-tree surface's
+/// caps, enforced during the walk — a produced tree that exceeds a cap is
+/// refused exactly like a stream overflow (never truncated, never partially
+/// recorded), and the enforced caps are recorded in the capture bounds so
+/// replay enforces the same contract.
+#[derive(Debug, Clone, Copy)]
+pub struct ProducedLimits {
+    pub max_files: u64,
+    pub max_bytes: u64,
+    pub max_file_bytes: u64,
+}
 
 /// An RAII staging root for produced-file bytes: the walk copies each file's
 /// bytes here, and the run-dir copies happen from the staging after the run
@@ -57,25 +71,34 @@ impl Drop for ProducedStaging {
 
 /// Walk a produced tree, copying each file's bytes into `staging` (relative
 /// paths preserved) and returning the files (sorted by path), content
-/// hashed. Refuses symlinks, non-regular files, and escaped paths.
-pub fn capture_produced_tree(root: &Path, staging: &Path) -> Result<Vec<ProducedFile>> {
+/// hashed. Refuses symlinks, non-regular files, and escaped paths — and
+/// ENFORCES the produced-tree caps (file count, total bytes, per-file
+/// bytes): a cap exceeded is a harness violation (`produced-overflow`) the
+/// caller records as a content-addressed harness event before refusing the
+/// run.
+pub fn capture_produced_tree(
+    root: &Path,
+    staging: &Path,
+    limits: ProducedLimits,
+) -> std::result::Result<Vec<ProducedFile>, RunError> {
     let mut files: Vec<ProducedFile> = Vec::new();
     if !root.exists() {
         // A side that produces nothing writes nothing: an absent output is
         // an empty observation, not an error.
         return Ok(files);
     }
+    let mut total_bytes: u64 = 0;
     let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
     while let Some(dir) = pending.pop() {
         let entries = fs::read_dir(&dir).map_err(|e| {
-            FrfError::new(format!(
+            RunError::new(format!(
                 "cannot read the produced tree {}: {e}",
                 dir.display()
             ))
         })?;
         for entry in entries {
             let entry = entry.map_err(|e| {
-                FrfError::new(format!(
+                RunError::new(format!(
                     "cannot read the produced tree {}: {e}",
                     dir.display()
                 ))
@@ -86,13 +109,13 @@ pub fn capture_produced_tree(root: &Path, staging: &Path) -> Result<Vec<Produced
             // re-checked when the relative path is built. The root itself
             // may be absolute.
             let file_type = entry.file_type().map_err(|e| {
-                FrfError::new(format!(
+                RunError::new(format!(
                     "cannot inspect produced artifact {}: {e}",
                     path.display()
                 ))
             })?;
             if file_type.is_symlink() {
-                return Err(FrfError::new(format!(
+                return Err(RunError::new(format!(
                     "produced artifact {} is a symlink; this version refuses symlinks in produced trees",
                     path.display()
                 )));
@@ -102,13 +125,78 @@ pub fn capture_produced_tree(root: &Path, staging: &Path) -> Result<Vec<Produced
                 continue;
             }
             if !file_type.is_file() {
-                return Err(FrfError::new(format!(
+                return Err(RunError::new(format!(
                     "produced artifact {} is not a regular file; refusing to capture",
                     path.display()
                 )));
             }
-            let bytes = fs::read(&path).map_err(|e| {
-                FrfError::new(format!(
+            // The produced-file cap: read only cap+1 bytes — an oversized
+            // file is detected, never buffered (the observed size is the
+            // file's actual size, from metadata).
+            let meta = fs::metadata(&path).map_err(|e| {
+                RunError::new(format!(
+                    "cannot stat produced artifact {}: {e}",
+                    path.display()
+                ))
+            })?;
+            let observed = meta.len();
+            if observed > limits.max_file_bytes {
+                return Err(RunError {
+                    message: format!(
+                        "produced artifact {} is {} bytes, over the {} byte per-file cap; refusing to record a truncated tree",
+                        path.display(),
+                        observed,
+                        limits.max_file_bytes
+                    ),
+                    violation: Some(Box::new(HarnessViolation {
+                        event_kind: "produced-overflow",
+                        target: "produced-file-bytes".to_string(),
+                        cap: limits.max_file_bytes.to_string(),
+                        observed: observed.to_string(),
+                        detail: path.display().to_string(),
+                    })),
+                });
+            }
+            if files.len() as u64 >= limits.max_files {
+                return Err(RunError {
+                    message: format!(
+                        "the produced tree exceeds the {} file cap; refusing to record a partial tree",
+                        limits.max_files
+                    ),
+                    violation: Some(Box::new(HarnessViolation {
+                        event_kind: "produced-overflow",
+                        target: "produced-files".to_string(),
+                        cap: limits.max_files.to_string(),
+                        observed: (files.len() as u64 + 1).to_string(),
+                        detail: path.display().to_string(),
+                    })),
+                });
+            }
+            if total_bytes + observed > limits.max_bytes {
+                return Err(RunError {
+                    message: format!(
+                        "the produced tree exceeds the {} byte total cap; refusing to record a partial tree",
+                        limits.max_bytes
+                    ),
+                    violation: Some(Box::new(HarnessViolation {
+                        event_kind: "produced-overflow",
+                        target: "produced-bytes".to_string(),
+                        cap: limits.max_bytes.to_string(),
+                        observed: (total_bytes + observed).to_string(),
+                        detail: path.display().to_string(),
+                    })),
+                });
+            }
+            // Read the file bytes (bounded by the cap already checked).
+            let mut f = fs::File::open(&path).map_err(|e| {
+                RunError::new(format!(
+                    "cannot read produced artifact {}: {e}",
+                    path.display()
+                ))
+            })?;
+            let mut bytes = Vec::with_capacity(observed as usize);
+            f.read_to_end(&mut bytes).map_err(|e| {
+                RunError::new(format!(
                     "cannot read produced artifact {}: {e}",
                     path.display()
                 ))
@@ -116,7 +204,7 @@ pub fn capture_produced_tree(root: &Path, staging: &Path) -> Result<Vec<Produced
             let rel = path
                 .strip_prefix(root)
                 .map_err(|_| {
-                    FrfError::new(format!(
+                    RunError::new(format!(
                         "produced artifact {} is outside the produced root",
                         path.display()
                     ))
@@ -137,18 +225,19 @@ pub fn capture_produced_tree(root: &Path, staging: &Path) -> Result<Vec<Produced
             let staged = staging.join(&rel);
             if let Some(parent) = staged.parent() {
                 fs::create_dir_all(parent).map_err(|e| {
-                    FrfError::new(format!("cannot create {}: {e}", parent.display()))
+                    RunError::new(format!("cannot create {}: {e}", parent.display()))
                 })?;
             }
             fs::write(&staged, &bytes).map_err(|e| {
-                FrfError::new(format!(
+                RunError::new(format!(
                     "cannot stage produced artifact {}: {e}",
                     staged.display()
                 ))
             })?;
+            total_bytes += observed;
             files.push(ProducedFile {
                 path: rel,
-                sha256: crate::host::sha256_bytes(&bytes),
+                sha256: host::sha256_bytes(&bytes),
                 executable,
             });
         }
@@ -241,6 +330,16 @@ mod tests {
         dir
     }
 
+    /// Generous limits: the existing walk tests exercise the structural
+    /// rules, not the caps.
+    fn unlimited_limits() -> ProducedLimits {
+        ProducedLimits {
+            max_files: 1_000_000,
+            max_bytes: 1 << 30,
+            max_file_bytes: 1 << 30,
+        }
+    }
+
     #[test]
     fn walks_files_sorted_and_hashed() {
         let root = temp_tree("walk");
@@ -249,7 +348,7 @@ mod tests {
         fs::write(root.join("a/b/x.txt"), "hello").unwrap();
         fs::write(root.join("a/top"), "top").unwrap();
         let staging = temp_tree("walk-staging");
-        let files = capture_produced_tree(&root, &staging).unwrap();
+        let files = capture_produced_tree(&root, &staging, unlimited_limits()).unwrap();
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a/b/x.txt", "a/top", "z.txt"], "sorted by path");
         assert_eq!(files[0].sha256.len(), 64);
@@ -264,7 +363,8 @@ mod tests {
     fn absent_tree_is_an_empty_observation() {
         let root = temp_tree("absent");
         let staging = temp_tree("absent-staging");
-        let files = capture_produced_tree(&root.join("nope"), &staging).unwrap();
+        let files =
+            capture_produced_tree(&root.join("nope"), &staging, unlimited_limits()).unwrap();
         assert!(files.is_empty());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&staging);
@@ -280,7 +380,7 @@ mod tests {
             fs::set_permissions(root.join("tool.sh"), fs::Permissions::from_mode(0o755)).unwrap();
         }
         let staging = temp_tree("exec-staging");
-        let files = capture_produced_tree(&root, &staging).unwrap();
+        let files = capture_produced_tree(&root, &staging, unlimited_limits()).unwrap();
         assert_eq!(files.len(), 1);
         #[cfg(unix)]
         assert!(files[0].executable);
@@ -295,8 +395,86 @@ mod tests {
         fs::write(root.join("real.txt"), "data").unwrap();
         std::os::unix::fs::symlink("real.txt", root.join("link.txt")).unwrap();
         let staging = temp_tree("symlink-staging");
-        let err = capture_produced_tree(&root, &staging).unwrap_err();
-        assert!(err.0.contains("symlink"), "{}", err.0);
+        let err = capture_produced_tree(&root, &staging, unlimited_limits()).unwrap_err();
+        assert!(err.message.contains("symlink"), "{}", err.message);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn produced_file_count_cap_refuses_with_a_violation() {
+        let root = temp_tree("cap-files");
+        for i in 0..3 {
+            fs::write(root.join(format!("f{i}")), "x").unwrap();
+        }
+        let staging = temp_tree("cap-files-staging");
+        let err = capture_produced_tree(
+            &root,
+            &staging,
+            ProducedLimits {
+                max_files: 2,
+                max_bytes: 1 << 30,
+                max_file_bytes: 1 << 30,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("file cap"), "{}", err.message);
+        let v = err.violation.expect("a cap fire carries a violation");
+        assert_eq!(v.event_kind, "produced-overflow");
+        assert_eq!(v.target, "produced-files");
+        assert_eq!(v.cap, "2");
+        assert_eq!(v.observed, "3");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn produced_total_bytes_cap_refuses_with_a_violation() {
+        let root = temp_tree("cap-bytes");
+        fs::write(root.join("a"), "aaaa").unwrap();
+        fs::write(root.join("b"), "bbbb").unwrap();
+        let staging = temp_tree("cap-bytes-staging");
+        let err = capture_produced_tree(
+            &root,
+            &staging,
+            ProducedLimits {
+                max_files: 100,
+                max_bytes: 6,
+                max_file_bytes: 1 << 30,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("total cap"), "{}", err.message);
+        let v = err.violation.expect("a cap fire carries a violation");
+        assert_eq!(v.event_kind, "produced-overflow");
+        assert_eq!(v.target, "produced-bytes");
+        assert_eq!(v.cap, "6");
+        assert_eq!(v.observed, "8");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&staging);
+    }
+
+    #[test]
+    fn produced_file_bytes_cap_refuses_with_a_violation() {
+        let root = temp_tree("cap-file-bytes");
+        fs::write(root.join("big"), "0123456789").unwrap();
+        let staging = temp_tree("cap-file-bytes-staging");
+        let err = capture_produced_tree(
+            &root,
+            &staging,
+            ProducedLimits {
+                max_files: 100,
+                max_bytes: 1 << 30,
+                max_file_bytes: 5,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("per-file cap"), "{}", err.message);
+        let v = err.violation.expect("a cap fire carries a violation");
+        assert_eq!(v.event_kind, "produced-overflow");
+        assert_eq!(v.target, "produced-file-bytes");
+        assert_eq!(v.cap, "5");
+        assert_eq!(v.observed, "10");
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&staging);
     }

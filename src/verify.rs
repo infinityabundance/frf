@@ -194,6 +194,26 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         residuals.push(record);
     }
 
+    // v15: the recorded harness events (a bound that fired during THIS run's
+    // observation and completed as a valid side outcome — today the CPU
+    // limit's SIGXCPU). Each cited record must exist, be canonical and
+    // self-authenticating (the id rederives from its own fields), and belong
+    // to this capture's court — a capture that cites missing, corrupt, or
+    // foreign enforcement evidence is not self-consistent.
+    for id in &capture.harness_events {
+        let event = store.load_harness_event(id).map_err(|e| {
+            FrfError::new(format!(
+                "capture {run}: cited harness event {id} is missing or corrupt: {e}"
+            ))
+        })?;
+        if event.court != capture.court {
+            return Err(FrfError::new(format!(
+                "capture {run}: cited harness event {id} belongs to court {}; the capture is not self-consistent",
+                event.court
+            )));
+        }
+    }
+
     // 3. The observation + execution identities rederive from the recorded
     //    fields, and the run identity composes them.
     let (obs, exec) = capture_identities(&capture, &residuals)?;
@@ -3088,6 +3108,9 @@ mod tests {
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),
                 max_stream_bytes: "16777216".into(),
+            produced_max_files: "4096".into(),
+            produced_max_bytes: "268435456".into(),
+            produced_max_file_bytes: "16777216".into(),
                 rlimit_as_mb: "2048".into(),
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),

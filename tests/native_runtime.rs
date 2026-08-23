@@ -165,7 +165,7 @@ fn a_native_court_run_binds_the_runtime_closure_in_capture_and_receipt() {
         &fs::read_to_string(work.path(&format!("frf/receipts/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(body["schema_version"], "frf-receipt-v18");
+    assert_eq!(body["schema_version"], "frf-receipt-v19");
     assert_eq!(
         body["authority"]["native_runtime"],
         capture["authority_artifact"]["native_runtime"]

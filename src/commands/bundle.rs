@@ -688,6 +688,27 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             },
         );
 
+        // The harness events recorded during this run's observation (v15):
+        // the content-addressed bound-firing records the capture cites (today
+        // the CPU limit's SIGXCPU, which completes as a valid observation).
+        // Each is verified (canonical + self-authenticating) before it may
+        // leave the tree — a refusal's enforcement evidence is as portable
+        // as the observation it annotated.
+        for h in &cap.harness_events {
+            store.load_harness_event(h)?; // canonical + identity rederives
+            let path = store.harness_path(h)?;
+            let bytes = read(&path, "harness event")?;
+            let rel = format!("harness/{h}.json");
+            entries.insert(
+                rel.clone(),
+                ClosureEntry {
+                    rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "harness-event",
+                },
+            );
+        }
+
         // Content-addressed execution snapshots + instrumentation: walk the
         // capture's typed EVIDENCE REFERENCES (the generic graph traversal),
         // so adding a comparator implementation — or later a witness,

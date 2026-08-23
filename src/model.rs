@@ -70,7 +70,7 @@ pub const SCHEMA_EXECUTION_CONTEXT: &str = "frf-execution-context-v1";
 /// snapshotted and content-addressed at observation time (FRF/EXECUTION-
 /// CONTEXT/v1) — a declared dependency is bound to the exact bytes, never
 /// assumed.
-pub const SCHEMA_CAPTURE: &str = "frf-capture-v13";
+pub const SCHEMA_CAPTURE: &str = "frf-capture-v15";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
 /// Disposition event schema. v2 makes events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
@@ -113,8 +113,13 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// the child executables, runtime libraries, and data dependencies the
 /// side's behavior depends on beyond its own bytes, snapshotted and
 /// content-addressed at observation time — the transitive execution
-/// context, declared (never assumed) and bound to the exact bytes.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v18";
+/// context, declared (never assumed) and bound to the exact bytes. v19: the
+/// capture bounds carry the PRODUCED-TREE CAPS (the filesystem-tree
+/// surface's overflow bounds: produced_max_files / produced_max_bytes /
+/// produced_max_file_bytes) — a produced tree that exceeds a cap is refused
+/// like a stream overflow, never truncated, and the enforced caps are part
+/// of the recorded harness contract.
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v19";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -278,6 +283,13 @@ pub const SCHEMA_RUNTIME_CLOSURE: &str = "frf-runtime-closure-v1";
 /// (whose bounds are per-process setrlimit limits + the per-real-UID
 /// RLIMIT_NPROC layer, not an aggregate envelope), so a v15-shaped document
 /// is a valid v16 document.
+///
+/// v19: the PRODUCED-TREE caps — the filesystem-tree surface's overflow
+/// bounds (per side): the maximum produced file count, the maximum total
+/// produced bytes, and the maximum bytes of any one produced file. A side
+/// whose produced tree exceeds a cap is refused exactly like a stream
+/// overflow (never truncated), and the enforced caps are recorded here so
+/// replay enforces the same bounds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CaptureBounds {
@@ -286,6 +298,12 @@ pub struct CaptureBounds {
     /// Maximum bytes retained per output stream; a side that exceeds it is
     /// killed and the run REFUSED (truncated output is never evidence).
     pub max_stream_bytes: String,
+    /// v19: the maximum number of files a side's produced tree may contain.
+    pub produced_max_files: String,
+    /// v19: the maximum TOTAL bytes of a side's produced tree.
+    pub produced_max_bytes: String,
+    /// v19: the maximum bytes of any ONE produced file.
+    pub produced_max_file_bytes: String,
     /// Address-space limit of each side, in MiB (RLIMIT_AS).
     pub rlimit_as_mb: String,
     /// CPU-time limit of each side, in seconds (RLIMIT_CPU).
@@ -319,6 +337,9 @@ pub struct CaptureBounds {
 /// the harness enforced an unbounded or absurd contract.
 pub const CAPTURE_BOUND_MAX_TIMEOUT_MS: u64 = 3_600_000; // 1 hour
 pub const CAPTURE_BOUND_MAX_STREAM_BYTES: u64 = 1 << 30; // 1 GiB
+pub const CAPTURE_BOUND_MAX_PRODUCED_FILES: u64 = 65_536;
+pub const CAPTURE_BOUND_MAX_PRODUCED_BYTES: u64 = 1 << 36; // 64 GiB
+pub const CAPTURE_BOUND_MAX_PRODUCED_FILE_BYTES: u64 = 1 << 30; // 1 GiB
 pub const CAPTURE_BOUND_MAX_RLIMIT_AS_MB: u64 = 65_536; // 64 GiB
 pub const CAPTURE_BOUND_MAX_RLIMIT_CPU_S: u64 = 86_400; // 1 day
 pub const CAPTURE_BOUND_MAX_RLIMIT_NOFILE: u64 = 1_048_576;
@@ -339,6 +360,21 @@ pub fn validate_capture_bounds(b: &CaptureBounds) -> crate::error::Result<()> {
             "max_stream_bytes",
             &b.max_stream_bytes,
             CAPTURE_BOUND_MAX_STREAM_BYTES,
+        ),
+        (
+            "produced_max_files",
+            &b.produced_max_files,
+            CAPTURE_BOUND_MAX_PRODUCED_FILES,
+        ),
+        (
+            "produced_max_bytes",
+            &b.produced_max_bytes,
+            CAPTURE_BOUND_MAX_PRODUCED_BYTES,
+        ),
+        (
+            "produced_max_file_bytes",
+            &b.produced_max_file_bytes,
+            CAPTURE_BOUND_MAX_PRODUCED_FILE_BYTES,
         ),
         (
             "rlimit_as_mb",
@@ -1980,6 +2016,16 @@ pub struct CaptureManifest {
     pub reference: SideCapture,
     pub candidate: SideCapture,
     pub residuals: Vec<String>,
+    /// The harness events recorded during THIS run's observation (v15): the
+    /// content addresses of the `harness/<id>.json` records written when a
+    /// declared bound fired during a side's run — today the resource-limit
+    /// signal (SIGXCPU — the CPU bound's declared outcome), which completes
+    /// as a valid observation. A bound that REFUSES the run (stream
+    /// overflow, timeout, produced overflow) leaves no capture to bind to;
+    /// those events are court-scoped refusal evidence, named only by the
+    /// refusal message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harness_events: Vec<String>,
     /// The run's outgoing evidence references: the authority, candidate, and
     /// fixture objects plus every external comparator implementation object.
     /// The bundle closure walks these (the generic graph traversal); a
@@ -2284,6 +2330,49 @@ pub struct ExecutionContextClosure {
     pub cid: String,
     /// Sorted by path.
     pub artifacts: Vec<ExecutionContextArtifact>,
+}
+
+/// The HARNESS-EVENT schema: an evidence record that the harness ENFORCED a
+/// declared bound during an observation attempt — a stream overflow, a
+/// timeout, a resource-limit signal, or a produced-tree overflow. The run is
+/// still REFUSED (fail-closed, never truncated), but the refusal is now
+/// itself provable: a content-addressed, immutable record under
+/// `harness/<id>.json` that future claims and reports can cite. Written when
+/// a bound fires during a court run attempt, with the side, the declared
+/// cap, and the observed value.
+pub const SCHEMA_HARNESS_EVENT: &str = "frf-harness-event-v1";
+
+/// One harness-enforcement evidence record (FRF/HARNESS-EVENT/v1). The id is
+/// the content address over the event's own fields; verification rederives
+/// it before the record may be consumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HarnessEvent {
+    pub schema_version: String,
+    /// Content address: `FRF/HARNESS-EVENT/v1` over the document minus the
+    /// id.
+    pub id: String,
+    /// `stream-overflow` | `timeout` | `rlimit` | `produced-overflow`.
+    pub event_kind: String,
+    /// The executed side: `reference` | `candidate` (the court sides; an
+    /// extension program's violation refuses its own invocation).
+    pub side: String,
+    /// The bound that fired: `stdout` | `stderr` | `wall` | `cpu` |
+    /// `produced-files` | `produced-bytes` | `produced-file-bytes`.
+    pub target: String,
+    /// The declared cap, as enforced (the profile's value or the override in
+    /// force).
+    pub cap: String,
+    /// The observed value that exceeded the cap.
+    pub observed: String,
+    /// The court whose run attempt enforced the bound.
+    pub court: String,
+    /// The execution profile the attempt ran under.
+    pub execution_profile: String,
+    /// The runner executable hash that enforced the bound.
+    pub runner: String,
+    /// Free-form detail (e.g. the terminating signal).
+    pub detail: String,
 }
 
 /// One component of a native runtime closure: a loaded executable or dynamic

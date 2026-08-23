@@ -14,11 +14,15 @@ mod common;
 use common::*;
 
 use std::fs;
+use std::path::Path;
 
 /// The capture bound values the reference profile applies by default.
 const DEFAULT_BOUNDS: &[(&str, &str)] = &[
     ("timeout_ms", "60000"),
     ("max_stream_bytes", "16777216"),
+    ("produced_max_files", "4096"),
+    ("produced_max_bytes", "268435456"),
+    ("produced_max_file_bytes", "16777216"),
     ("rlimit_as_mb", "2048"),
     ("rlimit_cpu_s", "30"),
     ("rlimit_nofile", "1024"),
@@ -66,7 +70,7 @@ fn the_receipt_carries_the_profile_and_the_bounds_that_applied() {
     let capture_bounds: serde_json::Value =
         serde_json::to_value(&capture["capture_bounds"]).unwrap();
     assert_eq!(body["capture_bounds"], capture_bounds);
-    assert_eq!(body["schema_version"], "frf-receipt-v18");
+    assert_eq!(body["schema_version"], "frf-receipt-v19");
 
     // Replay consumes the receipt through the same verified loader, which
     // enforces that the receipt's profile/bounds equal the capture's.
@@ -227,7 +231,7 @@ fn the_v2_profile_records_its_cgroup_envelope_in_capture_and_receipt() {
         body["capture_bounds"],
         serde_json::to_value(&capture["capture_bounds"]).unwrap()
     );
-    assert_eq!(body["schema_version"], "frf-receipt-v18");
+    assert_eq!(body["schema_version"], "frf-receipt-v19");
 
     // Exact replay re-executes under the SAME recorded profile and envelope
     // (the fake root stands in for the delegated subtree).
@@ -320,6 +324,50 @@ fn a_side_exceeding_the_stream_cap_refuses_the_run() {
         stdout(&out)
     );
 
+    // The evidentiary overflow (v19): the refusal is itself evidence — a
+    // content-addressed harness event under harness/<id>.json records that
+    // the declared 1024-byte stream cap was ENFORCED, with the side, the
+    // target, and the observed size. Its id rederives from its own fields.
+    let harness_dir = work.path(&format!("{ROOT}/harness"));
+    let mut event_ids: Vec<String> = std::fs::read_dir(&harness_dir)
+        .expect("the refused run must write harness events")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".json"))
+        .collect();
+    event_ids.sort();
+    assert!(
+        !event_ids.is_empty(),
+        "a stream overflow must write a harness event"
+    );
+    let event: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(harness_dir.join(&event_ids[0])).unwrap())
+            .unwrap();
+    assert_eq!(event["schema_version"], "frf-harness-event-v1");
+    assert_eq!(event["event_kind"], "stream-overflow");
+    assert_eq!(
+        event["side"], "candidate",
+        "the overflowing side is recorded"
+    );
+    assert_eq!(event["target"], "stdout");
+    assert_eq!(event["cap"], "1024", "the cap as enforced");
+    assert!(
+        event["observed"].as_str().unwrap().parse::<u64>().unwrap() > 1024,
+        "the observed size must exceed the cap"
+    );
+    assert_eq!(event["court"], "cli-malformed-input");
+    assert_eq!(event["execution_profile"], "frf-exec-linux-v1");
+    assert_eq!(event["id"].as_str().unwrap().len(), 64);
+    // The record is immutable + content-addressed: it lives at its content
+    // address under harness/<id>.json.
+    let event_id = event["id"].as_str().unwrap().to_string();
+    assert!(work
+        .path(&format!("{ROOT}/harness/{event_id}.json"))
+        .is_file());
+    assert!(work
+        .path(&format!("{ROOT}/harness/{event_id}.json"))
+        .is_file());
+
     // And the court legitimately runs again once the side is within bounds.
     let out = frf_env(
         &work,
@@ -328,4 +376,180 @@ fn a_side_exceeding_the_stream_cap_refuses_the_run() {
     );
     assert_success(&out, "court run within bounds");
     assert!(stdout(&out).starts_with("run-cli-malformed-input-"));
+}
+
+/// v19 — a produced tree that exceeds a cap is refused exactly like a stream
+/// overflow (never truncated, never partially recorded), and the refusal
+/// writes the content-addressed produced-overflow harness event.
+#[test]
+fn a_produced_tree_over_the_cap_refuses_the_run_and_records_the_event() {
+    let work = Workdir::new("produced-overflow");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // The candidate writes far more produced files than the tiny cap allows.
+    // Like the treegen tools, it parses `--out` and creates the output
+    // directory itself (the harness clears the produce path between sides).
+    let flood = "#!/bin/sh\nspec=\"\"; out=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --spec) spec=\"$2\"; shift 2 ;;\n    --out) out=\"$2\"; shift 2 ;;\n    *) shift ;;&\n  esac\ndone\nmkdir -p \"$out\"\nfor i in $(seq 1 200); do echo x > \"$out/out-$i.txt\"; done\nexit 0\n";
+    // The fs-tree-build court's candidate is treegen-cand.sh, not the CLI
+    // candidate.
+    let cand = work.path("golden/treegen-cand.sh");
+    fs::write(&cand, flood).unwrap();
+    set_exec(&cand);
+    // The fs-tree-build court declares produce (the sides write to {output});
+    // copy its manifest + fixture into the workdir.
+    let src_manifest =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("frf/courts/fs-tree-build/manifest.yaml");
+    let src_fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("frf/courts/fs-tree-build/fixtures/tree-spec.conf");
+    let dst_manifest = work.path("frf/courts/fs-tree-build/manifest.yaml");
+    fs::create_dir_all(dst_manifest.parent().unwrap()).unwrap();
+    fs::copy(&src_manifest, &dst_manifest).unwrap();
+    let dst_fixture = work.path("frf/courts/fs-tree-build/fixtures/tree-spec.conf");
+    fs::create_dir_all(dst_fixture.parent().unwrap()).unwrap();
+    fs::copy(&src_fixture, &dst_fixture).unwrap();
+    // The tree-build court's authority: the treegen reference.
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "authority",
+            "admit",
+            "golden/treegen-ref.sh",
+            "--name",
+            "treegen-ref",
+            "--version",
+            "1.0",
+        ],
+    );
+    assert_success(&out, "treegen authority admit");
+
+    let out = frf_env(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/fs-tree-build/manifest.yaml",
+        ],
+        // The treegen reference produces ~5 files; the flood candidate
+        // produces 200. A 50-file cap refuses the candidate's tree.
+        &[("FRF_EXEC_PRODUCED_MAX_FILES", "50")],
+    );
+    assert!(
+        !out.status.success(),
+        "a produced tree over the cap must refuse the court"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("file cap"),
+        "the refusal must name the produced-file cap: {err}"
+    );
+    // The produced-overflow harness event was written.
+    let harness_dir = work.path(&format!("{ROOT}/harness"));
+    let mut event_ids: Vec<String> = std::fs::read_dir(&harness_dir)
+        .expect("the refused run must write harness events")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".json"))
+        .collect();
+    event_ids.sort();
+    let event: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(harness_dir.join(&event_ids[0])).unwrap())
+            .unwrap();
+    assert_eq!(event["event_kind"], "produced-overflow");
+    assert_eq!(event["target"], "produced-files");
+    assert_eq!(event["cap"], "50");
+    assert!(
+        event["observed"].as_str().unwrap().parse::<u64>().unwrap() > 50,
+        "the observed file count must exceed the cap"
+    );
+    assert_eq!(event["side"], "candidate");
+}
+
+/// v19 — the RESOURCE-LIMIT path is the design's key nuance: a side that
+/// dies by a declared bound's signal (the CPU limit's SIGXCPU) is a COMPLETE
+/// observation, not a refusal. The run continues, and the harness event is
+/// recorded ALONGSIDE — and bound into the capture's `harness_events` (v15),
+/// so the run's bundle carries the bound-firing evidence.
+#[test]
+fn a_cpu_limit_signal_records_the_event_without_refusing_the_run() {
+    let work = Workdir::new("rlimit-event");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    // The candidate burns CPU; with a 1-second CPU bound it dies by the
+    // profile's deterministic signal outcome before the wall-clock timeout.
+    work.write_candidate("#!/bin/sh\nwhile :; do :; done\n");
+
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST],
+        &[("FRF_EXEC_RLIMIT_CPU_S", "1")],
+    );
+    assert_success(&out, "a resource-limit signal must not refuse the run");
+    let run = stdout(&out);
+    assert!(
+        run.starts_with("run-cli-malformed-input-"),
+        "the run completes with an id: {run}"
+    );
+
+    // The capture binds the harness event (v15) — the run's evidence graph
+    // points at the record that explains the side's signal exit.
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(capture["schema_version"], "frf-capture-v15");
+    let cited: Vec<String> = capture["harness_events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(cited.len(), 1, "exactly one bound fired: {cited:?}");
+    let exit = capture["candidate"]["exit"].as_str().unwrap().to_string();
+    assert!(
+        exit.starts_with("signal("),
+        "the candidate must have died by the CPU limit's signal, got {exit}"
+    );
+
+    // The event itself: content-addressed (lives at its id), canonical,
+    // and its id rederives from its own fields (the store refuses anything
+    // else).
+    let event_path = work.path(&format!("{ROOT}/harness/{}.json", cited[0]));
+    assert!(
+        event_path.is_file(),
+        "the event lives at its content address"
+    );
+    let event: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&event_path).unwrap()).unwrap();
+    assert_eq!(event["schema_version"], "frf-harness-event-v1");
+    assert_eq!(event["event_kind"], "rlimit");
+    assert_eq!(event["target"], "cpu");
+    assert_eq!(event["side"], "candidate");
+    assert_eq!(event["court"], "cli-malformed-input");
+    assert_eq!(event["execution_profile"], "frf-exec-linux-v1");
+    assert_eq!(event["cap"], "1");
+    assert_eq!(event["observed"], exit);
+    assert!(event["runner"].as_str().unwrap().len() == 64);
+    assert_eq!(event["id"].as_str().unwrap(), cited[0]);
+
+    // The receipt over the run carries the capture, which cites the event:
+    // the bound-firing evidence is portable with the observation. Export the
+    // receipt's closure to a directory bundle and prove the event travels.
+    let receipt = receipt_emit(&work, &run);
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "bundle", "export", &receipt, "--output", "b/",
+        ],
+    );
+    assert_success(&out, "bundle export with the harness event");
+    assert!(
+        work.path(&format!("b/harness/{}.json", cited[0])).is_file(),
+        "the bundle must carry the harness event"
+    );
+    let out = frf(&work, &["--root", ROOT, "bundle", "verify", "b/"]);
+    assert_success(&out, "bundle verify with the harness event");
 }

@@ -35,6 +35,14 @@ court:
 - The walk refuses symlinks (a side cannot smuggle a link outside its
   output), non-regular files, and escaped paths. Directories are not
   recorded: a tree with the same files is the same tree.
+- The walk ENFORCES the produced-tree caps (v19): `produced_max_files`,
+  `produced_max_bytes`, `produced_max_file_bytes` — the caps recorded in
+  the capture bounds. A produced tree that exceeds a cap is refused exactly
+  like a stream overflow (never truncated, never partially recorded), and
+  the enforcement writes a content-addressed `produced-overflow` harness
+  event (`harness/<id>.json`) naming the side, the target
+  (`produced-files` | `produced-bytes` | `produced-file-bytes`), the cap as
+  enforced, and the observed value.
 
 ## The observation
 

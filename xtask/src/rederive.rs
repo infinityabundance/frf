@@ -424,6 +424,9 @@ pub fn execution_identity(cap: &Value) -> String {
         "capture_bounds": {
             "timeout_ms": s(&bounds["timeout_ms"]),
             "max_stream_bytes": s(&bounds["max_stream_bytes"]),
+            "produced_max_files": s(&bounds["produced_max_files"]),
+            "produced_max_bytes": s(&bounds["produced_max_bytes"]),
+            "produced_max_file_bytes": s(&bounds["produced_max_file_bytes"]),
             "rlimit_as_mb": s(&bounds["rlimit_as_mb"]),
             "rlimit_cpu_s": s(&bounds["rlimit_cpu_s"]),
             "rlimit_nofile": s(&bounds["rlimit_nofile"]),

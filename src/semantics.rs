@@ -63,6 +63,37 @@ pub fn fixture_identity(
     hash_preimage("FRF/FIXTURE/v1", &doc)
 }
 
+#[allow(clippy::too_many_arguments)] // one argument per preimage field; the doc is the protocol shape
+/// The harness-event identity: `FRF/HARNESS-EVENT/v1` over the event's own
+/// fields (minus the id) — the same formula any implementation rederives
+/// when verifying a harness record. The RUNNER is part of the preimage: the
+/// executable that enforced the bound is part of the machinery that produced
+/// the refusal, exactly as the execution identity commits it.
+pub fn harness_event_identity(
+    event_kind: &str,
+    side: &str,
+    court: &str,
+    execution_profile: &str,
+    cap: &str,
+    observed: &str,
+    target: &str,
+    detail: &str,
+    runner: &str,
+) -> Result<String> {
+    let doc = json!({
+        "event_kind": event_kind,
+        "side": side,
+        "court": court,
+        "execution_profile": execution_profile,
+        "cap": cap,
+        "observed": observed,
+        "target": target,
+        "detail": detail,
+        "runner": runner,
+    });
+    hash_preimage("FRF/HARNESS-EVENT/v1", &doc)
+}
+
 /// The execution-context closure identity: `FRF/EXECUTION-CONTEXT/v1` over
 /// the canonical document minus the cid (the artifacts SORTED BY PATH, so
 /// the closure is a deterministic function of the declared SET).
@@ -487,6 +518,9 @@ pub fn execution_identity(p: &RunPreimage) -> Result<String> {
         "capture_bounds": {
             "timeout_ms": b.timeout_ms,
             "max_stream_bytes": b.max_stream_bytes,
+            "produced_max_files": b.produced_max_files,
+            "produced_max_bytes": b.produced_max_bytes,
+            "produced_max_file_bytes": b.produced_max_file_bytes,
             "rlimit_as_mb": b.rlimit_as_mb,
             "rlimit_cpu_s": b.rlimit_cpu_s,
             "rlimit_nofile": b.rlimit_nofile,
@@ -1464,6 +1498,77 @@ mod tests {
     }
 
     #[test]
+    fn harness_event_identity_is_deterministic_and_domain_separated() {
+        let a = harness_event_identity(
+            "stream-overflow",
+            "reference",
+            "c",
+            "frf-exec-linux-v1",
+            "1024",
+            "2048",
+            "stdout",
+            "",
+            "r".repeat(64).as_str(),
+        )
+        .unwrap();
+        let b = harness_event_identity(
+            "stream-overflow",
+            "reference",
+            "c",
+            "frf-exec-linux-v1",
+            "1024",
+            "2048",
+            "stdout",
+            "",
+            "r".repeat(64).as_str(),
+        )
+        .unwrap();
+        assert_eq!(a, b, "identical violations share one identity");
+        let other_side = harness_event_identity(
+            "stream-overflow",
+            "candidate",
+            "c",
+            "frf-exec-linux-v1",
+            "1024",
+            "2048",
+            "stdout",
+            "",
+            "r".repeat(64).as_str(),
+        )
+        .unwrap();
+        assert_ne!(a, other_side, "the side is part of the identity");
+        let other_kind = harness_event_identity(
+            "timeout",
+            "reference",
+            "c",
+            "frf-exec-linux-v1",
+            "1024",
+            "2048",
+            "stdout",
+            "",
+            "r".repeat(64).as_str(),
+        )
+        .unwrap();
+        assert_ne!(a, other_kind, "the kind is part of the identity");
+        let other_runner = harness_event_identity(
+            "stream-overflow",
+            "reference",
+            "c",
+            "frf-exec-linux-v1",
+            "1024",
+            "2048",
+            "stdout",
+            "",
+            "s".repeat(64).as_str(),
+        )
+        .unwrap();
+        assert_ne!(
+            a, other_runner,
+            "the enforcing runner is part of the identity"
+        );
+    }
+
+    #[test]
     fn fixture_identity_binds_the_exact_bytes_not_the_label() {
         // The claim-scope aliasing fix: two different files that share a
         // fixture id are DIFFERENT exact inputs, and renaming an input
@@ -1555,6 +1660,9 @@ mod tests {
         let bounds = |timeout: &str, cgroup: Option<&str>| CaptureBounds {
             timeout_ms: timeout.into(),
             max_stream_bytes: "16777216".into(),
+            produced_max_files: "4096".into(),
+            produced_max_bytes: "268435456".into(),
+            produced_max_file_bytes: "16777216".into(),
             rlimit_as_mb: "2048".into(),
             rlimit_cpu_s: "30".into(),
             rlimit_nofile: "1024".into(),
@@ -1697,6 +1805,9 @@ mod tests {
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),
                 max_stream_bytes: "16777216".into(),
+                produced_max_files: "4096".into(),
+                produced_max_bytes: "268435456".into(),
+                produced_max_file_bytes: "16777216".into(),
                 rlimit_as_mb: "2048".into(),
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),
@@ -1734,6 +1845,7 @@ mod tests {
                 stdout_bytes: vec![],
             },
             residuals: vec![],
+            harness_events: vec![],
             evidence_refs: vec![],
             execution_context: None,
         };

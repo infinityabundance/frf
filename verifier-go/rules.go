@@ -125,7 +125,7 @@ var tokenKeys = []string{"residual_id", "token", "next_court", "blocks_claims"}
 var endoductionKeys = []string{"schema_version", "tokens"}
 var claimKeys = []string{"positive", "non_claims", "blocked_by_open_residuals"}
 var replayKeys = []string{"program", "evidence_root", "argv", "expected_run_identity"}
-var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"}
+var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "produced_max_files", "produced_max_bytes", "produced_max_file_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"}
 var executionContextKeys = []string{"schema_version", "cid", "artifacts"}
 var executionContextArtifactKeys = []string{"path", "role", "sha256"}
 var executionContextRoles = []string{"child-executable", "runtime-library", "data"}
@@ -142,8 +142,8 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v18" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v18", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v19" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v19", str(o, "schema_version")))
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
@@ -371,8 +371,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v18" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v18", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v19" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v19", str(o, "schema_version")))
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -655,7 +655,7 @@ func semanticViolations(rec jcs.Value) []string {
 		push(&v, fmt.Sprintf("invalid execution_profile identifier %v", str(o, "execution_profile")))
 	}
 	bounds := objKeys(o, "capture_bounds")
-	for _, what := range []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc"} {
+	for _, what := range []string{"timeout_ms", "max_stream_bytes", "produced_max_files", "produced_max_bytes", "produced_max_file_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc"} {
 		s := str(bounds, what)
 		if s == "" {
 			push(&v, fmt.Sprintf("capture bound %s missing", what))

@@ -706,8 +706,8 @@ func executionIdentity(cap *jcs.Object) (string, error) {
 		return out
 	}
 	cb := &jcs.Object{
-		Keys:   []string{"timeout_ms", "max_stream_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"},
-		Values: []jcs.Value{str(bounds, "timeout_ms"), str(bounds, "max_stream_bytes"), str(bounds, "rlimit_as_mb"), str(bounds, "rlimit_cpu_s"), str(bounds, "rlimit_nofile"), str(bounds, "rlimit_nproc"), recVal(bounds, "cgroup_pids_max"), recVal(bounds, "cgroup_memory_max"), recVal(bounds, "cgroup_cpu_max")},
+		Keys:   []string{"timeout_ms", "max_stream_bytes", "produced_max_files", "produced_max_bytes", "produced_max_file_bytes", "rlimit_as_mb", "rlimit_cpu_s", "rlimit_nofile", "rlimit_nproc", "cgroup_pids_max", "cgroup_memory_max", "cgroup_cpu_max"},
+		Values: []jcs.Value{str(bounds, "timeout_ms"), str(bounds, "max_stream_bytes"), str(bounds, "produced_max_files"), str(bounds, "produced_max_bytes"), str(bounds, "produced_max_file_bytes"), str(bounds, "rlimit_as_mb"), str(bounds, "rlimit_cpu_s"), str(bounds, "rlimit_nofile"), str(bounds, "rlimit_nproc"), recVal(bounds, "cgroup_pids_max"), recVal(bounds, "cgroup_memory_max"), recVal(bounds, "cgroup_cpu_max")},
 	}
 	doc := &jcs.Object{
 		Keys: []string{"execution_profile", "capture_bounds", "runner_hash", "authority_interpreter", "candidate_interpreter", "comparator_implementations", "normalizer_implementations", "adapter_implementations", "minimizer_implementations"},

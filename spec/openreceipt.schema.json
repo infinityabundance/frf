@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/infinityabundance/frf/blob/main/spec/openreceipt.schema.json",
   "title": "OpenReceipt",
-  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v18). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance). v14 records the capture-adapter relations that defined the observations delivered to externally served axes (adapter_semantics) — the adapter extraction scheme is part of the court's question, so it enters the court semantic identity (FRF/COURT/v2). v16 records the cgroup v2 per-side aggregate envelope (cgroup_pids_max / cgroup_memory_max / cgroup_cpu_max) when the observation ran under frf-exec-linux-v2 — the fields are ABSENT under the reference profile frf-exec-linux-v1, so a v15-shaped capture_bounds is a valid v16 document. v18 records the court's DECLARED execution-context closure (execution_context, present exactly when the court declared one): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time (FRF/EXECUTION-CONTEXT/v1) — a DECLARED closure, never a measured file-access trace, so high-assurance means the declared context is bound, not that every file read was captured.",
+  "description": "The Forensic Residual Framework OpenReceipt (frf-receipt-v19). The body is serialized as canonical JSON (RFC 8785): keys sorted by UTF-16 code units, no whitespace, exact escaping. The receipt identity is the full SHA-256 of the canonical bytes. An OpenReceipt is immutable evidence: runner and comparator identities, the environment, the execution profile and capture bounds, and the artifacts are copied from the capture at observation time, never reconstructed, and each residual binds the exact content-addressed disposition EVENT (disposition_event_id) that supplied its disposition. Observable axes and residual kinds are open protocol identifiers (any lowercase identifier; the built-ins are exit/stderr/stdout and exit/text); an externally served observable binds the exact comparator request/result records that produced its verdict. v13 records the normalizer relations applied to the compared streams (normalizer_semantics) and the normalizer, capture-adapter, and minimizer implementations the court bound at observation time (provenance). v14 records the capture-adapter relations that defined the observations delivered to externally served axes (adapter_semantics) — the adapter extraction scheme is part of the court's question, so it enters the court semantic identity (FRF/COURT/v2). v16 records the cgroup v2 per-side aggregate envelope (cgroup_pids_max / cgroup_memory_max / cgroup_cpu_max) when the observation ran under frf-exec-linux-v2 — the fields are ABSENT under the reference profile frf-exec-linux-v1, so a v15-shaped capture_bounds is a valid v16 document. v18 records the court's DECLARED execution-context closure (execution_context, present exactly when the court declared one): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time (FRF/EXECUTION-CONTEXT/v1) — a DECLARED closure, never a measured file-access trace, so high-assurance means the declared context is bound, not that every file read was captured. v19 records the PRODUCED-TREE CAPS in the capture bounds (produced_max_files / produced_max_bytes / produced_max_file_bytes): the filesystem-tree surface's overflow bounds — a produced tree that exceeds a cap is refused exactly like a stream overflow (never truncated), and replay enforces the same recorded bounds.",
   "type": "object",
   "required": [
     "schema_version",
@@ -27,7 +27,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v18"
+      "const": "frf-receipt-v19"
     },
     "run": {
       "type": "string"
@@ -311,6 +311,9 @@
       "required": [
         "timeout_ms",
         "max_stream_bytes",
+        "produced_max_files",
+        "produced_max_bytes",
+        "produced_max_file_bytes",
         "rlimit_as_mb",
         "rlimit_cpu_s",
         "rlimit_nofile",
@@ -322,6 +325,15 @@
           "type": "string"
         },
         "max_stream_bytes": {
+          "type": "string"
+        },
+        "produced_max_files": {
+          "type": "string"
+        },
+        "produced_max_bytes": {
+          "type": "string"
+        },
+        "produced_max_file_bytes": {
           "type": "string"
         },
         "rlimit_as_mb": {

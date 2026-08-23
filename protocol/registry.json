@@ -71,9 +71,16 @@
     },
     {
       "id": "execution",
-      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed)",
-      "schema": "frf-capture-v13",
+      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed). v15: the capture binds the harness events recorded during the run's observation (the bound-firing records that completed as valid side outcomes)",
+      "schema": "frf-capture-v15",
       "identity": "FRF/RUN/v2",
+      "status": "active"
+    },
+    {
+      "id": "harness-event",
+      "meaning": "Evidentiary overflow record: a declared bound the harness ENFORCED during an observation attempt (stream-overflow | timeout | rlimit | produced-overflow), content-addressed under harness/<id>.json — the run is still refused (fail-closed, never truncated), but the refusal is itself provable evidence. A bound that refuses the run (stream/timeout/produced overflow) leaves no capture to bind to: those events are court-scoped refusal evidence, named by the refusal message; a bound that completes as a valid side outcome (the CPU limit's SIGXCPU) is cited by the run's capture (frf-capture-v15) and travels with the run's bundle",
+      "schema": "frf-harness-event-v1",
+      "identity": "FRF/HARNESS-EVENT/v1",
       "status": "active"
     },
     {
@@ -193,8 +200,8 @@
     },
     {
       "id": "receipt",
-      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time)",
-      "schema": "frf-receipt-v18",
+      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds)",
+      "schema": "frf-receipt-v19",
       "status": "active"
     },
     {
@@ -306,6 +313,11 @@
     {
       "domain": "FRF/EXECUTION-CONTEXT/v1",
       "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) — the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/HARNESS-EVENT/v1",
+      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash — the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
       "status": "active"
     },
     {
@@ -499,12 +511,24 @@
       "status": "active"
     },
     {
-      "id": "frf-capture-v13",
+      "id": "frf-capture-v15",
       "status": "active"
+    },
+    {
+      "id": "frf-capture-v14",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-capture-v13",
+      "status": "superseded"
     },
     {
       "id": "frf-capture-v12",
       "status": "superseded"
+    },
+    {
+      "id": "frf-harness-event-v1",
+      "status": "active"
     },
     {
       "id": "frf-execution-context-v1",
@@ -523,8 +547,12 @@
       "status": "active"
     },
     {
-      "id": "frf-receipt-v18",
+      "id": "frf-receipt-v19",
       "status": "active"
+    },
+    {
+      "id": "frf-receipt-v18",
+      "status": "superseded"
     },
     {
       "id": "frf-receipt-v17",

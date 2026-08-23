@@ -106,6 +106,7 @@ impl Store {
             "claims",
             "witnesses",
             "independence",
+            "harness",
         ] {
             fs::create_dir_all(self.root.join(dir)).map_err(|e| {
                 FrfError::new(format!(
@@ -940,6 +941,87 @@ impl Store {
     pub fn witness_dir(&self, id: &str) -> Result<PathBuf> {
         validate_id("witness statement", id)?;
         Ok(self.root.join("witnesses").join(id))
+    }
+
+    /// `harness/<id>.json` — the content-addressed harness-event evidence
+    /// record (the evidentiary overflow: a declared bound the harness
+    /// ENFORCED during an observation attempt).
+    pub fn harness_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("harness event", id)?;
+        Ok(self.root.join("harness").join(format!("{id}.json")))
+    }
+
+    /// Write a harness event: content-addressed (`FRF/HARNESS-EVENT/v1` over
+    /// the event's own fields), canonical JSON, write-once — an existing
+    /// record with the same id must be byte-identical (idempotent: the same
+    /// bound can fire in a replay, and the same refusal is the same record).
+    pub fn write_harness_event(&self, event: &HarnessEvent) -> Result<()> {
+        let expected = crate::semantics::harness_event_identity(
+            &event.event_kind,
+            &event.side,
+            &event.court,
+            &event.execution_profile,
+            &event.cap,
+            &event.observed,
+            &event.target,
+            &event.detail,
+            &event.runner,
+        )?;
+        if expected != event.id {
+            return Err(FrfError::new(format!(
+                "harness event id mismatch: the record claims {} but its fields hash to {expected}",
+                event.id
+            )));
+        }
+        let path = self.harness_path(&event.id)?;
+        if path.exists() {
+            self.load_harness_event(&event.id)?;
+            return Ok(());
+        }
+        // A refusal can occur before the store root has been initialized for
+        // this run (the refused run leaves no capture); the harness dir must
+        // exist regardless — the event is court-scoped refusal evidence.
+        let parent = path.parent().ok_or_else(|| {
+            FrfError::new(format!(
+                "harness event path {} has no parent",
+                path.display()
+            ))
+        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", parent.display())))?;
+        let json = self.to_evidence(event)?;
+        self.write_once(&path, &json)
+    }
+
+    /// Load a harness event by its content address — identity rederives, the
+    /// document is canonical (strict JSON, duplicates refused, bytes ==
+    /// JCS). A hand-edited or corrupt record is refused, never read.
+    pub fn load_harness_event(&self, id: &str) -> Result<HarnessEvent> {
+        let path = self.harness_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no harness event {id} (missing {})",
+                path.display()
+            )));
+        }
+        let event: HarnessEvent = self.parse_evidence(&path)?;
+        let expected = crate::semantics::harness_event_identity(
+            &event.event_kind,
+            &event.side,
+            &event.court,
+            &event.execution_profile,
+            &event.cap,
+            &event.observed,
+            &event.target,
+            &event.detail,
+            &event.runner,
+        )?;
+        if expected != event.id {
+            return Err(FrfError::new(format!(
+                "harness event {id}: the content address does not rederive from its own fields"
+            )));
+        }
+        Ok(event)
     }
 
     /// Write a witness statement: content-addressed (the id rederives from

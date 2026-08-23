@@ -144,13 +144,18 @@ admission requires it.
 | -------------------- | ------------ | --------------------------------------------------- |
 | `timeout_ms`         | `60000`      | Wall-clock budget per side; expiry kills the group  |
 | `max_stream_bytes`   | `16777216`   | Per-stream (stdout/stderr) capture cap in bytes     |
+| `produced_max_files` | `4096`       | Max files in a side's produced tree (v19)           |
+| `produced_max_bytes` | `268435456`  | Max TOTAL bytes of a side's produced tree (v19)     |
+| `produced_max_file_bytes` | `16777216` | Max bytes of any ONE produced file (v19)       |
 | `rlimit_as_mb`       | `2048`       | Address-space limit per side (`RLIMIT_AS`)          |
 | `rlimit_cpu_s`       | `30`         | CPU-time limit per side (`RLIMIT_CPU`)              |
 | `rlimit_nofile`      | `1024`       | Open-file limit per side (`RLIMIT_NOFILE`)          |
 | `rlimit_nproc`       | `4096`       | Process-count limit per side (`RLIMIT_NPROC`, v15)  |
 
 The defaults are overridable through test hooks (`FRF_EXEC_TIMEOUT_MS`,
-`FRF_EXEC_MAX_BYTES`, `FRF_EXEC_RLIMIT_AS_MB`, `FRF_EXEC_RLIMIT_CPU_S`,
+`FRF_EXEC_MAX_BYTES`, `FRF_EXEC_PRODUCED_MAX_FILES`,
+`FRF_EXEC_PRODUCED_MAX_BYTES`, `FRF_EXEC_PRODUCED_MAX_FILE_BYTES`,
+`FRF_EXEC_RLIMIT_AS_MB`, `FRF_EXEC_RLIMIT_CPU_S`,
 `FRF_EXEC_RLIMIT_NOFILE`, `FRF_EXEC_RLIMIT_NPROC`) used by the regression
 suite; whatever bounds applied are what the capture records.
 
@@ -162,15 +167,45 @@ turned into evidence. An evidentiary `overflow` result is the honest outcome
 of a hostile or pathological side; a silently truncated stream would be a
 forged observation.
 
+The **produced-tree caps** (v19) extend the same rule to the
+filesystem-tree surface: a side whose produced tree exceeds
+`produced_max_files`, `produced_max_bytes`, or `produced_max_file_bytes`
+is refused exactly like a stream overflow — never truncated, never
+partially recorded — and the enforced caps are part of the recorded harness
+contract, so replay enforces the same bounds.
+
+### Harness events — the refusal is itself evidence
+
+When a declared bound fires, the harness writes a **content-addressed
+harness event** (`harness/<id>.json`, `frf-harness-event-v1`, identity
+`FRF/HARNESS-EVENT/v1` over the event's own fields plus the enforcing
+runner hash) recording the side, the bound that fired (`stdout` | `stderr`
+| `wall` | `cpu` | `produced-files` | `produced-bytes` |
+`produced-file-bytes`), the declared cap as enforced, the observed value,
+the court, the execution profile, and the runner. The run is still refused
+where the rule says refuse — but the refusal is now provable, immutable
+(identity rederives on every read), and citable.
+
+- A bound that **refuses** the run (stream overflow, timeout, produced
+  overflow) leaves no run to bind to: the event is **court-scoped refusal
+  evidence**, named by the refusal message.
+- A bound that **completes as a valid side outcome** (the CPU limit's
+  SIGXCPU) is recorded ALONGSIDE the observation, cited by the run's
+  capture (`harness_events`, capture schema v15), verified with the
+  capture, and carried by the run's bundle.
+
 ### Resource limits
 
 On Linux, the child applies its resource limits in `pre_exec` (after
 `fork(2)`, before `execve(2)`): `RLIMIT_AS`, `RLIMIT_CPU`, and
-`RLIMIT_NOFILE` are set to the profile's values. A side that hits a limit
-dies by the kernel's signal outcome — the capture records the signal. The
-exact signal is kernel-dependent (`SIGXCPU` while a soft limit is in force,
-`SIGKILL` once it is crossed with hard == soft); the property is that the
-resource bound terminates the side before the wall-clock timeout.
+`RLIMIT_NOFILE` are set to the profile's values, and `RLIMIT_NPROC` to the
+profile's process-count cap. The CPU limit is applied as soft = the declared
+cap and hard = cap + a bounded escalation window (v19): the profile's
+deterministic outcome — `SIGXCPU`, whose default disposition terminates the
+side — is the signal the kernel actually delivers, and a side that catches
+or blocks SIGXCPU is still SIGKILLed once it burns the escalation window.
+The capture records the terminating signal, and a resource-limit signal
+completes as a valid observation whose harness event accompanies it.
 
 ### Process topology
 

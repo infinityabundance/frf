@@ -171,7 +171,7 @@ fn a_court_run_binds_the_declared_execution_context_in_capture_and_receipt() {
         &fs::read_to_string(work.path(&format!("{ROOT}/receipts/{receipt}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(body["schema_version"], "frf-receipt-v18");
+    assert_eq!(body["schema_version"], "frf-receipt-v19");
     assert_eq!(
         body["execution_context"], *closure,
         "the receipt must copy the capture's closure"

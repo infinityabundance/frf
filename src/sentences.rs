@@ -211,6 +211,9 @@ mod tests {
             capture_bounds: CaptureBounds {
                 timeout_ms: "60000".into(),
                 max_stream_bytes: "16777216".into(),
+                produced_max_files: "4096".into(),
+                produced_max_bytes: "268435456".into(),
+                produced_max_file_bytes: "16777216".into(),
                 rlimit_as_mb: "2048".into(),
                 rlimit_cpu_s: "30".into(),
                 rlimit_nofile: "1024".into(),

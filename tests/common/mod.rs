@@ -15,6 +15,8 @@ pub const MANIFEST: &str = "frf/courts/cli-malformed-input/manifest.yaml";
 pub const CANONICAL_FILES: &[&str] = &[
     "golden/reference.sh",
     "golden/candidate.sh",
+    "golden/treegen-ref.sh",
+    "golden/treegen-cand.sh",
     "golden/work/candidate-fixed.sh",
     "golden/comparators/stderr-first-line.py",
     "frf/courts/cli-malformed-input/manifest.yaml",
@@ -60,6 +62,8 @@ impl Workdir {
         }
         set_exec(&self.path("golden/reference.sh"));
         set_exec(&self.path("golden/candidate.sh"));
+        set_exec(&self.path("golden/treegen-ref.sh"));
+        set_exec(&self.path("golden/treegen-cand.sh"));
     }
 
     /// Overwrite the candidate with an arbitrary script (still executable).

@@ -34,7 +34,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Upper bound for one side of a court execution (the execution profile's
@@ -45,6 +45,17 @@ pub const EXEC_TIMEOUT: Duration = Duration::from_secs(60);
 /// cap). A side that exceeds it is killed and the run REFUSED — truncated
 /// output is never evidence. The profile records the cap that applied.
 pub const EXEC_MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
+
+/// Maximum number of files a side's PRODUCED TREE may contain (the
+/// filesystem-tree surface's overflow bound, v19). A side whose produced
+/// tree exceeds a cap is refused exactly like a stream overflow — never
+/// truncated, never partially recorded.
+pub const EXEC_PRODUCED_MAX_FILES: u64 = 4096;
+/// Maximum TOTAL bytes of a side's produced tree (v19).
+pub const EXEC_PRODUCED_MAX_BYTES: u64 = 256 * 1024 * 1024;
+/// Maximum bytes of any ONE produced file (v19); a file larger than this is
+/// read only up to cap+1 bytes (the overflow is detected, never buffered).
+pub const EXEC_PRODUCED_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Child address-space limit in MiB (RLIMIT_AS).
 pub const EXEC_RLIMIT_AS_MB: u64 = 2048;
@@ -777,6 +788,33 @@ pub fn max_stream_bytes() -> usize {
         .unwrap_or(EXEC_MAX_STREAM_BYTES)
 }
 
+/// Effective produced-tree file-count cap, `FRF_EXEC_PRODUCED_MAX_FILES`
+/// override (v19).
+pub fn produced_max_files() -> u64 {
+    std::env::var("FRF_EXEC_PRODUCED_MAX_FILES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_PRODUCED_MAX_FILES)
+}
+
+/// Effective produced-tree total-bytes cap, `FRF_EXEC_PRODUCED_MAX_BYTES`
+/// override (v19).
+pub fn produced_max_bytes() -> u64 {
+    std::env::var("FRF_EXEC_PRODUCED_MAX_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_PRODUCED_MAX_BYTES)
+}
+
+/// Effective per-produced-file bytes cap, `FRF_EXEC_PRODUCED_MAX_FILE_BYTES`
+/// override (v19).
+pub fn produced_max_file_bytes() -> u64 {
+    std::env::var("FRF_EXEC_PRODUCED_MAX_FILE_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(EXEC_PRODUCED_MAX_FILE_BYTES)
+}
+
 /// Effective address-space limit (MiB), `FRF_EXEC_RLIMIT_AS_MB` override.
 pub fn rlimit_as_mb() -> u64 {
     std::env::var("FRF_EXEC_RLIMIT_AS_MB")
@@ -821,6 +859,9 @@ pub fn reference_capture_bounds() -> CaptureBounds {
     CaptureBounds {
         timeout_ms: EXEC_TIMEOUT.as_millis().to_string(),
         max_stream_bytes: EXEC_MAX_STREAM_BYTES.to_string(),
+        produced_max_files: EXEC_PRODUCED_MAX_FILES.to_string(),
+        produced_max_bytes: EXEC_PRODUCED_MAX_BYTES.to_string(),
+        produced_max_file_bytes: EXEC_PRODUCED_MAX_FILE_BYTES.to_string(),
         rlimit_as_mb: EXEC_RLIMIT_AS_MB.to_string(),
         rlimit_cpu_s: EXEC_RLIMIT_CPU_S.to_string(),
         rlimit_nofile: EXEC_RLIMIT_NOFILE.to_string(),
@@ -845,6 +886,9 @@ pub fn capture_bounds(profile: ExecProfile) -> CaptureBounds {
     let mut bounds = CaptureBounds {
         timeout_ms: exec_timeout().as_millis().to_string(),
         max_stream_bytes: max_stream_bytes().to_string(),
+        produced_max_files: produced_max_files().to_string(),
+        produced_max_bytes: produced_max_bytes().to_string(),
+        produced_max_file_bytes: produced_max_file_bytes().to_string(),
         rlimit_as_mb: rlimit_as_mb().to_string(),
         rlimit_cpu_s: rlimit_cpu_s().to_string(),
         rlimit_nofile: rlimit_nofile().to_string(),
@@ -896,12 +940,71 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-/// Raw process observation: full stdout/stderr bytes plus the exit code.
+/// A harness-enforcement violation: a declared bound fired during an
+/// observation attempt. Carried out of [`run_impl`] (and the produced-tree
+/// walk) so the caller can write the content-addressed [`HarnessEvent`]
+/// evidence record (`harness/<id>.json`) — the refusal is itself provable
+/// evidence. The run is still REFUSED for stream/timeout/produced overflow
+/// (fail-closed, never truncated); a resource-limit signal (SIGXCPU — the
+/// CPU bound's declared outcome) completes as a valid observation whose
+/// event is recorded alongside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessViolation {
+    /// `stream-overflow` | `timeout` | `rlimit` | `produced-overflow`.
+    pub event_kind: &'static str,
+    /// The bound that fired: `stdout` | `stderr` | `wall` | `cpu` |
+    /// `produced-files` | `produced-bytes` | `produced-file-bytes`.
+    pub target: String,
+    /// The declared cap, as enforced.
+    pub cap: String,
+    /// The observed value that exceeded the cap.
+    pub observed: String,
+    /// Free-form detail.
+    pub detail: String,
+}
+
+/// A harness execution error: the refusal message plus, when a DECLARED
+/// BOUND fired, the structured violation that becomes a [`HarnessEvent`]
+/// evidence record. The violation is boxed: the error value is carried on
+/// hot paths (thread-scoped drain results) and its size must stay small.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunError {
+    pub message: String,
+    pub violation: Option<Box<HarnessViolation>>,
+}
+
+impl RunError {
+    pub fn new(message: impl Into<String>) -> RunError {
+        RunError {
+            message: message.into(),
+            violation: None,
+        }
+    }
+}
+
+impl From<RunError> for FrfError {
+    fn from(e: RunError) -> FrfError {
+        FrfError::new(e.message)
+    }
+}
+
+impl From<FrfError> for RunError {
+    fn from(e: FrfError) -> RunError {
+        RunError::new(e.0)
+    }
+}
+
+/// A completed process observation. `violation` is present when a declared
+/// bound fired but the observation is still COMPLETE (a resource-limit
+/// signal is a valid side outcome — the run continues, and the caller
+/// records the harness event).
 #[derive(Debug, Clone)]
 pub struct ProcessOutcome {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub exit: String,
+    /// Present when a resource-limit bound fired (the CPU limit's SIGXCPU).
+    pub violation: Option<Box<HarnessViolation>>,
 }
 
 /// Execute `image` with `args`, capturing stdout/stderr without a shell,
@@ -914,7 +1017,7 @@ pub fn run_process(
     args: &[String],
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
-) -> Result<ProcessOutcome> {
+) -> std::result::Result<ProcessOutcome, RunError> {
     run_impl(image, args, None, None, profile, env)
 }
 
@@ -928,7 +1031,7 @@ pub fn run_process_in(
     cwd: &Path,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
-) -> Result<ProcessOutcome> {
+) -> std::result::Result<ProcessOutcome, RunError> {
     run_impl(image, args, None, Some(cwd), profile, env)
 }
 
@@ -944,7 +1047,7 @@ pub fn run_process_with_stdin(
     stdin: &[u8],
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
-) -> Result<ProcessOutcome> {
+) -> std::result::Result<ProcessOutcome, RunError> {
     run_impl(image, args, Some(stdin), None, profile, env)
 }
 
@@ -957,7 +1060,7 @@ pub fn run_process_with_stdin_in(
     cwd: &Path,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
-) -> Result<ProcessOutcome> {
+) -> std::result::Result<ProcessOutcome, RunError> {
     run_impl(image, args, Some(stdin), Some(cwd), profile, env)
 }
 
@@ -968,7 +1071,7 @@ fn run_impl(
     cwd: Option<&Path>,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
-) -> Result<ProcessOutcome> {
+) -> std::result::Result<ProcessOutcome, RunError> {
     // The program name the process observes (argv[0]) is the materialized
     // snapshot path — a sealed execution must not silently change argv[0]
     // to `/proc/self/fd/<n>`: many programs inspect argv[0], and the
@@ -1073,7 +1176,7 @@ fn run_impl(
                     }
                 }
                 set_rlimit(libc::RLIMIT_AS, as_bytes)
-                    .and_then(|_| set_rlimit(libc::RLIMIT_CPU, cpu_s))
+                    .and_then(|_| set_rlimit_cpu(cpu_s))
                     .and_then(|_| set_rlimit(libc::RLIMIT_NOFILE, nofile))
                     .and_then(|_| set_rlimit(libc::RLIMIT_NPROC, nproc))
             });
@@ -1095,7 +1198,7 @@ fn run_impl(
             Ok(child) => break child,
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                 if Instant::now() >= spawn_deadline {
-                    return Err(FrfError::new(format!(
+                    return Err(RunError::new(format!(
                         "{} stayed busy (ETXTBSY) through the full {} ms retry budget: another process is still writing it; refusing to hang the court",
                         program.display(),
                         SPAWN_RETRY_BUDGET.as_millis()
@@ -1104,7 +1207,7 @@ fn run_impl(
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(e) => {
-                return Err(FrfError::new(format!(
+                return Err(RunError::new(format!(
                     "failed to execute {}: {e} (does it exist and have its executable bit set?)",
                     program.display()
                 )))
@@ -1140,6 +1243,9 @@ fn run_impl(
     let group = child.id();
     let start = Instant::now();
     let overflow = Arc::new(AtomicBool::new(false));
+    // The FIRST stream that overflowed + the observed size (the drains race;
+    // one record is enough — the refusal names the bound that fired).
+    let overflow_detail: Arc<Mutex<Option<(String, usize)>>> = Arc::new(Mutex::new(None));
 
     let status = std::thread::scope(|s| {
         if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin_bytes) {
@@ -1149,10 +1255,28 @@ fn run_impl(
                 let _ = pipe.write_all(&bytes);
             });
         }
-        let _drain_out =
-            s.spawn(|| drain_capped(&mut stdout_pipe, &mut stdout, max_bytes, group, &overflow));
-        let _drain_err =
-            s.spawn(|| drain_capped(&mut stderr_pipe, &mut stderr, max_bytes, group, &overflow));
+        let _drain_out = s.spawn(|| {
+            drain_capped(
+                &mut stdout_pipe,
+                &mut stdout,
+                max_bytes,
+                group,
+                &overflow,
+                &overflow_detail,
+                "stdout",
+            )
+        });
+        let _drain_err = s.spawn(|| {
+            drain_capped(
+                &mut stderr_pipe,
+                &mut stderr,
+                max_bytes,
+                group,
+                &overflow,
+                &overflow_detail,
+                "stderr",
+            )
+        });
         let mut result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
@@ -1162,16 +1286,25 @@ fn run_impl(
                         // the pipes close.
                         let _ = child.kill();
                         let _ = child.wait();
-                        break Err(FrfError::new(format!(
-                            "{} exceeded the execution timeout ({} ms)",
-                            program.display(),
-                            timeout.as_millis()
-                        )));
+                        break Err(RunError {
+                            message: format!(
+                                "{} exceeded the execution timeout ({} ms)",
+                                program.display(),
+                                timeout.as_millis()
+                            ),
+                            violation: Some(Box::new(HarnessViolation {
+                                event_kind: "timeout",
+                                target: "wall".to_string(),
+                                cap: timeout.as_millis().to_string(),
+                                observed: start.elapsed().as_millis().to_string(),
+                                detail: String::new(),
+                            })),
+                        });
                     }
                     std::thread::sleep(Duration::from_millis(20));
                 }
                 Err(e) => {
-                    break Err(FrfError::new(format!(
+                    break Err(RunError::new(format!(
                         "failed to wait on {}: {e}",
                         program.display()
                     )))
@@ -1201,7 +1334,7 @@ fn run_impl(
                 Ok(()) => {}
                 Err(e) => {
                     if result.is_ok() {
-                        result = Err(e);
+                        result = Err(RunError::new(e.0));
                     }
                 }
             }
@@ -1214,33 +1347,67 @@ fn run_impl(
     // Evidentiary overflow: a stream exceeded the profile's capture cap and
     // the side was killed. The captured bytes are TRUNCATED — recording them
     // would fabricate an observation — so the run is refused, naming the
-    // bound that was enforced.
+    // bound that was enforced AND carrying the violation so the caller
+    // records the content-addressed harness event.
     if overflow.load(Ordering::SeqCst) {
-        return Err(FrfError::new(format!(
-            "{} exceeded the execution profile's {} byte per-stream capture cap; refusing to record truncated output as evidence",
-            program.display(),
-            max_bytes
-        )));
+        let (target, observed) = overflow_detail
+            .lock()
+            .expect("overflow detail lock")
+            .clone()
+            .unwrap_or(("stdout".to_string(), max_bytes));
+        return Err(RunError {
+            message: format!(
+                "{} exceeded the execution profile's {} byte per-stream capture cap; refusing to record truncated output as evidence",
+                program.display(),
+                max_bytes
+            ),
+            violation: Some(Box::new(HarnessViolation {
+                event_kind: "stream-overflow",
+                target,
+                cap: max_bytes.to_string(),
+                observed: observed.to_string(),
+                detail: String::new(),
+            })),
+        });
     }
 
     let exit = exit_string(&status);
+    // A resource-limit signal is a COMPLETE observation (the side died by
+    // the bound's declared signal — the CPU limit's SIGXCPU), not a refusal:
+    // the run continues and the caller records the harness event alongside.
+    let violation = (exit == format!("signal({})", libc::SIGXCPU)).then(|| {
+        Box::new(HarnessViolation {
+            event_kind: "rlimit",
+            target: "cpu".to_string(),
+            cap: rlimit_cpu_s().to_string(),
+            observed: exit.clone(),
+            detail: "RLIMIT_CPU's deterministic signal outcome (spec/execution-profile.md)"
+                .to_string(),
+        })
+    });
     Ok(ProcessOutcome {
         stdout,
         stderr,
         exit,
+        violation,
     })
 }
 
 /// Drain a capture pipe up to `max` bytes. On exceeding the cap the whole
-/// process group is terminated and the overflow flag set: the caller refuses
-/// the run (truncated output is never evidence), and killing the group frees
-/// the peer pipes so every other drain reaches EOF and the scope can join.
+/// process group is terminated, the overflow flag set, and the FIRST
+/// overflowing stream + observed size recorded: the caller refuses the run
+/// (truncated output is never evidence) and writes the harness event, and
+/// killing the group frees the peer pipes so every other drain reaches EOF
+/// and the scope can join.
+#[allow(clippy::too_many_arguments)]
 fn drain_capped(
     pipe: &mut impl Read,
     out: &mut Vec<u8>,
     max: usize,
     group: u32,
     overflow: &AtomicBool,
+    overflow_detail: &Mutex<Option<(String, usize)>>,
+    stream: &'static str,
 ) {
     let mut chunk = [0u8; 8192];
     loop {
@@ -1249,6 +1416,11 @@ fn drain_capped(
             Ok(n) => {
                 if out.len() + n > max {
                     overflow.store(true, Ordering::SeqCst);
+                    let mut guard = overflow_detail.lock().expect("overflow detail lock");
+                    if guard.is_none() {
+                        *guard = Some((stream.to_string(), out.len() + n));
+                    }
+                    drop(guard);
                     #[cfg(unix)]
                     terminate_process_group(group);
                     break;
@@ -1275,6 +1447,37 @@ fn set_rlimit(resource: libc::__rlimit_resource_t, value: u64) -> std::io::Resul
     // SAFETY: the pointer refers to a valid rlimit struct for the duration
     // of the call.
     let rc = unsafe { libc::setrlimit(resource, &rlim) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+/// The RLIMIT_CPU escalation window: the hard limit is set ABOVE the
+/// declared soft cap so the profile's deterministic outcome — SIGXCPU,
+/// whose default disposition terminates the side — is the signal the kernel
+/// actually delivers first. A side that catches or blocks SIGXCPU is still
+/// SIGKILLed once it burns the escalation window (the hard bound): the
+/// declared cap is enforced as a hard bound either way.
+#[cfg(target_os = "linux")]
+const EXEC_RLIMIT_CPU_ESCALATION_S: u64 = 10;
+
+/// Apply the CPU-time limit with the declared cap as the SOFT limit (the
+/// deterministic SIGXCPU outcome) and cap + the bounded escalation window as
+/// the HARD limit. Setting the hard limit lower than the inherited value is
+/// always permitted (no privilege needed).
+#[cfg(target_os = "linux")]
+fn set_rlimit_cpu(soft_s: u64) -> std::io::Result<()> {
+    let hard_s = soft_s.saturating_add(EXEC_RLIMIT_CPU_ESCALATION_S);
+    // SAFETY: setrlimit(2) is async-signal-safe.
+    let rlim = libc::rlimit {
+        rlim_cur: soft_s,
+        rlim_max: hard_s,
+    };
+    // SAFETY: the pointer refers to a valid rlimit struct for the duration
+    // of the call.
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_CPU, &rlim) };
     if rc == 0 {
         Ok(())
     } else {
@@ -1827,7 +2030,7 @@ echo "zero=$0 one=$1"
                 &test_env(),
             )
             .unwrap_err()
-            .0;
+            .message;
             assert!(
                 err.contains("no writable cgroup v2 subtree"),
                 "error: {err}"
@@ -1858,7 +2061,7 @@ echo "zero=$0 one=$1"
                     &test_env(),
                 )
                 .unwrap_err()
-                .0;
+                .message;
                 assert!(err.contains("not a cgroup v2 root"), "error: {err}");
             },
         );
@@ -2110,7 +2313,7 @@ echo "zero=$0 one=$1"
             &test_env(),
         )
         .unwrap_err();
-        assert!(err.0.contains("failed to execute"));
+        assert!(err.message.contains("failed to execute"));
     }
 
     #[test]
@@ -2191,7 +2394,7 @@ echo "zero=$0 one=$1"
         )
         .unwrap_err();
         drop(held);
-        assert!(err.0.contains("ETXTBSY"), "error: {}", err.0);
+        assert!(err.message.contains("ETXTBSY"), "error: {}", err.message);
         assert!(
             start.elapsed() < SPAWN_RETRY_BUDGET * 3,
             "retry must be bounded (took {:?})",
@@ -2262,10 +2465,10 @@ echo "zero=$0 one=$1"
             )
             .unwrap_err();
             assert!(
-                err.0.contains("capture cap")
-                    && err.0.contains("refusing to record truncated output"),
+                err.message.contains("capture cap")
+                    && err.message.contains("refusing to record truncated output"),
                 "the overflow must refuse the run, naming the cap: {}",
-                err.0
+                err.message
             );
             assert!(
                 start.elapsed() < Duration::from_secs(10),
@@ -2308,6 +2511,24 @@ echo "zero=$0 one=$1"
                     "the CPU limit must terminate the side by signal, got {:?}",
                     out.exit
                 );
+                // v19: the soft/hard split makes the profile's DETERMINISTIC
+                // outcome — SIGXCPU (signal 24 on Linux), whose default
+                // disposition terminates — the signal actually delivered, and
+                // the harness records the bound-firing violation alongside
+                // the complete observation.
+                assert_eq!(
+                    out.exit,
+                    format!("signal({})", libc::SIGXCPU),
+                    "the CPU bound's deterministic outcome is SIGXCPU, got {:?}",
+                    out.exit
+                );
+                let v = out
+                    .violation
+                    .as_ref()
+                    .expect("a resource-limit signal carries the violation");
+                assert_eq!(v.event_kind, "rlimit");
+                assert_eq!(v.target, "cpu");
+                assert_eq!(v.cap, "1", "the declared cap as enforced");
                 assert!(
                     start.elapsed() < Duration::from_secs(15),
                     "the CPU limit must bite before the wall-clock timeout (took {:?})",

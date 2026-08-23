@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_SCHEMA: &str = "frf-receipt-v18";
+const RECEIPT_SCHEMA: &str = "frf-receipt-v19";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -137,6 +137,11 @@ fn bump(doc: &mut Value, fix_semantic_identity: bool, fix_env_digest: bool) {
     doc["capture_bounds"] = json!({
         "timeout_ms": "60000",
         "max_stream_bytes": "16777216",
+        // v19: the produced-tree caps (the filesystem-tree surface's overflow
+        // bounds — the reference profile's constants).
+        "produced_max_files": "4096",
+        "produced_max_bytes": "268435456",
+        "produced_max_file_bytes": "16777216",
         "rlimit_as_mb": "2048",
         "rlimit_cpu_s": "30",
         "rlimit_nofile": "1024",

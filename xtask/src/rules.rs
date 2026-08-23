@@ -47,6 +47,11 @@ const OPTIONAL_RECEIPT_KEYS: &[&str] = &["execution_context"];
 const CAPTURE_BOUNDS_KEYS: &[&str] = &[
     "timeout_ms",
     "max_stream_bytes",
+    // v19: the produced-tree caps (the filesystem-tree surface's overflow
+    // bounds).
+    "produced_max_files",
+    "produced_max_bytes",
+    "produced_max_file_bytes",
     "rlimit_as_mb",
     "rlimit_cpu_s",
     "rlimit_nofile",
@@ -87,9 +92,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v18" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v19" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v18",
+            "schema_version is {:?}, expected frf-receipt-v19",
             doc["schema_version"]
         ));
     }
@@ -538,9 +543,9 @@ pub fn kind_identity_parts(
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v18" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v19" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v18",
+            "schema_version is {:?}, expected frf-receipt-v19",
             rec["schema_version"]
         ));
     }
@@ -999,6 +1004,9 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
     for (what, max) in [
         ("timeout_ms", 3_600_000u64),
         ("max_stream_bytes", 1u64 << 30),
+        ("produced_max_files", 65_536u64),
+        ("produced_max_bytes", 1u64 << 36),
+        ("produced_max_file_bytes", 1u64 << 30),
         ("rlimit_as_mb", 65_536u64),
         ("rlimit_cpu_s", 86_400u64),
         ("rlimit_nofile", 1_048_576u64),
