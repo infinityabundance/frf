@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.66"
+version = "0.1.67"
 dependencies = [
  "base64",
  "libc",
