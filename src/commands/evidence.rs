@@ -1,19 +1,27 @@
-//! `frf evidence status`: the three-state verification report of an
+//! `frf evidence status`: the four-state verification report of an
 //! evidence tree.
 //!
 //! The engine distinguishes, mechanically:
 //!
-//!   - **graph_verified** — every canonical document parses, every identity
-//!     rederives, and every referenced content address resolves: its bytes
-//!     are present and verified, OR it is declared detached in
-//!     `detached-objects.json` (frf-detached-objects-v1) with a
+//!   - **graph_verified** — EVERY protocol-object namespace of the store
+//!     parses and verifies through its verified loader (see
+//!     [`verify::verify_whole_store`]): every canonical document parses,
+//!     every identity rederives, and every referenced content address
+//!     resolves — its bytes are present and verified, OR it is declared
+//!     detached in `detached-objects.json` (frf-detached-objects-v1) with a
 //!     reconstruction recipe;
 //!   - **object_closure** — `complete` when every referenced CID's bytes are
 //!     present, or `incomplete-by-policy` naming the declared-detached
 //!     payloads;
-//!   - **replayable** — the closure is complete (replay additionally checks
-//!     execution provenance; a detached tree is never replayable until
-//!     hydrated).
+//!   - **replay_ready** — the object + stream closures are complete: the
+//!     bytes a replay would execute are materialized and verified;
+//!   - **replay_verified** — `not-performed` unless an ACTUAL replay
+//!     operation (`frf replay`) has re-executed the observation and
+//!     reproduced it. A complete object store does NOT prove the current
+//!     machine can satisfy the execution profile, OCI runtime, interpreter
+//!     closure, kernel facilities, cgroup requirements, or Landlock
+//!     requirements — `evidence status` never claims that; only a replay
+//!     does.
 //!
 //! A declared-detached publication is NEVER treated as corruption: the graph
 //! verifies, the closure reports exactly what is withheld and how to rebuild
@@ -26,85 +34,23 @@ use crate::verify;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-fn push_unique(detached: &mut Vec<DetachedObjectRef>, entry: DetachedObjectRef) {
-    if !detached.contains(&entry) {
-        detached.push(entry);
-    }
-}
-
 pub fn status(store: &Store) -> Result<()> {
     // The detached declaration (if any) — a malformed declaration is refused
     // before anything is reported.
     let declaration = store.load_detached_objects()?;
 
-    let mut detached: Vec<DetachedObjectRef> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-    let mut receipts_verified = 0usize;
-    let mut captures_verified = 0usize;
-    let mut surface_declared = 0usize;
-    let mut surface_withheld = 0usize;
-
-    // Walk every committed receipt: each must verify at the GRAPH level
-    // (identity + derivation + every referenced CID resolving).
-    let receipts_dir = store.root.join("receipts");
-    if receipts_dir.is_dir() {
-        let mut names: Vec<String> = std::fs::read_dir(&receipts_dir)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", receipts_dir.display())))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.ends_with(".json"))
-            .collect();
-        names.sort();
-        for name in names {
-            let id = name.trim_end_matches(".json").to_string();
-            match verify::load_receipt_verified(store, &id) {
-                Ok(rv) => {
-                    receipts_verified += 1;
-                    for d in rv.detached() {
-                        push_unique(&mut detached, d.clone());
-                    }
-                }
-                Err(e) => errors.push(format!("receipt {id}: {e}")),
-            }
-        }
-    }
-
-    // Walk every committed capture (runs without a receipt — the series
-    // members — must verify too).
-    let captures_dir = store.root.join("captures");
-    if captures_dir.is_dir() {
-        let mut names: Vec<String> = std::fs::read_dir(&captures_dir)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", captures_dir.display())))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().to_string())
-            .collect();
-        names.sort();
-        for run in names {
-            match verify::load_capture_verified(store, &run) {
-                Ok(cv) => {
-                    captures_verified += 1;
-                    for d in cv.detached {
-                        push_unique(&mut detached, d);
-                    }
-                    if let Some(surface) = &cv.capture.publication_surface {
-                        for p in surface {
-                            surface_declared += 1;
-                            if p.withholds_bytes() {
-                                surface_withheld += 1;
-                            }
-                        }
-                    }
-                }
-                Err(e) => errors.push(format!("capture {run}: {e}")),
-            }
-        }
-    }
-
-    let graph_verified = errors.is_empty();
-    let closure_complete = detached.is_empty();
-    let stream_closure_complete = surface_withheld == 0;
+    // The WHOLE-STORE verdict: every protocol-object namespace enumerated
+    // and passed through its verified loader (authorities, captures,
+    // residuals + disposition events, receipts, reductions + minimizer
+    // evidence, series, trajectories, challenges + mutation evidence,
+    // witnesses, independence, attempts, harness events, claims). A single
+    // orphaned, malformed, or tampered protocol object anywhere in the tree
+    // fails the graph.
+    let s = status_impl(store)?;
+    let graph_verified = s.graph_verified;
+    let closure_complete = s.closure_complete;
+    let stream_closure_complete = s.surface_withheld == 0;
+    let verified_total: usize = s.counts.iter().map(|(_, n)| n).sum();
 
     println!("evidence status (root {})", store.root.display());
     if let Some(decl) = &declaration {
@@ -113,10 +59,25 @@ pub fn status(store: &Store) -> Result<()> {
             decl.schema_version, decl.policy
         );
     }
-    println!("  verified: {receipts_verified} receipt(s), {captures_verified} capture(s)");
-    if surface_declared > 0 {
+    let ns_line = s
+        .counts
+        .iter()
+        .map(|(ns, n)| format!("{ns}={n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!(
+        "  verified: {verified_total} object(s) across {} namespace(s){}",
+        s.counts.len(),
+        if ns_line.is_empty() {
+            String::new()
+        } else {
+            format!(" [{ns_line}]")
+        }
+    );
+    if s.surface_declared > 0 {
         println!(
-            "  capture surface: {surface_declared} stream(s) declared ({surface_withheld} withheld by policy)"
+            "  capture surface: {} stream(s) declared ({} withheld by policy)",
+            s.surface_declared, s.surface_withheld
         );
     }
     // The publication manifest (written by `publish-detached`) is part of a
@@ -144,9 +105,10 @@ pub fn status(store: &Store) -> Result<()> {
             )));
         }
         let manifest_withheld = manifest.streams.iter().filter(|s| !s.published).count();
-        if manifest_withheld != surface_withheld {
+        if manifest_withheld != s.surface_withheld {
             return Err(FrfError::new(format!(
-                "the publication manifest records {manifest_withheld} withheld stream(s) but the verified captures declare {surface_withheld} — the transform is inconsistent"
+                "the publication manifest records {manifest_withheld} withheld stream(s) but the verified captures declare {} — the transform is inconsistent",
+                s.surface_withheld
             )));
         }
         println!(
@@ -158,23 +120,23 @@ pub fn status(store: &Store) -> Result<()> {
         println!("  graph_verified: yes");
     } else {
         println!("  graph_verified: NO");
-        for e in &errors {
+        for e in &s.errors {
             println!("    {e}");
         }
     }
     if closure_complete && stream_closure_complete {
         println!("  object_closure: complete");
         println!("  stream_closure: complete");
-        println!("  replayable: yes");
+        println!("  replay_ready: yes");
     } else {
         if closure_complete {
             println!("  object_closure: complete");
         } else {
             println!(
                 "  object_closure: incomplete-by-policy ({} declared-detached payload(s))",
-                detached.len()
+                s.detached.len()
             );
-            for d in &detached {
+            for d in &s.detached {
                 println!(
                     "    {}  role={}  publication={}  size={}",
                     &d.cid[..16],
@@ -193,17 +155,24 @@ pub fn status(store: &Store) -> Result<()> {
         }
         if !stream_closure_complete {
             println!(
-                "  stream_closure: incomplete-by-policy ({surface_withheld} withheld stream(s); identities + dispositions published, bytes local)"
+                "  stream_closure: incomplete-by-policy ({} withheld stream(s); identities + dispositions published, bytes local)",
+                s.surface_withheld
             );
         }
         println!(
-            "  replayable: no — hydrate the detached payloads and withheld streams first (verify each against its declared identity)"
+            "  replay_ready: no — hydrate the detached payloads and withheld streams first (verify each against its declared identity)"
         );
     }
+    // `evidence status` NEVER re-executes anything. A complete object store
+    // does not prove the current machine can satisfy the execution profile,
+    // OCI runtime, interpreter/native-runtime closure, kernel facilities,
+    // cgroup requirements, or Landlock requirements. `replay_verified` is
+    // only ever emitted `yes` by an ACTUAL successful `frf replay`.
+    println!("  replay_verified: not-performed");
     if !graph_verified {
         return Err(FrfError::new(format!(
             "evidence status: the graph does not verify ({} violation(s))",
-            errors.len()
+            s.errors.len()
         )));
     }
     Ok(())
@@ -370,59 +339,29 @@ struct EvidenceStatus {
     graph_verified: bool,
     closure_complete: bool,
     detached: Vec<DetachedObjectRef>,
+    surface_declared: usize,
+    surface_withheld: usize,
+    errors: Vec<String>,
+    counts: Vec<(String, usize)>,
 }
 
+/// The whole-store status: [`verify::verify_whole_store`] walks EVERY
+/// protocol-object namespace (authorities, captures, residuals + disposition
+/// events, receipts, reductions + minimizer evidence, series, trajectories,
+/// challenges + mutation evidence, witnesses, independence, attempts, harness
+/// events, claims) and passes each object through its verified loader. The
+/// verdict is therefore as strong as the strongest loader, and a single
+/// orphaned or tampered protocol object anywhere in the tree fails it.
 fn status_impl(store: &Store) -> Result<EvidenceStatus> {
-    let mut detached: Vec<DetachedObjectRef> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-    let receipts_dir = store.root.join("receipts");
-    if receipts_dir.is_dir() {
-        for entry in std::fs::read_dir(&receipts_dir)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", receipts_dir.display())))?
-        {
-            let entry = entry.map_err(|e| FrfError::new(format!("read_dir: {e}")))?;
-            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.ends_with(".json") {
-                continue;
-            }
-            let id = name.trim_end_matches(".json").to_string();
-            match verify::load_receipt_verified(store, &id) {
-                Ok(rv) => {
-                    for d in rv.detached() {
-                        push_unique(&mut detached, d.clone());
-                    }
-                }
-                Err(e) => errors.push(format!("receipt {id}: {e}")),
-            }
-        }
-    }
-    let captures_dir = store.root.join("captures");
-    if captures_dir.is_dir() {
-        for entry in std::fs::read_dir(&captures_dir)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", captures_dir.display())))?
-        {
-            let entry = entry.map_err(|e| FrfError::new(format!("read_dir: {e}")))?;
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                continue;
-            }
-            let run = entry.file_name().to_string_lossy().to_string();
-            match verify::load_capture_verified(store, &run) {
-                Ok(cv) => {
-                    for d in cv.detached {
-                        push_unique(&mut detached, d);
-                    }
-                }
-                Err(e) => errors.push(format!("capture {run}: {e}")),
-            }
-        }
-    }
+    let report = verify::verify_whole_store(store)?;
     Ok(EvidenceStatus {
-        graph_verified: errors.is_empty(),
-        closure_complete: detached.is_empty(),
-        detached,
+        graph_verified: report.errors.is_empty(),
+        closure_complete: report.detached.is_empty(),
+        detached: report.detached,
+        surface_declared: report.surface_declared,
+        surface_withheld: report.surface_withheld,
+        errors: report.errors,
+        counts: report.counts,
     })
 }
 

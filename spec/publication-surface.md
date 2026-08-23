@@ -78,10 +78,13 @@ capture surfaces:
 
 ## 4. Verification
 
-`evidence status` reports the three-state graph verdict plus the stream
-closure: `stream_closure: complete` when every observed stream is published
-as-is, or `incomplete-by-policy (N withheld stream(s); identities +
-dispositions published, bytes local)` when the surface withheld streams.
+`evidence status` reports the whole-store graph verdict (every protocol-object
+namespace, not just the receipt/capture roots) plus the stream closure:
+`stream_closure: complete` when every observed stream is published as-is, or
+`incomplete-by-policy (N withheld stream(s); identities + dispositions
+published, bytes local)` when the surface withheld streams. `replay_ready`
+requires the stream closure complete alongside the object closure;
+`replay_verified` stays `not-performed` until an actual replay succeeds.
 `load_capture_verified` is surface-aware: present bytes must derive the
 recorded hashes; withheld bytes are authenticated by their disposition
 record. Replay of a withheld stream is only possible after hydrating the

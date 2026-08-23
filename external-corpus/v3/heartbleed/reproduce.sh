@@ -134,7 +134,7 @@ case "$cmd" in
       diff -rq "$PUB" "$HB/evidence" | head -20 >&2
       exit 1
     fi
-    echo "== the committed publication's three-state verdict =="
+    echo "== the committed publication's four-state verdict =="
     "$FRF" --root "$HB/evidence" evidence status
     ;;
   verify-artifacts)

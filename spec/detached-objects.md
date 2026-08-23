@@ -33,20 +33,22 @@ Canonical-JSON rules apply like every evidence document (RFC 8785; the value
 domain is strings/arrays/booleans/null only — `size` is therefore a decimal
 STRING, never a JSON number).
 
-## Verification: three states, mechanically distinguished
+## Verification: four states, mechanically distinguished
 
 | state | meaning |
 |---|---|
-| `graph_verified` | every canonical document parses, every identity rederives, and every referenced content address RESOLVES: its bytes are present AND verified, OR it is declared detached here with a reconstruction recipe |
+| `graph_verified` | EVERY protocol-object namespace parses and verifies through its verified loader: every canonical document parses, every identity rederives, and every referenced content address RESOLVES — its bytes are present AND verified, OR it is declared detached here with a reconstruction recipe |
 | `object_closure_complete` | every referenced CID's bytes are present in the store |
-| `replayable` | the closure is complete AND the replay checks pass |
+| `replay_ready` | the object AND stream closures are complete: the bytes a replay would execute are materialized and verified |
+| `replay_verified` | an ACTUAL replay operation has re-executed the observation and reproduced it. A complete object store does NOT prove the current machine can satisfy the execution profile, OCI runtime, interpreter/native-runtime closure, kernel facilities, cgroup requirements, or Landlock requirements — `evidence status` therefore reports `not-performed` until `frf replay` succeeds |
 
 A declared-detached CID is NEVER treated as corruption: the graph verifies,
 the closure reports exactly what is withheld and how to rebuild it, and
 replay refuses until the bytes are materialized locally and verified against
-the declared CID. `frf evidence status` reports all three states; a detached
+the declared CID. `frf evidence status` reports all four states; a detached
 study prints "graph_verified: yes / object_closure: incomplete-by-policy (N
-declared-detached payloads) / replayable: no".
+declared-detached payloads) / replay_ready: no / replay_verified:
+not-performed".
 
 ## Hydration
 

@@ -96,6 +96,9 @@ fn exact_replay_refuses_on_provenance_drift() {
     assert_success(&out, "exact replay without drift");
     assert!(stdout(&out).contains("replay (exact)"));
     assert!(stdout(&out).contains("reproduced"));
+    // `replay_verified: yes` is emitted ONLY by an actual successful replay
+    // (the status command reports `not-performed`); the two never conflate.
+    assert!(stdout(&out).contains("replay_verified: yes"));
 
     // A declared provenance difference (a different capture cap in force)
     // must refuse exact replay, naming the drifted dimension.

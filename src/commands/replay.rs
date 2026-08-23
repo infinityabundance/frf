@@ -951,6 +951,12 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
             drift.len()
         ),
     }
+    // `replay_verified: yes` is emitted ONLY by an actual successful replay:
+    // a complete object store never proves this machine can satisfy the
+    // execution profile/OCI/closure/kernel/cgroup/Landlock requirements, so
+    // `evidence status` reports `replay_verified: not-performed` and leaves
+    // the `yes` to this operation.
+    println!("replay_verified: yes");
     Ok(())
 }
 

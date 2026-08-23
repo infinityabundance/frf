@@ -3568,12 +3568,16 @@ pub struct TrajectoryRecord {
 /// with its role, publication status, size, and the reconstruction recipe
 /// that reproduces the exact bytes. Verification then distinguishes:
 ///
-///   - `graph_verified`  — every canonical document parses, every identity
-///     rederives, and every referenced CID resolves (its bytes are present
-///     OR it is declared detached here);
-///   - `object_closure_complete` — every referenced CID's bytes are
-///     present (replayable until the detached set is hydrated);
-///   - `replayable` — the closure is complete AND the replay checks pass.
+///   - `graph_verified`  — EVERY protocol-object namespace parses and
+///     verifies through its verified loader: every canonical document
+///     parses, every identity rederives, and every referenced CID resolves
+///     (its bytes are present OR it is declared detached here);
+///   - `object_closure_complete` — every referenced CID's bytes are present;
+///   - `replay_ready` — the object AND stream closures are complete: the
+///     bytes a replay would execute are materialized;
+///   - `replay_verified` — an ACTUAL replay operation has re-executed the
+///     observation and reproduced it (`evidence status` reports
+///     `not-performed`; only `frf replay` may emit `yes`).
 ///
 /// A declared-detached CID is never treated as corruption: the graph
 /// verifies with an explicitly incomplete closure (`incomplete-by-policy`),

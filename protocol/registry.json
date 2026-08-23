@@ -621,7 +621,7 @@
       "id": "frf-detached-objects-v1",
       "status": "active",
       "kind": "publication declaration",
-      "meaning": "the detached-object declaration (detached-objects.json): deliberately withheld content addresses + reconstruction recipes; verification distinguishes graph_verified / object_closure / replayable"
+      "meaning": "the detached-object declaration (detached-objects.json): deliberately withheld content addresses + reconstruction recipes; verification distinguishes graph_verified (whole-store) / object_closure / replay_ready / replay_verified (not-performed until an actual replay)"
     },
     {
       "id": "frf-disposition-v2",

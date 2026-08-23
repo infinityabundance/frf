@@ -7,7 +7,10 @@
 //!     detached with a reconstruction recipe);
 //!   - object_closure — complete, or incomplete-by-policy naming the
 //!     declared-detached payloads;
-//!   - replayable — closure complete.
+//!   - replay_ready — the object + stream closures are complete (the bytes a
+//!     replay would execute are materialized); `replay_verified` stays
+//!     `not-performed` until an actual replay operation reproduces the
+//!     observation.
 //!
 //! A declared-detached publication is never treated as corruption; a
 //! missing, undeclared object is.
@@ -105,7 +108,11 @@ fn declared_detached_keeps_the_graph_verified() {
         text.contains("object_closure: incomplete-by-policy"),
         "closure: {text}"
     );
-    assert!(text.contains("replayable: no"), "replayable: {text}");
+    assert!(text.contains("replay_ready: no"), "replay_ready: {text}");
+    assert!(
+        text.contains("replay_verified: not-performed"),
+        "replay_verified: {text}"
+    );
     assert!(
         text.contains(&format!("{} declared-detached", cids.len())),
         "count: {text}"

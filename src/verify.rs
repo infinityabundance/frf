@@ -3650,3 +3650,615 @@ mod tests {
         assert!(msg.contains("disposition_event_id"), "{msg}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The WHOLE-STORE verifier (0.1.69)
+// ---------------------------------------------------------------------------
+
+/// The verification report of a whole evidence store: every protocol-object
+/// namespace enumerated and passed through its verified loader (or an
+/// identity-rederiving loader where no verified loader exists). `graph_verified`
+/// means EXACTLY this: every committed canonical document parses, every
+/// identity rederives, every referenced content address resolves, and every
+/// derivation the loaders establish holds — across ALL namespaces, not just
+/// the receipt/capture roots. A single orphaned, malformed, or tampered
+/// protocol object anywhere in the tree fails it.
+pub struct WholeStoreReport {
+    /// (namespace, verified count) for every namespace present in the store.
+    pub counts: Vec<(String, usize)>,
+    /// Every verification error, prefixed with its namespace.
+    pub errors: Vec<String>,
+    /// The declared-detached payloads referenced by the verified roots
+    /// (receipts + captures) — the object-closure report's input.
+    pub detached: Vec<crate::model::DetachedObjectRef>,
+    /// The capture-surface declarations across all verified captures.
+    pub surface_declared: usize,
+    pub surface_withheld: usize,
+}
+
+impl WholeStoreReport {
+    pub fn verified_total(&self) -> usize {
+        self.counts.iter().map(|(_, n)| n).sum()
+    }
+}
+
+/// Walk EVERY protocol-object namespace of the store and pass each object
+/// through its verified loader:
+///
+/// - `authorities/`      — admission records (canonical + the admitted
+///   executable object present);
+/// - `captures/`         — [`load_capture_verified`] (run identity, side
+///   files, snapshots, extension instruments);
+/// - `residuals/`        — [`load_residual_verified`] (derivation from the
+///   verified parent run, comparator-generated divergence, rehashing,
+///   fingerprint) plus the append-only disposition-event chain;
+/// - `receipts/`         — [`load_receipt_verified`] (identity, semantic
+///   conformance, derivation, dispositions, tokens);
+/// - `reductions/`       — [`Store::load_reduction`] (identity) +
+///   [`ReductionRecord::validate_semantics`] + the external-minimizer
+///   invocation evidence (canonical documents, cid cross-links, rederived
+///   invocation/result identities);
+/// - `series/`           — identity-rederiving load;
+/// - `trajectories/`     — filename-bound load (subject.coordinate.series)
+///   with the record cross-checked against its address;
+/// - `challenges/`       — identity + the mutation invocation/result/response
+///   evidence cross-verified;
+/// - `witnesses/`        — [`load_witness_statement_verified`] (identity,
+///   preserved documents, SUBJECT REBINDING to the actual evidence object);
+/// - `independence/`     — identity + the bound statement cross-check;
+/// - `attempts/`         — [`load_execution_attempt_verified`] (refused
+///   execution-attempt evidence);
+/// - `harness/`          — identity-rederiving harness-event load;
+/// - `claims/`           — [`load_claim_verified`] (the full re-verification:
+///   identity, premises, scope algebra, universe, policy evidence).
+///
+/// The `by-receipt` claim index and the derived `objects/` store are not
+/// protocol-object namespaces: the index is non-normative, and the objects
+/// are verified through the references that name them (every capture's
+/// snapshots + every extension instrument are checked above).
+pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut detached: Vec<crate::model::DetachedObjectRef> = Vec::new();
+    let mut surface_declared = 0usize;
+    let mut surface_withheld = 0usize;
+    let count = |counts: &mut Vec<(String, usize)>, ns: &str, n: usize| {
+        if n > 0 {
+            counts.push((ns.to_string(), n));
+        }
+    };
+
+    // authorities/ — admission records (canonical; the admitted executable
+    // object must be present and intact).
+    let authorities_dir = store.root.join("authorities");
+    if authorities_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in fs::read_dir(&authorities_dir)
+            .map_err(|e| FrfError::new(format!("authorities: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("authorities: {e}")))?;
+            if !entry.path().extension().is_some_and(|x| x == "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_authority(&id) {
+                Ok(a) => {
+                    // The admitted executable artifact is a content-addressed
+                    // object the admission record names.
+                    if let Err(e) = check_object(store, &a.executable_sha256, &mut detached) {
+                        errors.push(format!("authority {id}: {e}"));
+                        continue;
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("authority {id}: {e}")),
+            }
+        }
+        count(&mut counts, "authorities", n);
+    }
+
+    // captures/ — the verified loader (run identity, side files, snapshots,
+    // extension instruments, residuals belong to the run).
+    let captures_dir = store.root.join("captures");
+    if captures_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&captures_dir).map_err(|e| FrfError::new(format!("captures: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("captures: {e}")))?;
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let run = entry.file_name().to_string_lossy().to_string();
+            match load_capture_verified(store, &run) {
+                Ok(cv) => {
+                    for d in cv.detached {
+                        push_unique(&mut detached, d);
+                    }
+                    if let Some(surface) = &cv.capture.publication_surface {
+                        for p in surface {
+                            surface_declared += 1;
+                            if p.withholds_bytes() {
+                                surface_withheld += 1;
+                            }
+                        }
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("capture {run}: {e}")),
+            }
+        }
+        count(&mut counts, "captures", n);
+    }
+
+    // residuals/ — verified derivation from the parent run, plus the
+    // append-only disposition-event chain (hash-chained, rederived). The
+    // derived `*.token.json` files are NOT protocol objects in this
+    // namespace: each token rederives inside load_residual_verified (the
+    // capture walk cross-checks it against the record + disposition).
+    let residuals_dir = store.root.join("residuals");
+    if residuals_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&residuals_dir).map_err(|e| FrfError::new(format!("residuals: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("residuals: {e}")))?;
+            let path = entry.path();
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".token.json") {
+                continue; // the derived token, verified inside the residual
+            }
+            let id = name.trim_end_matches(".json").to_string();
+            match load_residual_verified(store, &id) {
+                Ok(_) => {
+                    // The disposition-event chain is verified on read
+                    // (identity rederives + parent links). A broken chain is
+                    // a refusal.
+                    if let Err(e) = store.disposition_events(&id) {
+                        errors.push(format!("residual {id} events: {e}"));
+                        continue;
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("residual {id}: {e}")),
+            }
+        }
+        count(&mut counts, "residuals", n);
+    }
+
+    // receipts/ — the verified loader (identity, semantic conformance,
+    // derivation from the verified capture, dispositions, tokens).
+    let receipts_dir = store.root.join("receipts");
+    if receipts_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&receipts_dir).map_err(|e| FrfError::new(format!("receipts: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("receipts: {e}")))?;
+            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let id = name.trim_end_matches(".json").to_string();
+            match load_receipt_verified(store, &id) {
+                Ok(rv) => {
+                    for d in rv.detached() {
+                        push_unique(&mut detached, d.clone());
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("receipt {id}: {e}")),
+            }
+        }
+        count(&mut counts, "receipts", n);
+    }
+
+    // reductions/ — identity-rederiving load + the semantic validator + the
+    // external-minimizer invocation evidence.
+    let reductions_dir = store.root.join("reductions");
+    if reductions_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&reductions_dir).map_err(|e| FrfError::new(format!("reductions: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("reductions: {e}")))?;
+            let path = entry.path();
+            if path.is_dir() {
+                continue; // reductions/<id>/minimizer/ evidence dirs
+            }
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_reduction(&id) {
+                Ok(r) => {
+                    if let Err(e) = r.validate_semantics() {
+                        errors.push(format!("reduction {id}: {e}"));
+                        continue;
+                    }
+                    if let Err(e) = verify_reduction_minimizer_evidence(store, &r) {
+                        errors.push(format!("reduction {id}: {e}"));
+                        continue;
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("reduction {id}: {e}")),
+            }
+        }
+        count(&mut counts, "reductions", n);
+    }
+
+    // series/ — content-addressed, identity-rederiving load.
+    let series_dir = store.root.join("series");
+    if series_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in fs::read_dir(&series_dir).map_err(|e| FrfError::new(format!("series: {e}")))? {
+            let entry = entry.map_err(|e| FrfError::new(format!("series: {e}")))?;
+            if !entry.path().extension().is_some_and(|x| x == "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_series(&id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("series {id}: {e}")),
+            }
+        }
+        count(&mut counts, "series", n);
+    }
+
+    // trajectories/ — the filename IS the address
+    // ({subject}.{coordinate_system}.{series}.json); the record must match
+    // it and the derived sign must be the deterministic classification.
+    let trajectories_dir = store.root.join("trajectories");
+    if trajectories_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in fs::read_dir(&trajectories_dir)
+            .map_err(|e| FrfError::new(format!("trajectories: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("trajectories: {e}")))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(stem) = name.strip_suffix(".json") else {
+                continue;
+            };
+            let mut parts = stem.splitn(3, '.');
+            let (Some(subject), Some(coordinate), Some(series)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                errors.push(format!(
+                    "trajectory {name}: the filename is not subject.coordinate.series"
+                ));
+                continue;
+            };
+            match store.load_trajectory(subject, coordinate, series) {
+                Ok(t) => {
+                    if t.subject != subject
+                        || t.coordinate_system != coordinate
+                        || t.series != series
+                    {
+                        errors.push(format!(
+                            "trajectory {name}: the record does not match its filename address"
+                        ));
+                        continue;
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("trajectory {name}: {e}")),
+            }
+        }
+        count(&mut counts, "trajectories", n);
+    }
+
+    // challenges/ — identity + the mutation invocation/result/response
+    // evidence (cross-verified by the store loader).
+    let challenges_dir = store.root.join("challenges");
+    if challenges_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&challenges_dir).map_err(|e| FrfError::new(format!("challenges: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("challenges: {e}")))?;
+            let path = entry.path();
+            if path.is_dir() {
+                continue; // challenges/<id>/mutation/ evidence dirs
+            }
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_challenge(&id) {
+                Ok(c) => {
+                    // A challenge with a declared mutation invocation binds
+                    // the proposed mutant evidence; the store loader
+                    // cross-verifies the whole chain.
+                    if c.mutation_invocation_id.is_some() {
+                        if let Err(e) = store.load_mutation_evidence(&id) {
+                            errors.push(format!("challenge {id} mutation: {e}"));
+                            continue;
+                        }
+                    }
+                    n += 1;
+                }
+                Err(e) => errors.push(format!("challenge {id}: {e}")),
+            }
+        }
+        count(&mut counts, "challenges", n);
+    }
+
+    // witnesses/ — the verified loader (identity + preserved documents +
+    // SUBJECT REBINDING to the actual evidence object).
+    let witnesses_dir = store.root.join("witnesses");
+    if witnesses_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&witnesses_dir).map_err(|e| FrfError::new(format!("witnesses: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("witnesses: {e}")))?;
+            let path = entry.path();
+            if path.is_dir() {
+                continue; // witnesses/<id>/ request/response evidence
+            }
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match load_witness_statement_verified(store, &id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("witness {id}: {e}")),
+            }
+        }
+        count(&mut counts, "witnesses", n);
+    }
+
+    // independence/ — identity + the bound statement cross-check.
+    let independence_dir = store.root.join("independence");
+    if independence_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in fs::read_dir(&independence_dir)
+            .map_err(|e| FrfError::new(format!("independence: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("independence: {e}")))?;
+            if !entry.path().extension().is_some_and(|x| x == "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_independence(&id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("independence {id}: {e}")),
+            }
+        }
+        count(&mut counts, "independence", n);
+    }
+
+    // attempts/ — refused execution-attempt evidence (verified loader).
+    let attempts_dir = store.root.join("attempts");
+    if attempts_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&attempts_dir).map_err(|e| FrfError::new(format!("attempts: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("attempts: {e}")))?;
+            if !entry.path().extension().is_some_and(|x| x == "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match load_execution_attempt_verified(store, &id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("attempt {id}: {e}")),
+            }
+        }
+        count(&mut counts, "attempts", n);
+    }
+
+    // harness/ — identity-rederiving harness-event load.
+    let harness_dir = store.root.join("harness");
+    if harness_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in
+            fs::read_dir(&harness_dir).map_err(|e| FrfError::new(format!("harness: {e}")))?
+        {
+            let entry = entry.map_err(|e| FrfError::new(format!("harness: {e}")))?;
+            if !entry.path().extension().is_some_and(|x| x == "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match store.load_harness_event(&id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("harness {id}: {e}")),
+            }
+        }
+        count(&mut counts, "harness", n);
+    }
+
+    // claims/ — the full re-verification (identity, premises, scope algebra,
+    // universe, policy evidence). The non-normative by-receipt index is not
+    // an object namespace and is skipped.
+    let claims_dir = store.root.join("claims");
+    if claims_dir.is_dir() {
+        let mut n = 0usize;
+        for entry in fs::read_dir(&claims_dir).map_err(|e| FrfError::new(format!("claims: {e}")))? {
+            let entry = entry.map_err(|e| FrfError::new(format!("claims: {e}")))?;
+            let path = entry.path();
+            if path.is_dir() {
+                continue; // claims/by-receipt/
+            }
+            if path.extension().is_none_or(|x| x != "json") {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let id = name.trim_end_matches(".json").to_string();
+            match load_claim_verified(store, &id) {
+                Ok(_) => n += 1,
+                Err(e) => errors.push(format!("claim {id}: {e}")),
+            }
+        }
+        count(&mut counts, "claims", n);
+    }
+
+    counts.sort();
+    Ok(WholeStoreReport {
+        counts,
+        errors,
+        detached,
+        surface_declared,
+        surface_withheld,
+    })
+}
+
+fn push_unique(
+    detached: &mut Vec<crate::model::DetachedObjectRef>,
+    d: crate::model::DetachedObjectRef,
+) {
+    if !detached.iter().any(|x| x.cid == d.cid) {
+        detached.push(d);
+    }
+}
+
+/// The external-minimizer invocation evidence under `reductions/<id>/minimizer/`
+/// (request.json, response.json, invocation.json, result.json): each file must
+/// be canonical strict JSON, the request cid must hash from the request bytes,
+/// the response must name the request it answers, the invocation must rederive
+/// its content address from the record's binding, and the result must rederive
+/// and answer the same request. The preserved REQUEST document is parsed as
+/// canonical JSON (it is a Serialize-only projection of borrowed records, so
+/// the walker validates the bound `minimizer.id`/`residual.id` structurally
+/// from the document itself).
+fn verify_reduction_minimizer_evidence(
+    store: &Store,
+    r: &crate::model::ReductionRecord,
+) -> Result<()> {
+    let Some(invocation_id) = &r.minimizer_invocation_id else {
+        return Ok(());
+    };
+    let result_id = r
+        .minimizer_result_id
+        .as_ref()
+        .ok_or_else(|| FrfError::new("a minimizer invocation without a result id"))?;
+    let dir = store.minimizer_dir(&r.id)?;
+    let request_bytes = fs::read(dir.join("request.json"))
+        .map_err(|e| FrfError::new(format!("missing minimizer request evidence: {e}")))?;
+    let request_cid = crate::ext::request_cid(&request_bytes);
+    let request: serde_json::Value = crate::canon::parse_strict(&request_bytes).map_err(|e| {
+        FrfError::new(format!(
+            "minimizer request evidence is not strict JSON: {e}"
+        ))
+    })?;
+    if request.get("schema_version")
+        != Some(&serde_json::Value::String(
+            crate::model::SCHEMA_MINIMIZER_REQUEST.to_string(),
+        ))
+    {
+        return Err(FrfError::new(
+            "the minimizer request evidence has an unsupported schema version",
+        ));
+    }
+    let response_bytes = fs::read(dir.join("response.json"))
+        .map_err(|e| FrfError::new(format!("missing minimizer response evidence: {e}")))?;
+    let response_cid = crate::host::sha256_bytes(&response_bytes);
+    let response: crate::model::MinimizerResponse = store
+        .parse_evidence(&dir.join("response.json"))
+        .map_err(|e| {
+            FrfError::new(format!(
+                "minimizer response evidence is not canonical JSON: {e}"
+            ))
+        })?;
+    if response.request_id != request_cid {
+        return Err(FrfError::new(
+            "the minimizer response does not name the request it answers",
+        ));
+    }
+    let invocation: crate::model::MinimizerInvocation = store
+        .parse_evidence(&dir.join("invocation.json"))
+        .map_err(|e| {
+            FrfError::new(format!(
+                "minimizer invocation evidence is not canonical JSON: {e}"
+            ))
+        })?;
+    if invocation.invocation_id != *invocation_id {
+        return Err(FrfError::new(
+            "the minimizer invocation evidence does not carry the bound invocation id",
+        ));
+    }
+    if invocation.request_cid != request_cid {
+        return Err(FrfError::new(
+            "the minimizer invocation names a different request than the evidence",
+        ));
+    }
+    let result: crate::model::MinimizerResult = store
+        .parse_evidence(&dir.join("result.json"))
+        .map_err(|e| {
+            FrfError::new(format!(
+                "minimizer result evidence is not canonical JSON: {e}"
+            ))
+        })?;
+    if result.result_id != *result_id {
+        return Err(FrfError::new(
+            "the minimizer result evidence does not carry the bound result id",
+        ));
+    }
+    if result.request_cid != request_cid || result.response_cid != response_cid {
+        return Err(FrfError::new(
+            "the minimizer result does not answer the evidence's request/response",
+        ));
+    }
+    // The identity rederivations: the invocation and the result must rehash
+    // to their recorded ids from the record's binding.
+    let rederived_invocation = crate::semantics::minimizer_invocation_identity(
+        &crate::semantics::MinimizerInvocationContent {
+            minimizer_id: &invocation.minimizer_id,
+            residual_id: &invocation.residual_id,
+            request_cid: &invocation.request_cid,
+            minimizer_semantic_cid: &invocation.minimizer_semantic_cid,
+            minimizer_implementation_artifact: &invocation.minimizer_implementation_artifact,
+            execution_provenance: &invocation.execution_provenance,
+        },
+    )?;
+    if rederived_invocation != *invocation_id {
+        return Err(FrfError::new(
+            "the minimizer invocation does not rederive its content address",
+        ));
+    }
+    let rederived_result =
+        crate::semantics::minimizer_result_identity(&crate::semantics::MinimizerResultContent {
+            request_cid: &result.request_cid,
+            response_cid: &result.response_cid,
+            proposed_fixture_sha256: &result.proposed_fixture_sha256,
+            court_verified: result.court_verified,
+        })?;
+    if rederived_result != *result_id {
+        return Err(FrfError::new(
+            "the minimizer result does not rederive its content address",
+        ));
+    }
+    // The request the evidence preserves must carry the residual + the
+    // minimizer the record binds (validated structurally from the canonical
+    // document).
+    let bound_minimizer = r.minimizer_semantic_id.as_deref().unwrap_or_default();
+    let request_minimizer = request
+        .pointer("/minimizer/id")
+        .and_then(serde_json::Value::as_str);
+    let request_residual = request
+        .pointer("/residual/id")
+        .and_then(serde_json::Value::as_str);
+    if request_minimizer != Some(bound_minimizer)
+        || request_residual != Some(r.residual_id.as_str())
+    {
+        return Err(FrfError::new(
+            "the preserved minimizer request does not name the bound minimizer/residual",
+        ));
+    }
+    Ok(())
+}
