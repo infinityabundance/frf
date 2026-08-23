@@ -319,6 +319,20 @@ pub enum EvidenceCmd {
     /// verdict, the OBJECT CLOSURE (complete, or incomplete-by-policy with
     /// the declared-detached payloads), and REPLAYABILITY
     Status {},
+    /// The publication transform: copy a COMPLETE local evidence tree to an
+    /// output, withholding every payload the policy declares detached, and
+    /// write the declaration into the output. The output is written fresh
+    /// (never overwritten) and is verified at the graph level before the
+    /// command returns
+    PublishDetached {
+        /// The publication policy: a frf-detached-objects-v1 declaration
+        /// naming the cids (and optional record paths) to withhold
+        #[arg(long, value_name = "PATH")]
+        policy: PathBuf,
+        /// The output tree (must not already exist)
+        #[arg(long, value_name = "PATH")]
+        output: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]

@@ -120,6 +120,158 @@ fn declared_detached_keeps_the_graph_verified() {
     );
 }
 
+/// The publication transform: a COMPLETE local tree -> publish-detached ->
+/// a tree WITHOUT the declared payloads + the declaration; byte-deterministic;
+/// refuses to publish from an incomplete source or an existing output.
+#[test]
+fn publish_detached_transform_withholds_and_declares() {
+    let work = Workdir::new("publish");
+    work.copy_canonical_tree();
+    let root = ROOT;
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "authority",
+            "admit",
+            "golden/reference.sh",
+            "--name",
+            "ref-cli",
+            "--version",
+            "1.8.2",
+        ],
+    );
+    assert_success(&out, "authority admit");
+    let out = frf(&work, &["--root", root, "court", "run", MANIFEST]);
+    assert_success(&out, "court run");
+
+    // The candidate object cid (from the capture).
+    let captures = fs::read_dir(work.path("frf/captures")).unwrap();
+    let mut candidate_cid = String::new();
+    for entry in captures {
+        let run = entry.unwrap().file_name().to_string_lossy().to_string();
+        let cap: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
+        )
+        .unwrap();
+        for ref_ in cap["evidence_refs"].as_array().unwrap() {
+            if ref_["role"] == "candidate-artifact" {
+                candidate_cid = ref_["cid"].as_str().unwrap().to_string();
+            }
+        }
+    }
+    assert_eq!(candidate_cid.len(), 64);
+
+    // The policy: withhold the candidate artifact.
+    let policy = serde_json::json!({
+        "schema_version": "frf-detached-objects-v1",
+        "policy": "detached",
+        "objects": [{
+            "cid": candidate_cid,
+            "role": "candidate-artifact",
+            "publication": "external-security-sensitive",
+            "size": "17",
+            "reconstruction": {"recipe": "re-run the court with the local artifacts", "source_path": "golden/candidate.sh"},
+        }],
+    });
+    let policy_canonical = frf::canon::canonical(&policy).expect("the policy must canonicalize");
+    let policy_path = work.path("policy.json");
+    fs::write(&policy_path, policy_canonical.as_bytes()).unwrap();
+
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "evidence",
+            "publish-detached",
+            "--policy",
+            "policy.json",
+            "--output",
+            "publication",
+        ],
+    );
+    assert_success(&out, "publish-detached");
+
+    // The candidate object is absent; the declaration is present; the graph
+    // verifies with an incomplete-by-policy closure.
+    assert!(
+        !work
+            .path("publication/objects/sha256")
+            .join(&candidate_cid)
+            .exists(),
+        "the withheld candidate must not be in the publication"
+    );
+    assert!(work.path("publication/detached-objects.json").is_file());
+    let out = frf(&work, &["--root", "publication", "evidence", "status"]);
+    assert_success(&out, "publication status");
+    let text = stdout(&out);
+    assert!(text.contains("graph_verified: yes"), "graph: {text}");
+    assert!(text.contains("incomplete-by-policy"), "closure: {text}");
+
+    // Determinism: a second publish is byte-identical.
+    let pub2 = work.path("publication-2");
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            root,
+            "evidence",
+            "publish-detached",
+            "--policy",
+            "policy.json",
+            "--output",
+            "publication-2",
+        ],
+    );
+    assert_success(&out, "second publish");
+    let same = dirs_identical(&work.path("publication"), &pub2);
+    assert!(same, "the publication transform must be byte-deterministic");
+
+    // Refuses to publish from an INCOMPLETE source (the published tree).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            "publication",
+            "evidence",
+            "publish-detached",
+            "--policy",
+            "policy.json",
+            "--output",
+            "publication-3",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "publish-detached must refuse an incomplete source tree"
+    );
+}
+
+fn dirs_identical(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let walk = |p: &std::path::Path| -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut pending = vec![p.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let entry = entry.unwrap();
+                let from = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(from);
+                } else {
+                    let rel = from.strip_prefix(p).unwrap().to_string_lossy().to_string();
+                    out.push((rel, fs::read(&from).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    };
+    walk(a) == walk(b)
+}
+
 /// The declaration's own semantic rules: duplicate cids, bad cids, empty
 /// fields, and wrong schema versions are all refused.
 #[test]

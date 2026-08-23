@@ -208,6 +208,11 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
         },
         Command::Evidence { sub } => match sub {
             EvidenceCmd::Status {} => evidence::status(store),
+            EvidenceCmd::PublishDetached { policy, output } => {
+                let out = evidence::publish_detached(store, &policy, &output)?;
+                println!("{}", out.display());
+                Ok(())
+            }
         },
     }
 }
