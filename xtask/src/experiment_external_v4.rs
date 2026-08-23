@@ -286,7 +286,7 @@ const SHELLSHOCK_TRIGGER: &str = "x=() { :;}; echo PWNED";
 
 /// The per-case ambient trigger for the BARE baselines (empty for cases
 /// without an ambient trigger, the Shellshock import variable otherwise).
-fn bare_trigger_env(meta: &Value) -> Vec<&str> {
+pub(crate) fn bare_trigger_env(meta: &Value) -> Vec<&str> {
     if as_str(&meta["trigger"]) == "env" {
         vec![SHELLSHOCK_TRIGGER]
     } else {

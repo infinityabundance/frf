@@ -111,6 +111,12 @@ jobs:
       - name: The external empirical program v4 — the comparative measurement study
         run: |
           cargo xtask external-experiment-v4 golden/work/external-experiment-v4.json
+      - name: The external empirical program v5 — the proper runtime-overhead benchmark
+        env:
+          FRF_BENCH_SAMPLES: "5"
+          FRF_BENCH_WARMUPS: "1"
+        run: |
+          cargo xtask external-experiment-v5 golden/work/external-experiment-v5.json
 
   go-verifier:
     name: "Go verifier: the third triangle point"

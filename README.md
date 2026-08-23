@@ -260,6 +260,7 @@ not these tables.
 | frf-external-experiment-v2 | active | external empirical program v2 report |
 | frf-external-experiment-v3 | active | external empirical program v3 report (real upstream releases) |
 | frf-external-experiment-v4 | active | external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus) |
+| frf-external-experiment-v5 | active | external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description — measurements only, no timing thresholds) |
 
 ### Relations
 

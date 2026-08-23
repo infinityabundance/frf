@@ -44,7 +44,7 @@ use std::process::Command;
 use super::experiment::{dir_size, frf_bin};
 use crate::load_evidence;
 
-fn as_str(v: &Value) -> &str {
+pub(crate) fn as_str(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 

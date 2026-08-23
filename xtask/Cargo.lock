@@ -263,9 +263,10 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.60"
+version = "0.1.61"
 dependencies = [
  "base64",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

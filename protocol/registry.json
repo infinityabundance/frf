@@ -804,6 +804,11 @@
       "id": "frf-external-experiment-v4",
       "status": "active",
       "scope": "external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus)"
+    },
+    {
+      "id": "frf-external-experiment-v5",
+      "status": "active",
+      "scope": "external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description — measurements only, no timing thresholds)"
     }
   ],
   "relations": {
