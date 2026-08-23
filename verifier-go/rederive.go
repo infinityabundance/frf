@@ -775,22 +775,24 @@ func dispositionDoc(event *jcs.Object) *jcs.Object {
 	}
 }
 
-// seriesIdentity: FRF/SERIES/v2 over the snapshot's own fields. The parent
+// seriesIdentity: FRF/SERIES/v3 over the snapshot's own fields. The parent
 // series id is a jcs.Value (nil encodes as null, a string as the string) —
-// a typed nil *string would not match the canonicalizer's `nil` case.
+// a typed nil *string would not match the canonicalizer's `nil` case. v3:
+// each point commits its coordinate identity (FRF/COORDINATE/v1), so the
+// series is content-addressed over the exact coordinates, not the labels.
 func seriesIdentity(experimentID string, parent jcs.Value, court, coordinateSystem string, points []*jcs.Object) (string, error) {
 	var ps []jcs.Value
 	for _, p := range points {
 		ps = append(ps, &jcs.Object{
-			Keys:   []string{"point_index", "coordinate", "run"},
-			Values: []jcs.Value{str(p, "point_index"), str(p, "coordinate"), str(p, "run")},
+			Keys:   []string{"point_index", "coordinate", "coordinate_identity", "run"},
+			Values: []jcs.Value{str(p, "point_index"), str(p, "coordinate"), str(p, "coordinate_identity"), str(p, "run")},
 		})
 	}
 	doc := &jcs.Object{
 		Keys:   []string{"experiment_id", "parent_series_id", "court", "coordinate_system", "points"},
 		Values: []jcs.Value{experimentID, parent, court, coordinateSystem, ps},
 	}
-	return hashPreimage("FRF/SERIES/v2", doc)
+	return hashPreimage("FRF/SERIES/v3", doc)
 }
 
 // reductionIdentity: FRF/REDUCTION/v3 over the reduction record's own fields.

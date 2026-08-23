@@ -114,8 +114,8 @@ func TestDispositionEventIdentityRederives(t *testing.T) {
 // a parent-linked append (a real parent id).
 func TestSeriesIdentityRederives(t *testing.T) {
 	point := &jcs.Object{
-		Keys:   []string{"point_index", "coordinate", "run"},
-		Values: []jcs.Value{"1", "golden-machine", "run-x"},
+		Keys:   []string{"point_index", "coordinate", "coordinate_identity", "run"},
+		Values: []jcs.Value{"1", "golden-machine", "cid-1", "run-x"},
 	}
 	id, err := seriesIdentity("exp-1", nil, "cli-malformed-input", "environment", []*jcs.Object{point})
 	if err != nil {

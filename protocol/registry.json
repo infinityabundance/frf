@@ -139,15 +139,15 @@
     },
     {
       "id": "series",
-      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots)",
-      "schema": "frf-series-v3",
-      "identity": "FRF/SERIES/v2",
+      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled",
+      "schema": "frf-series-v4",
+      "identity": "FRF/SERIES/v3",
       "status": "active"
     },
     {
       "id": "trajectory",
-      "meaning": "Ordered residual observations over a declared axis with deterministic classification",
-      "schema": "frf-trajectory-v4",
+      "meaning": "Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled",
+      "schema": "frf-trajectory-v5",
       "status": "active"
     },
     {
@@ -381,8 +381,18 @@
       "status": "active"
     },
     {
+      "domain": "FRF/SERIES/v3",
+      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points — each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
+      "status": "active"
+    },
+    {
       "domain": "FRF/SERIES/v2",
-      "meaning": "ExecutionSeries snapshot identity",
+      "meaning": "Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities)",
+      "status": "superseded"
+    },
+    {
+      "domain": "FRF/COORDINATE/v1",
+      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value — for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
       "status": "active"
     },
     {
@@ -636,12 +646,20 @@
       "status": "reserved-invalid"
     },
     {
+      "id": "frf-trajectory-v5",
+      "status": "active"
+    },
+    {
       "id": "frf-trajectory-v4",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-series-v4",
       "status": "active"
     },
     {
       "id": "frf-series-v3",
-      "status": "active"
+      "status": "superseded"
     },
     {
       "id": "frf-comparator-request-v4",

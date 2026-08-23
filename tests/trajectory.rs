@@ -263,7 +263,7 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     trajectories.sort_by_key(|t| t["subject"].as_str().unwrap().to_string());
     let mut series_id = String::new();
     for t in &trajectories {
-        assert_eq!(t["schema_version"], "frf-trajectory-v4");
+        assert_eq!(t["schema_version"], "frf-trajectory-v5");
         assert_eq!(t["coordinate_system"], "repeat_index");
         assert_eq!(t["derivation"]["drift"], "persistent");
         assert_eq!(t["derivation"]["slew"], "stable");
@@ -295,7 +295,7 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
         &fs::read_to_string(work.path(&format!("frf/series/{series_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(series["schema_version"], "frf-series-v3");
+    assert_eq!(series["schema_version"], "frf-series-v4");
     assert_eq!(series["id"], series_id);
     assert_eq!(series["coordinate_system"], "repeat_index");
     assert_eq!(series["experiment_id"], "cli-malformed-input-repeat_index");
@@ -402,7 +402,7 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
     for path in &files {
         let t: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(t["schema_version"], "frf-trajectory-v4");
+        assert_eq!(t["schema_version"], "frf-trajectory-v5");
         assert_eq!(t["coordinate_system"], "repeat_index");
         let obs = t["observations"].as_array().unwrap();
         assert_eq!(obs.len(), 5);
@@ -547,5 +547,130 @@ fn single_run_courts_keep_the_honest_not_observed_sign_and_write_no_trajectories
             serde_json::json!([]),
             "a single-run receipt honestly carries no trajectory evidence (drift/slew are not-observed)"
         );
+    }
+}
+
+/// 0.1.60 — the coordinate IDENTITY: a series point says what EXACTLY
+/// varied, content-addressed (FRF/COORDINATE/v1), never merely what it was
+/// labelled. The identity is the candidate ARTIFACT (content), not the path:
+/// identical bytes at different paths share one identity; different bytes at
+/// the same path are different coordinates. The environment coordinate binds
+/// the effective environment DIGEST.
+#[test]
+fn series_points_carry_content_bearing_coordinate_identities() {
+    let work = Workdir::new("trajectory-coord-identity");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let store = frf::store::Store::new(work.path("frf"));
+
+    // The SAME candidate bytes at TWO different paths: the coordinate LABELS
+    // differ (the paths) but the coordinate IDENTITIES are equal — the
+    // identity is the artifact content, never the label.
+    let v1 = "#!/bin/sh\necho \"tool: unknown directive 'servre'\" >&2\nexit 7\n";
+    let path1 = work.path("golden/candidate.sh");
+    let path2 = work.path("golden/candidate-2.sh");
+    fs::write(&path1, v1).unwrap();
+    fs::write(&path2, v1).unwrap();
+    set_exec(&path1);
+    set_exec(&path2);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            MANIFEST,
+            "--candidate-revisions",
+            "golden/candidate.sh,golden/candidate-2.sh",
+        ],
+    );
+    assert_success(
+        &out,
+        "candidate-revision series (identical bytes, two paths)",
+    );
+
+    let heads = store
+        .experiment_heads("cli-malformed-input-candidate_revision")
+        .unwrap();
+    assert_eq!(heads.len(), 1);
+    let points = &heads[0].points;
+    assert_eq!(points.len(), 2);
+    // Different path labels — but ONE coordinate identity (identical bytes).
+    assert_ne!(points[0].coordinate, points[1].coordinate);
+    assert_eq!(points[0].coordinate_identity, points[1].coordinate_identity);
+    assert_eq!(points[0].coordinate_identity.len(), 64);
+    // The coordinate identity rederives (FRF/COORDINATE/v1 over the
+    // candidate artifact identity from the verified run).
+    for p in points {
+        let cap = frf::verify::load_capture_verified(&store, &p.run)
+            .unwrap()
+            .capture;
+        let expected = frf::semantics::coordinate_identity(
+            "candidate_revision",
+            &serde_json::to_value(&cap.candidate_artifact).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(p.coordinate_identity, expected);
+    }
+
+    // DIFFERENT bytes at the same path are different coordinates — the
+    // artifact identity moves with the bytes. (Semantics-level: the identity
+    // formula is the same one the series points commit.)
+    let v2 = "#!/bin/sh\necho \"tool: unknown directive 'quuxle'\" >&2\nexit 7\n";
+    let artifact1: frf::model::ArtifactIdentity = serde_json::from_value(serde_json::json!({
+        "path": "golden/candidate.sh",
+        "sha256": frf::host::sha256_bytes(v1.as_bytes()),
+    }))
+    .unwrap();
+    let artifact2: frf::model::ArtifactIdentity = serde_json::from_value(serde_json::json!({
+        "path": "golden/candidate.sh",
+        "sha256": frf::host::sha256_bytes(v2.as_bytes()),
+    }))
+    .unwrap();
+    let id1 = frf::semantics::coordinate_identity(
+        "candidate_revision",
+        &serde_json::to_value(&artifact1).unwrap(),
+    )
+    .unwrap();
+    let id2 = frf::semantics::coordinate_identity(
+        "candidate_revision",
+        &serde_json::to_value(&artifact2).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        id1, id2,
+        "different candidate bytes at the same path are different coordinates"
+    );
+    // Different coordinate SYSTEMS never collide (domain separation).
+    let env_id = frf::semantics::coordinate_identity(
+        "environment",
+        &serde_json::json!({ "label": "machine-a", "digest": id1 }),
+    )
+    .unwrap();
+    assert_ne!(env_id, id1, "coordinate systems are domain-separated");
+
+    // The trajectory observations mirror the coordinate identities.
+    let series_id = &heads[0].id;
+    let trajectories_dir = work.path("frf/trajectories");
+    let entries: Vec<String> = fs::read_dir(&trajectories_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(&format!(".candidate_revision.{series_id}.json")))
+        .collect();
+    assert!(!entries.is_empty(), "the series must derive trajectories");
+    for name in entries {
+        let lineage = name
+            .split_once(".candidate_revision.")
+            .map(|(l, _)| l.to_string())
+            .unwrap();
+        let t = store
+            .load_trajectory(&lineage, "candidate_revision", series_id)
+            .unwrap();
+        assert_eq!(t.observations.len(), 2);
+        for (obs, point) in t.observations.iter().zip(points) {
+            assert_eq!(obs.coordinate_identity, point.coordinate_identity);
+        }
     }
 }

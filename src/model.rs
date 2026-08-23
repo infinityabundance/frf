@@ -543,7 +543,11 @@ pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 /// (2+ bands along an ordered version/revision axis); slew gains `gradual`
 /// (a monotonic magnitude trend across the axis, driven by the new
 /// per-observation `magnitude` measure and the derivation's `trend`).
-pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v4";
+/// v5: the observations carry the CONTENT IDENTITY of their coordinate
+/// (`FRF/COORDINATE/v1`) — a trajectory says exactly what varied at each
+/// point (the candidate artifact identity, the authority record address, the
+/// effective environment digest), not merely what the point was labelled.
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v5";
 
 /// The ExecutionSeries protocol object: the experiment. One chain per
 /// (court, coordinate system); points are appended by series courts
@@ -555,8 +559,10 @@ pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v4";
 /// silently fork the experiment, and branching becomes visible (a second
 /// head refuses an implicit append). A run never carries series membership
 /// — the series references the runs, and multiple coordinates may reference
-/// the same content-addressed run.
-pub const SCHEMA_SERIES: &str = "frf-series-v3";
+/// the same content-addressed run. v4: each point carries the CONTENT
+/// IDENTITY of its coordinate (`FRF/COORDINATE/v1`), so the series says what
+/// EXACTLY varied at each point, not merely what it was labelled.
+pub const SCHEMA_SERIES: &str = "frf-series-v4";
 
 /// The comparator extension protocol (spec/comparator.md): a canonical
 /// JSON request a court writes to an external comparator program's stdin,
@@ -3064,6 +3070,12 @@ pub struct TrajectoryObservation {
     /// The coordinate value (repetition index, candidate artifact hash,
     /// authority version, environment label, time label).
     pub coordinate: String,
+    /// The CONTENT IDENTITY of this point's coordinate (`FRF/COORDINATE/v1`,
+    /// v5): what EXACTLY varied at this point — the candidate artifact
+    /// identity, the authority record's content address, or the effective
+    /// environment digest. A trajectory says what moved, not merely what the
+    /// point was labelled.
+    pub coordinate_identity: String,
     pub run: String,
     pub observed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3235,8 +3247,15 @@ pub struct SeriesPoint {
     /// The point index, as a STRING (the canonical JSON value domain has no
     /// numbers).
     pub point_index: String,
-    /// The coordinate value at this point.
+    /// The coordinate value at this point (repetition index, candidate path,
+    /// authority version, environment label, time label).
     pub coordinate: String,
+    /// The CONTENT IDENTITY of this point's coordinate (`FRF/COORDINATE/v1`,
+    /// v4): what EXACTLY varied — the candidate artifact identity, the
+    /// authority record's content address, or the effective environment
+    /// digest — computed from the point's verified run, never from the
+    /// caller's label.
+    pub coordinate_identity: String,
     /// The content-addressed run this point produced (identical evidence
     /// shares the run).
     pub run: String,

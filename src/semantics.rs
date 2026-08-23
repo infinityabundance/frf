@@ -656,13 +656,31 @@ pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Res
     )
 }
 
+/// The coordinate identity of one series point (0.1.60): what EXACTLY varied
+/// at this point, content-addressed. `FRF/COORDINATE/v1` over the coordinate
+/// system and the system-specific value — for `candidate_revision` the
+/// candidate ARTIFACT identity, for `authority_version` the authority
+/// record's content address, for `environment` the effective environment
+/// digest, for `repeat_index` the index, for `time` the declared label (the
+/// run pins the observation). A trajectory says what moved, not merely what
+/// the point was labelled.
+pub fn coordinate_identity(coordinate_system: &str, value: &serde_json::Value) -> Result<String> {
+    let doc = json!({
+        "coordinate_system": coordinate_system,
+        "value": value,
+    });
+    hash_preimage("FRF/COORDINATE/v1", &doc)
+}
+
 /// The ExecutionSeries identity: content-addressed over the experiment
 /// (court, coordinate system, the parent snapshot, and the ordered points).
 /// Every append produces a NEW series record — the growth of a series is an
 /// immutable, parent-linked history; trajectories reference the series
 /// snapshot they derive from. The point index enters the preimage as its
 /// string form (the canonical value domain is strings/arrays/booleans/null
-/// — numbers are refused).
+/// — numbers are refused). v3: each point also commits its COORDINATE
+/// IDENTITY (`FRF/COORDINATE/v1`), so the series is content-addressed over
+/// the exact coordinates, not the labels.
 pub fn series_identity(
     experiment_id: &str,
     parent_series_id: Option<&str>,
@@ -680,11 +698,12 @@ pub fn series_identity(
             .map(|p| json!({
                 "point_index": p.point_index,
                 "coordinate": p.coordinate,
+                "coordinate_identity": p.coordinate_identity,
                 "run": p.run,
             }))
             .collect::<Vec<_>>(),
     });
-    hash_preimage("FRF/SERIES/v2", &doc)
+    hash_preimage("FRF/SERIES/v3", &doc)
 }
 
 /// The reduction identity: content-addressed over the minimization

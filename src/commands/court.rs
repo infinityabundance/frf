@@ -61,6 +61,7 @@ use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
 use crate::store::Store;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -183,6 +184,9 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
     // The parent snapshot of the new series record (environment/time
     // experiments accumulate; the one-shot axes write a fresh snapshot).
     let mut parent_series_id: Option<String> = None;
+    // The authority NAME (for the authority_version axis): the manifest's
+    // admitted authority's name, each point runs {name}-{version}.
+    let authority_name = store.load_authority(&manifest.court.authority)?.name;
     match coordinate_system {
         "repeat_index" => {
             let n = opts.repeat.unwrap();
@@ -192,6 +196,10 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 points.push(SeriesPoint {
                     point_index: k.to_string(),
                     coordinate: k.to_string(),
+                    coordinate_identity: crate::semantics::coordinate_identity(
+                        "repeat_index",
+                        &json!(k.to_string()),
+                    )?,
                     run,
                 });
             }
@@ -209,6 +217,21 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                 points.push(SeriesPoint {
                     point_index: (i + 1).to_string(),
                     coordinate: path.clone(),
+                    // The coordinate IDENTITY is the candidate ARTIFACT
+                    // identity from the verified run — two revisions sharing
+                    // a path are still different coordinates.
+                    coordinate_identity: crate::semantics::coordinate_identity(
+                        "candidate_revision",
+                        &serde_json::to_value(
+                            &crate::verify::load_capture_verified(store, &run)?.capture
+                                .candidate_artifact,
+                        )
+                        .map_err(|e| {
+                            FrfError::new(format!(
+                                "cannot serialize the candidate artifact for the coordinate identity: {e}"
+                            ))
+                        })?,
+                    )?,
                     run,
                 });
             }
@@ -220,19 +243,27 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
                     "--authority-versions needs at least two versions (one point cannot observe drift or slew)",
                 ));
             }
-            // The authority NAME comes from the manifest's admitted authority;
-            // each point runs {name}-{version}. Every version must already be
-            // admitted — fail fast before executing any point.
-            let authority = store.load_authority(&manifest.court.authority)?;
+            // Every version must already be admitted — fail fast before
+            // executing any point.
             for version in versions {
-                store.load_authority(&format!("{}-{}", authority.name, version))?;
+                store.load_authority(&format!("{authority_name}-{version}"))?;
             }
             for (i, version) in versions.iter().enumerate() {
                 let run = run_once(store, manifest_path, None, Some(version), true, None)?;
                 first_run.get_or_insert_with(|| run.clone());
+                let authority = store.load_authority(&format!("{authority_name}-{version}"))?;
                 points.push(SeriesPoint {
                     point_index: (i + 1).to_string(),
                     coordinate: version.clone(),
+                    // The coordinate IDENTITY binds the exact admission
+                    // record's content address, not the version label.
+                    coordinate_identity: crate::semantics::coordinate_identity(
+                        "authority_version",
+                        &json!({
+                            "authority": authority.id,
+                            "record_cid": crate::semantics::record_content_identity(&authority)?,
+                        }),
+                    )?,
                     run,
                 });
             }
@@ -302,9 +333,28 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
             // occurred is recorded — deduplicating would destroy the
             // persistence information precisely when the system is stable).
             points = prior;
+            // The coordinate IDENTITY binds the exact thing that varied:
+            // for `environment` the point's effective environment digest
+            // (content-addressed declared input), for `time` the declared
+            // label (the run pins the observation).
+            let coordinate_value = if coordinate_system == "environment" {
+                json!({
+                    "label": label,
+                    "digest": crate::verify::load_capture_verified(store, &run)?
+                        .capture
+                        .environment
+                        .digest,
+                })
+            } else {
+                json!({ "label": label })
+            };
             points.push(SeriesPoint {
                 point_index: index,
                 coordinate: label.clone(),
+                coordinate_identity: crate::semantics::coordinate_identity(
+                    coordinate_system,
+                    &coordinate_value,
+                )?,
                 run: run.clone(),
             });
             parent_series_id = parent;
@@ -416,6 +466,7 @@ fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize>
                 .map(|(i, o)| TrajectoryObservation {
                     point_index: series.points[i].point_index.clone(),
                     coordinate: series.points[i].coordinate.clone(),
+                    coordinate_identity: series.points[i].coordinate_identity.clone(),
                     run: series.points[i].run.clone(),
                     observed: o.is_some(),
                     residual: o.as_ref().map(|(r, _, _)| r.clone()),

@@ -549,7 +549,9 @@ pub fn residual_lineage(
 /// (experiment key, parent snapshot, court, coordinate system, ordered
 /// points; the point index enters as its string form — the canonical value
 /// domain has no numbers). v2: parent-linked — an append is a NEW immutable
-/// node of the experiment's history.
+/// node of the experiment's history. v3: each point commits its COORDINATE
+/// IDENTITY (`FRF/COORDINATE/v1`) — the series is content-addressed over the
+/// exact coordinates, not the labels.
 pub fn series_identity(
     experiment_id: &str,
     parent_series_id: Option<&str>,
@@ -568,13 +570,14 @@ pub fn series_identity(
                     json!({
                         "point_index": s(&p["point_index"]).to_string(),
                         "coordinate": s(&p["coordinate"]),
+                        "coordinate_identity": s(&p["coordinate_identity"]),
                         "run": s(&p["run"]),
                     })
                 })
                 .collect::<Vec<_>>()
         }).unwrap_or_default(),
     });
-    preimage("FRF/SERIES/v2", &doc)
+    preimage("FRF/SERIES/v3", &doc)
 }
 
 /// FRF/REDUCTION/v3 over the minimization record's own fields — every bound

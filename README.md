@@ -113,8 +113,8 @@ not these tables.
 | residual-lineage | Stable comparison question/surface/feature across revisions and environments | FRF/RESIDUAL-LINEAGE/v1 | active |
 | disposition-event | Interpretation/state transition of a residual (hash-chained append-only events) | frf-disposition-v2 · FRF/DISPOSITION-EVENT/v1 | active |
 | resolution | Evidence that a residual closed (a fixed event + its resolution run) | — | active |
-| series | Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots) | frf-series-v3 · FRF/SERIES/v2 | active |
-| trajectory | Ordered residual observations over a declared axis with deterministic classification | frf-trajectory-v4 | active |
+| series | Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled | frf-series-v4 · FRF/SERIES/v3 | active |
+| trajectory | Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled | frf-trajectory-v5 | active |
 | reduction | Minimization attempt: fixture reduction + preservation predicate | frf-reduction-v4 · FRF/REDUCTION/v3 | active |
 | token | Deterministic endoduction result routing the residual | frf-token-v1 | active |
 | challenge | Court capability evidence: a seeded defect the court demonstrated it can see | frf-challenge-v1 · FRF/CHALLENGE/v1 | active |
@@ -158,7 +158,9 @@ not these tables.
 | FRF/RESIDUAL-FINGERPRINT/v1 | Exact residual observation fingerprint | active |
 | FRF/RESIDUAL-LINEAGE/v1 | Stable residual lineage across revisions/environments | active |
 | FRF/KIND/v1 | Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary | active |
-| FRF/SERIES/v2 | ExecutionSeries snapshot identity | active |
+| FRF/SERIES/v3 | ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points — each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run | active |
+| FRF/SERIES/v2 | Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities) | superseded |
+| FRF/COORDINATE/v1 | Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value — for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled | active |
 | FRF/REDUCTION/v3 | Reduction record identity | active |
 | FRF/REDUCTION/v2 | Previous reduction record identity (superseded by v3) | superseded |
 | FRF/KNOWLEDGE/v2 | Knowledge snapshot (evidence universe U) identity | active |
@@ -220,8 +222,10 @@ not these tables.
 | frf-bundle-v3 | active |  |
 | frf-bundle-v2 | superseded |  |
 | frf-bundle-v9 | reserved-invalid |  |
-| frf-trajectory-v4 | active |  |
-| frf-series-v3 | active |  |
+| frf-trajectory-v5 | active |  |
+| frf-trajectory-v4 | superseded |  |
+| frf-series-v4 | active |  |
+| frf-series-v3 | superseded |  |
 | frf-comparator-request-v4 | active |  |
 | frf-comparator-request-v3 | superseded |  |
 | frf-comparator-response-v2 | active |  |
