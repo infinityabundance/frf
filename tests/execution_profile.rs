@@ -389,7 +389,7 @@ fn a_produced_tree_over_the_cap_refuses_the_run_and_records_the_event() {
     // The candidate writes far more produced files than the tiny cap allows.
     // Like the treegen tools, it parses `--out` and creates the output
     // directory itself (the harness clears the produce path between sides).
-    let flood = "#!/bin/sh\nspec=\"\"; out=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --spec) spec=\"$2\"; shift 2 ;;\n    --out) out=\"$2\"; shift 2 ;;\n    *) shift ;;&\n  esac\ndone\nmkdir -p \"$out\"\nfor i in $(seq 1 200); do echo x > \"$out/out-$i.txt\"; done\nexit 0\n";
+    let flood = "#!/bin/sh\nspec=\"\"; out=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    --spec) spec=\"$2\"; shift 2 ;;\n    --out) out=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$out\"\nfor i in $(seq 1 200); do echo x > \"$out/out-$i.txt\"; done\nexit 0\n";
     // The fs-tree-build court's candidate is treegen-cand.sh, not the CLI
     // candidate.
     let cand = work.path("golden/treegen-cand.sh");
