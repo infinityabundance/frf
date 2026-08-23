@@ -24,10 +24,17 @@
 
 use frf::canon;
 use frf::host;
-use frf::model::{Receipt, KIND_SCHEMAS};
+use frf::model::{DetachedObjects, Receipt, KIND_SCHEMAS};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+
+/// The detached-objects declaration fixtures share the corpus layout but are
+/// a different document family: they deserialize as [`DetachedObjects`], not
+/// [`Receipt`]. Named `detached-*.json`.
+fn is_detached_fixture(name: &str) -> bool {
+    name.starts_with("detached-")
+}
 
 fn dir(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
@@ -258,12 +265,24 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
 
         // Must parse as STRICT JSON (RFC 8785 §2 I-JSON: duplicate property
         // names refused — serde_json::Value would silently collapse them) and
-        // deserialize into the schema (unknown properties refused by
-        // deny_unknown_fields).
+        // deserialize into its schema (unknown properties refused by
+        // deny_unknown_fields): an OpenReceipt, or the detached-objects
+        // declaration for the `detached-*` family.
         let value: Value = canon::parse_strict(source.as_bytes())
             .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
-        let _receipt: Receipt = serde_json::from_value(value.clone())
-            .unwrap_or_else(|e| panic!("{name}: does not deserialize as an OpenReceipt: {e}"));
+        let detached_family = is_detached_fixture(&name);
+        if detached_family {
+            let declaration: DetachedObjects = serde_json::from_value(value.clone())
+                .unwrap_or_else(|e| {
+                    panic!("{name}: does not deserialize as a detached-objects declaration: {e}")
+                });
+            declaration.validate_semantics().unwrap_or_else(|e| {
+                panic!("{name}: fails detached-objects semantic conformance: {e}")
+            });
+        } else {
+            let _receipt: Receipt = serde_json::from_value(value.clone())
+                .unwrap_or_else(|e| panic!("{name}: does not deserialize as an OpenReceipt: {e}"));
+        }
 
         let canonical =
             canon::canonical(&value).unwrap_or_else(|e| panic!("{name}: cannot canonicalize: {e}"));
@@ -288,11 +307,14 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
                     panic!("{name}: missing hashes/{name}.sha256 — run the generator")
                 });
         assert_eq!(hash, expected_hash.trim(), "{name}: digest drifted");
-        // The schema validates the canonical form too.
-        let canonical_value: Value =
-            serde_json::from_str(&canonical).expect("canonical bytes must be JSON");
-        schema_valid(&canonical_value)
-            .unwrap_or_else(|e| panic!("{name}: fails the OpenReceipt schema: {e}"));
+        // The schema validates the canonical form too (OpenReceipt family
+        // only — the detached family validated above).
+        if !detached_family {
+            let canonical_value: Value =
+                serde_json::from_str(&canonical).expect("canonical bytes must be JSON");
+            schema_valid(&canonical_value)
+                .unwrap_or_else(|e| panic!("{name}: fails the OpenReceipt schema: {e}"));
+        }
         count += 1;
     }
     assert!(!print, "generator mode: wrote pins above");
@@ -342,9 +364,22 @@ fn semantic_invalid_fixtures_must_be_refused() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let source = fs::read_to_string(&path).unwrap();
         // Structurally valid: must parse as STRICT JSON (no duplicate
-        // property names) and deserialize.
+        // property names) and deserialize. The `detached-*` family
+        // deserializes as the detached-objects declaration and must fail
+        // ITS semantic validator instead.
         let value: Value = canon::parse_strict(source.as_bytes())
             .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
+        if is_detached_fixture(&name) {
+            let declaration: DetachedObjects = serde_json::from_value(value).unwrap_or_else(|e| {
+                panic!("{name}: must deserialize as a detached-objects declaration (structural conformance): {e}")
+            });
+            assert!(
+                declaration.validate_semantics().is_err(),
+                "{name}: must fail detached-objects semantic conformance"
+            );
+            count += 1;
+            continue;
+        }
         let receipt: Receipt = serde_json::from_value(value).unwrap_or_else(|e| {
             panic!("{name}: must deserialize as an OpenReceipt (structural conformance): {e}")
         });

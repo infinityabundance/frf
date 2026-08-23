@@ -76,6 +76,14 @@ pub enum Command {
         #[command(subcommand)]
         sub: WitnessCmd,
     },
+    /// Report the verification status of an evidence tree: the GRAPH verdict
+    /// (every canonical document, identity, and reference), the OBJECT
+    /// CLOSURE (complete, or incomplete-by-policy with the declared-detached
+    /// payloads), and REPLAYABILITY
+    Evidence {
+        #[command(subcommand)]
+        sub: EvidenceCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -303,6 +311,14 @@ pub enum WitnessCmd {
         #[arg(long, value_name = "TEXT")]
         detail: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum EvidenceCmd {
+    /// Report the verification status of the evidence tree: the GRAPH
+    /// verdict, the OBJECT CLOSURE (complete, or incomplete-by-policy with
+    /// the declared-detached payloads), and REPLAYABILITY
+    Status {},
 }
 
 #[derive(Subcommand)]

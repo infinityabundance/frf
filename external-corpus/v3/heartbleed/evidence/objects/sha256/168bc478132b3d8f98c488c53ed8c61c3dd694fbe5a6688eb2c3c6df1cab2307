@@ -1,0 +1,7 @@
+#!/bin/sh
+printf '%s\n' \
+  '-----BEGIN RSA PRIVATE KEY-----' \
+  'MIIBogIBAAKCAQEAseededleakmaterialAAAAAAAAAAAAAAAAAAAAAAAAAAAA' \
+  'SECRET_KEY=12345' \
+  '-----END RSA PRIVATE KEY-----'
+exit 1

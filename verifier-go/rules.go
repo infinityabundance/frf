@@ -833,3 +833,39 @@ func semanticIDs(sems []*jcs.Object) []string {
 	}
 	return out
 }
+
+// detachedSemanticViolations — the detached-objects declaration's semantic
+// rules (frf-detached-objects-v1), independent re-implementation: exact
+// schema version, unique 64-hex cids, non-empty role/publication/recipe.
+func detachedSemanticViolations(doc jcs.Value) []string {
+	var out []string
+	o := obj(doc)
+	if str(o, "schema_version") != "frf-detached-objects-v1" {
+		out = append(out, "schema_version must be frf-detached-objects-v1")
+	}
+	if str(o, "policy") == "" {
+		out = append(out, "policy must be non-empty")
+	}
+	v, _ := o.Get("objects")
+	items := arr(v)
+	if items == nil {
+		return append(out, "objects must be an array")
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		om := obj(item)
+		cid := str(om, "cid")
+		if len(cid) != 64 || !hex64(cid) {
+			out = append(out, fmt.Sprintf("cid %q is not a 64-hex SHA-256", cid))
+		}
+		if seen[cid] {
+			out = append(out, fmt.Sprintf("duplicate detached cid %s", cid))
+		}
+		seen[cid] = true
+		rv, _ := om.Get("reconstruction")
+		if str(om, "role") == "" || str(om, "publication") == "" || str(obj(rv), "recipe") == "" {
+			out = append(out, fmt.Sprintf("cid %s: role, publication, and reconstruction.recipe must be non-empty", cid))
+		}
+	}
+	return out
+}

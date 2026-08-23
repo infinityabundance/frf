@@ -3269,6 +3269,117 @@ pub struct TrajectoryRecord {
     pub derivation: TrajectoryDerivation,
 }
 
+/// THE DETACHED-OBJECT DECLARATION — `detached-objects.json` at the
+/// evidence root (schema `frf-detached-objects-v1`).
+///
+/// A publication may deliberately withhold the BYTES of some content
+/// addresses (security-sensitive executables, export-controlled or
+/// confidential artifacts, huge payloads) while publishing the graph that
+/// references them. This declaration makes that choice explicit and
+/// mechanical: every declared CID is attested as intentionally unavailable,
+/// with its role, publication status, size, and the reconstruction recipe
+/// that reproduces the exact bytes. Verification then distinguishes:
+///
+///   - `graph_verified`  — every canonical document parses, every identity
+///     rederives, and every referenced CID resolves (its bytes are present
+///     OR it is declared detached here);
+///   - `object_closure_complete` — every referenced CID's bytes are
+///     present (replayable until the detached set is hydrated);
+///   - `replayable` — the closure is complete AND the replay checks pass.
+///
+/// A declared-detached CID is never treated as corruption: the graph
+/// verifies with an explicitly incomplete closure (`incomplete-by-policy`),
+/// and replay refuses until the bytes are materialized locally and verified
+/// against the declared CID.
+pub const SCHEMA_DETACHED_OBJECTS: &str = "frf-detached-objects-v1";
+
+/// The reconstruction recipe for one detached payload: the instruction that
+/// reproduces the exact withheld bytes (a pinned hermetic build, a pinned
+/// fetch, a re-run of the observation).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetachedReconstruction {
+    /// The human- AND machine-actionable recipe (e.g. the pinned build
+    /// script + the SHA-256-pinned sources).
+    pub recipe: String,
+    /// The repository-relative source path the bytes derive from, when the
+    /// recipe is a build of a tracked source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
+/// ONE declared-detached content address.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetachedObjectRef {
+    /// The withheld payload's content address (SHA-256 hex, 64 chars).
+    pub cid: String,
+    /// The role the payload played (`authority-artifact`, `candidate-artifact`,
+    /// `fixture-object`, `comparator-implementation`, `minimizer-implementation`,
+    /// `mutation-request`, …) — matching the evidence references.
+    pub role: String,
+    /// The publication status explaining WHY the bytes are withheld
+    /// (`external-security-sensitive`, `confidential`, `export-controlled`, …).
+    pub publication: String,
+    /// The payload size in bytes as a DECIMAL STRING (the canonical-JSON
+    /// value domain is strings/arrays/booleans/null only, so a number would
+    /// refuse to canonicalize; a hydrator parses it to bound the fetch/build).
+    pub size: String,
+    /// The store-relative path the bytes WOULD occupy, when the payload is a
+    /// record (e.g. `challenges/<id>/mutation/request.json`) rather than a
+    /// content-addressed object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// How to reproduce the exact bytes locally.
+    pub reconstruction: DetachedReconstruction,
+}
+
+/// The publication-level declaration document (`detached-objects.json`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetachedObjects {
+    pub schema_version: String,
+    /// The publication policy label (`detached`).
+    pub policy: String,
+    pub objects: Vec<DetachedObjectRef>,
+}
+
+impl DetachedObjects {
+    /// Semantic conformance for the declaration: schema version, non-empty
+    /// policy, and every CID a well-formed 64-hex content address, unique,
+    /// with a non-empty role/publication/recipe.
+    pub fn validate_semantics(&self) -> std::result::Result<(), String> {
+        if self.schema_version != SCHEMA_DETACHED_OBJECTS {
+            return Err(format!(
+                "unsupported schema version {:?} (expected {SCHEMA_DETACHED_OBJECTS})",
+                self.schema_version
+            ));
+        }
+        if self.policy.trim().is_empty() {
+            return Err("policy must be non-empty".to_string());
+        }
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for o in &self.objects {
+            if !crate::host::is_sha256_hex(&o.cid) {
+                return Err(format!("detached cid {:?} is not a 64-hex SHA-256", o.cid));
+            }
+            if !seen.insert(o.cid.as_str()) {
+                return Err(format!("duplicate detached cid {}", &o.cid[..16]));
+            }
+            if o.role.trim().is_empty()
+                || o.publication.trim().is_empty()
+                || o.reconstruction.recipe.trim().is_empty()
+            {
+                return Err(format!(
+                    "detached cid {}: role, publication, and reconstruction.recipe must be non-empty",
+                    &o.cid[..16]
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The reduction protocol object: a minimization experiment on one residual
 /// (`frf court minimize`). Every executable attempt is recorded; the final
 /// reproducer is court-verified (the lineage survives) and carries the full

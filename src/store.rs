@@ -31,6 +31,17 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The availability of one content address for GRAPH verification: present
+/// (bytes verified), declared-detached (bytes withheld by the publication
+/// policy — the graph still verifies, the closure is incomplete-by-policy),
+/// or missing (neither — an incomplete or corrupt publication).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectAvailability {
+    Present,
+    DeclaredDetached,
+    Missing,
+}
+
 /// Safe id charset: letters, digits, `.`, `_`, `-`, and never `.` or `..`.
 /// This is the *only* vocabulary ids may use, because ids become path
 /// components (authority/residual/receipt/claim filenames and run dir names).
@@ -308,12 +319,24 @@ impl Store {
                 &rederived[..16]
             )));
         }
-        let request_bytes = fs::read(dir.join("request.json")).map_err(|e| {
-            FrfError::new(format!(
-                "cannot read {}: {e}",
-                dir.join("request.json").display()
-            ))
-        })?;
+        let request_bytes = match fs::read(dir.join("request.json")) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                // The request document (which carries the reference artifact
+                // bytes) may be DECLARED DETACHED by the publication policy:
+                // the graph verifies (the invocation's own fields rederive,
+                // the CID is declared in detached-objects.json), the object
+                // closure is incomplete-by-policy. An undeclared missing
+                // request is a corrupt publication and is refused.
+                if self.detached_entry(&inv.request_cid)?.is_some() {
+                    return Ok(inv);
+                }
+                return Err(FrfError::new(format!(
+                    "cannot read {}: the request is missing and not declared detached",
+                    dir.join("request.json").display()
+                )));
+            }
+        };
         if crate::host::sha256_bytes(&request_bytes) != inv.request_cid {
             return Err(FrfError::new(format!(
                 "mutation invocation {id}: the preserved request does not hash to the recorded request_cid"
@@ -1752,6 +1775,10 @@ impl Store {
 
     /// Read + verify a content-addressed object by its hash. A missing or
     /// corrupt object is refused — replay never executes unverified bytes.
+    /// NOTE: this is the EXECUTION path (comparators, replay, hydration) and
+    /// it always requires the bytes; graph verification uses
+    /// [`Store::object_availability`], which honors the detached-object
+    /// declaration.
     pub fn verified_object_bytes(&self, sha256: &str) -> Result<Vec<u8>> {
         let path = self.object_path(sha256)?;
         if !path.is_file() {
@@ -1773,6 +1800,58 @@ impl Store {
             )));
         }
         Ok(bytes)
+    }
+
+    /// `detached-objects.json` — the publication-level declaration of
+    /// deliberately withheld content addresses (schema
+    /// `frf-detached-objects-v1`).
+    pub fn detached_objects_path(&self) -> PathBuf {
+        self.root.join("detached-objects.json")
+    }
+
+    /// Load + semantically validate the detached-object declaration, if
+    /// present. A malformed declaration is refused — the publication cannot
+    /// silently hide a payload.
+    pub fn load_detached_objects(&self) -> Result<Option<crate::model::DetachedObjects>> {
+        let path = self.detached_objects_path();
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let doc: crate::model::DetachedObjects = self.parse_evidence(&path)?;
+        doc.validate_semantics()
+            .map_err(|e| FrfError::new(format!("detached-objects.json: {e}")))?;
+        Ok(Some(doc))
+    }
+
+    /// The declaration entry for a CID, if declared detached.
+    pub fn detached_entry(&self, cid: &str) -> Result<Option<crate::model::DetachedObjectRef>> {
+        Ok(self
+            .load_detached_objects()?
+            .and_then(|d| d.objects.into_iter().find(|o| o.cid == cid)))
+    }
+
+    /// The availability of a content-addressed object for GRAPH
+    /// verification: present (bytes verified), declared-detached (bytes
+    /// withheld by policy), or missing (neither — an incomplete or corrupt
+    /// publication).
+    pub fn object_availability(&self, sha256: &str) -> Result<ObjectAvailability> {
+        let path = self.object_path(sha256)?;
+        if path.is_file() {
+            let actual = crate::host::sha256_file(&path)?;
+            if actual != sha256 {
+                return Err(FrfError::new(format!(
+                    "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to consume it",
+                    path.display(),
+                    &actual[..16],
+                    &sha256[..16]
+                )));
+            }
+            return Ok(ObjectAvailability::Present);
+        }
+        if self.detached_entry(sha256)?.is_some() {
+            return Ok(ObjectAvailability::DeclaredDetached);
+        }
+        Ok(ObjectAvailability::Missing)
     }
 
     /// Materialize bytes as an immutable content-addressed object and return

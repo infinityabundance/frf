@@ -1862,6 +1862,15 @@ fn verify_corpus(dir: &Path) {
     }
     for name in sorted_names(&dir.join("invalid-semantic")) {
         let doc = load_json(&dir.join("invalid-semantic").join(&name));
+        if name.starts_with("detached-") {
+            // The detached-objects declaration family (frf-detached-objects-v1):
+            // structurally valid, semantically refused.
+            if detached_semantic_violations(&doc).is_empty() {
+                panic!("invalid-semantic/{name}: must fail detached-objects semantic conformance");
+            }
+            count += 1;
+            continue;
+        }
         let struct_v = structural_violations(&doc);
         if !struct_v.is_empty() {
             panic!(

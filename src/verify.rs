@@ -55,11 +55,43 @@ use std::path::Path;
 // Verified captures
 // ---------------------------------------------------------------------------
 
+/// Verify one content-addressed reference for GRAPH verification: present
+/// bytes are verified (corruption refused); a declared-detached CID (in
+/// detached-objects.json) records the closure gap and passes — the graph
+/// verifies, the object closure is incomplete-by-policy; a missing,
+/// undeclared object is an incomplete or corrupt publication and is refused.
+fn check_object(
+    store: &Store,
+    sha256: &str,
+    detached: &mut Vec<crate::model::DetachedObjectRef>,
+) -> Result<()> {
+    match store.object_availability(sha256)? {
+        crate::store::ObjectAvailability::Present => Ok(()),
+        crate::store::ObjectAvailability::DeclaredDetached => {
+            if let Some(entry) = store.detached_entry(sha256)? {
+                if !detached.contains(&entry) {
+                    detached.push(entry);
+                }
+            }
+            Ok(())
+        }
+        crate::store::ObjectAvailability::Missing => Err(FrfError::new(format!(
+            "object {} is missing and not declared detached — the evidence tree is incomplete",
+            &sha256[..16]
+        ))),
+    }
+}
+
 /// A capture whose identity and derivation have been verified. Produced only
 /// by [`load_capture_verified`].
 pub struct CaptureVerified {
     pub run: String,
     pub capture: CaptureManifest,
+    /// Content addresses the publication declared detached
+    /// (detached-objects.json; bytes withheld by policy): the GRAPH
+    /// verified, the object closure is incomplete-by-policy. Empty when the
+    /// closure is complete.
+    pub detached: Vec<crate::model::DetachedObjectRef>,
 }
 
 impl CaptureVerified {
@@ -317,27 +349,29 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         }
     }
 
-    // 5. The content-addressed snapshots exist and are intact.
-    store.verified_object_bytes(&capture.authority_artifact.sha256)?;
-    store.verified_object_bytes(&capture.candidate_artifact.sha256)?;
-    store.verified_object_bytes(&capture.fixture_sha256)?;
+    // 5. The content-addressed snapshots exist and are intact (a declared-
+    //    detached payload verifies the GRAPH; the closure is recorded).
+    let mut detached: Vec<crate::model::DetachedObjectRef> = Vec::new();
+    check_object(store, &capture.authority_artifact.sha256, &mut detached)?;
+    check_object(store, &capture.candidate_artifact.sha256, &mut detached)?;
+    check_object(store, &capture.fixture_sha256, &mut detached)?;
 
     // 5b. The extension instrument snapshots exist and are intact: every
     //     normalizer, capture adapter, and minimizer implementation the
     //     capture bound at observation time is a content-addressed object.
     for impl_ in &capture.provenance.normalizer_implementations {
         if let Some(artifact) = &impl_.artifact {
-            store.verified_object_bytes(&artifact.sha256)?;
+            check_object(store, &artifact.sha256, &mut detached)?;
         }
     }
     for impl_ in &capture.provenance.adapter_implementations {
         if let Some(artifact) = &impl_.artifact {
-            store.verified_object_bytes(&artifact.sha256)?;
+            check_object(store, &artifact.sha256, &mut detached)?;
         }
     }
     for impl_ in &capture.provenance.minimizer_implementations {
         if let Some(artifact) = &impl_.artifact {
-            store.verified_object_bytes(&artifact.sha256)?;
+            check_object(store, &artifact.sha256, &mut detached)?;
         }
     }
 
@@ -586,6 +620,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     Ok(CaptureVerified {
         run: run.to_string(),
         capture,
+        detached,
     })
 }
 
@@ -982,6 +1017,10 @@ pub fn rebind_subject(
 pub struct ReceiptVerified {
     id: String,
     body: Receipt,
+    /// The declared-detached content addresses the receipt's evidence
+    /// closure hit: the graph verified, the object closure is
+    /// incomplete-by-policy.
+    detached: Vec<crate::model::DetachedObjectRef>,
 }
 
 impl ReceiptVerified {
@@ -991,6 +1030,12 @@ impl ReceiptVerified {
 
     pub fn body(&self) -> &Receipt {
         &self.body
+    }
+
+    /// The declared-detached payloads in this receipt's evidence closure
+    /// (empty when the closure is complete).
+    pub fn detached(&self) -> &[crate::model::DetachedObjectRef] {
+        &self.detached
     }
 }
 
@@ -1616,6 +1661,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     Ok(ReceiptVerified {
         id: id.to_string(),
         body,
+        detached: cv.detached,
     })
 }
 

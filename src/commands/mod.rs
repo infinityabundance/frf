@@ -6,6 +6,7 @@ pub mod bundle;
 pub mod claim;
 pub mod court;
 pub mod dispose;
+pub mod evidence;
 pub mod receipt;
 pub mod replay;
 pub mod witness;
@@ -204,6 +205,9 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 println!("{id}");
                 Ok(())
             }
+        },
+        Command::Evidence { sub } => match sub {
+            EvidenceCmd::Status {} => evidence::status(store),
         },
     }
 }

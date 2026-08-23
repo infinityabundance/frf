@@ -1022,6 +1022,13 @@ func verifyCorpus(dir string) int {
 	for _, name := range sortedNames(dir + "/invalid-semantic") {
 		path := dir + "/invalid-semantic/" + name
 		v := loadEvidenceNoCanonical(path)
+		if strings.HasPrefix(name, "detached-") {
+			if len(detachedSemanticViolations(v)) == 0 {
+				fail("invalid-semantic/%s: must be semantically refused", name)
+			}
+			count++
+			continue
+		}
 		if sv := structuralViolations(v); len(sv) > 0 {
 			fail("invalid-semantic/%s: must be structurally valid (found: %s)", name, sv[0])
 		}

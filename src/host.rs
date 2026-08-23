@@ -958,6 +958,11 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
     hex(&hasher.finalize())
 }
 
+/// Is a string a well-formed 64-hex SHA-256 content address?
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Read a file's bytes with a user-facing error.
 pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))

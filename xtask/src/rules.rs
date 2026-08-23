@@ -1469,3 +1469,44 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
         blockers,
     }
 }
+
+/// The detached-objects declaration's semantic rules
+/// (frf-detached-objects-v1): the schema version must be exact, every cid a
+/// unique 64-hex SHA-256, and role/publication/reconstruction.recipe
+/// non-empty. Independent re-implementation for the corpus walk's
+/// `detached-*` family.
+pub fn detached_semantic_violations(doc: &Value) -> Vec<String> {
+    let mut v = Vec::new();
+    if as_str(&doc["schema_version"]) != "frf-detached-objects-v1" {
+        v.push(format!(
+            "schema_version is {:?}, expected frf-detached-objects-v1",
+            doc["schema_version"]
+        ));
+    }
+    if as_str(&doc["policy"]).is_empty() {
+        v.push("policy must be non-empty".to_string());
+    }
+    let Some(objects) = doc["objects"].as_array() else {
+        v.push("objects must be an array".to_string());
+        return v;
+    };
+    let mut seen = std::collections::HashSet::new();
+    for o in objects {
+        let cid = as_str(&o["cid"]);
+        if cid.len() != 64 || !cid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            v.push(format!("cid {cid:?} is not a 64-hex SHA-256"));
+        }
+        if !seen.insert(cid) {
+            v.push(format!("duplicate detached cid {cid}"));
+        }
+        if as_str(&o["role"]).is_empty()
+            || as_str(&o["publication"]).is_empty()
+            || as_str(&o["reconstruction"]["recipe"]).is_empty()
+        {
+            v.push(format!(
+                "cid {cid}: role, publication, and reconstruction.recipe must be non-empty"
+            ));
+        }
+    }
+    v
+}

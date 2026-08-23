@@ -191,71 +191,35 @@ not these tables.
 
 | id | status | scope |
 |---|---|---|
-| frf-claim-v9 | active |  |
 | frf-authority-v1 | active |  |
-| frf-capture-v15 | active |  |
-| frf-capture-v14 | superseded |  |
-| frf-capture-v13 | superseded |  |
+| frf-bundle-v2 | superseded |  |
+| frf-bundle-v3 | active |  |
+| frf-bundle-v9 | reserved-invalid |  |
+| frf-capture-invocation-v1 | active |  |
+| frf-capture-request-v1 | active |  |
+| frf-capture-response-v1 | active |  |
+| frf-capture-result-v1 | active |  |
 | frf-capture-v12 | superseded |  |
-| frf-harness-event-v1 | active |  |
+| frf-capture-v13 | superseded |  |
+| frf-capture-v14 | superseded |  |
+| frf-capture-v15 | active |  |
+| frf-challenge-v1 | active |  |
+| frf-ci-status-v1 | active |  |
+| frf-claim-v7 | superseded |  |
+| frf-claim-v8 | superseded |  |
+| frf-claim-v9 | active |  |
+| frf-comparator-invocation-v1 | active |  |
+| frf-comparator-request-v3 | superseded |  |
+| frf-comparator-request-v4 | active |  |
+| frf-comparator-response-v2 | active |  |
+| frf-comparator-response-v9 | reserved-invalid |  |
+| frf-comparator-result-v1 | active |  |
+| frf-detached-objects-v1 | active |  |
+| frf-disposition-v2 | active |  |
+| frf-environment-v3 | active |  |
 | frf-execution-attempt-v1 | active |  |
 | frf-execution-context-v1 | active |  |
 | frf-execution-context-v9 | reserved-invalid |  |
-| frf-residual-v1 | active |  |
-| frf-disposition-v2 | active |  |
-| frf-receipt-v19 | active |  |
-| frf-receipt-v18 | superseded |  |
-| frf-receipt-v17 | superseded |  |
-| frf-receipt-v16 | superseded |  |
-| frf-receipt-v15 | superseded |  |
-| frf-receipt-v12 | superseded |  |
-| frf-receipt-v7 | superseded |  |
-| frf-receipt-v5 | superseded |  |
-| frf-claim-v8 | superseded |  |
-| frf-claim-v7 | superseded |  |
-| frf-runtime-closure-v1 | active |  |
-| frf-runner-v1 | active |  |
-| frf-environment-v3 | active |  |
-| frf-provenance-v3 | active |  |
-| frf-challenge-v1 | active |  |
-| frf-mutation-request-v1 | active |  |
-| frf-mutation-response-v1 | active |  |
-| frf-mutation-invocation-v1 | active |  |
-| frf-mutation-result-v1 | active |  |
-| frf-bundle-v3 | active |  |
-| frf-bundle-v2 | superseded |  |
-| frf-bundle-v9 | reserved-invalid |  |
-| frf-trajectory-v5 | active |  |
-| frf-trajectory-v4 | superseded |  |
-| frf-series-v4 | active |  |
-| frf-series-v3 | superseded |  |
-| frf-comparator-request-v4 | active |  |
-| frf-comparator-request-v3 | superseded |  |
-| frf-comparator-response-v2 | active |  |
-| frf-comparator-response-v9 | reserved-invalid |  |
-| frf-comparator-invocation-v1 | active |  |
-| frf-comparator-result-v1 | active |  |
-| frf-normalizer-request-v1 | active |  |
-| frf-normalizer-response-v1 | active |  |
-| frf-normalizer-invocation-v1 | active |  |
-| frf-normalizer-result-v1 | active |  |
-| frf-minimizer-request-v1 | active |  |
-| frf-minimizer-response-v1 | active |  |
-| frf-minimizer-invocation-v1 | active |  |
-| frf-minimizer-result-v1 | active |  |
-| frf-capture-request-v1 | active |  |
-| frf-capture-response-v1 | active |  |
-| frf-capture-invocation-v1 | active |  |
-| frf-capture-result-v1 | active |  |
-| frf-witness-request-v1 | active |  |
-| frf-witness-response-v3 | active |  |
-| frf-witness-statement-v3 | active |  |
-| frf-independence-v1 | active |  |
-| frf-produced-v1 | active |  |
-| frf-token-v1 | active |  |
-| frf-kind-v1 | active | residual-kind protocol record (conformance/kinds/) |
-| frf-ci-status-v1 | active |  |
-| frf-reduction-v4 | active |  |
 | frf-experiment-v1 | active | xtask empirical-program report |
 | frf-external-corpus-v1 | active | external empirical corpus manifest |
 | frf-external-corpus-v3 | active | v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases) |
@@ -264,6 +228,43 @@ not these tables.
 | frf-external-experiment-v3 | active | external empirical program v3 report (real upstream releases) |
 | frf-external-experiment-v4 | active | external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus) |
 | frf-external-experiment-v5 | active | external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description — measurements only, no timing thresholds) |
+| frf-harness-event-v1 | active |  |
+| frf-independence-v1 | active |  |
+| frf-kind-v1 | active | residual-kind protocol record (conformance/kinds/) |
+| frf-minimizer-invocation-v1 | active |  |
+| frf-minimizer-request-v1 | active |  |
+| frf-minimizer-response-v1 | active |  |
+| frf-minimizer-result-v1 | active |  |
+| frf-mutation-invocation-v1 | active |  |
+| frf-mutation-request-v1 | active |  |
+| frf-mutation-response-v1 | active |  |
+| frf-mutation-result-v1 | active |  |
+| frf-normalizer-invocation-v1 | active |  |
+| frf-normalizer-request-v1 | active |  |
+| frf-normalizer-response-v1 | active |  |
+| frf-normalizer-result-v1 | active |  |
+| frf-produced-v1 | active |  |
+| frf-provenance-v3 | active |  |
+| frf-receipt-v12 | superseded |  |
+| frf-receipt-v15 | superseded |  |
+| frf-receipt-v16 | superseded |  |
+| frf-receipt-v17 | superseded |  |
+| frf-receipt-v18 | superseded |  |
+| frf-receipt-v19 | active |  |
+| frf-receipt-v5 | superseded |  |
+| frf-receipt-v7 | superseded |  |
+| frf-reduction-v4 | active |  |
+| frf-residual-v1 | active |  |
+| frf-runner-v1 | active |  |
+| frf-runtime-closure-v1 | active |  |
+| frf-series-v3 | superseded |  |
+| frf-series-v4 | active |  |
+| frf-token-v1 | active |  |
+| frf-trajectory-v4 | superseded |  |
+| frf-trajectory-v5 | active |  |
+| frf-witness-request-v1 | active |  |
+| frf-witness-response-v3 | active |  |
+| frf-witness-statement-v3 | active |  |
 
 ### Relations
 
