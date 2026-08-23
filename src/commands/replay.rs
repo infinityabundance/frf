@@ -446,6 +446,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         read_exec.extend(crate::sandbox::machinery_paths(
             artifact.interpreter.as_ref(),
             artifact.native_runtime.as_ref(),
+            profile,
         ));
         read_exec.extend(crate::sandbox::context_artifact_paths(
             capture.execution_context.as_ref(),

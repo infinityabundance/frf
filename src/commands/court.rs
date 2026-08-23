@@ -1977,10 +1977,10 @@ pub fn run_once(
     // sealed execution).
     let authority_interpreter = host::interpreter_identity(&authority_bytes)?;
     let authority_native =
-        crate::native::runtime_closure(authority_image.path(), &authority_bytes)?;
+        crate::native::runtime_closure(authority_image.path(), &authority_bytes, profile)?;
     let candidate_interpreter = host::interpreter_identity(&candidate_bytes)?;
     let candidate_native =
-        crate::native::runtime_closure(candidate_image.path(), &candidate_bytes)?;
+        crate::native::runtime_closure(candidate_image.path(), &candidate_bytes, profile)?;
 
     // -- the DECLARED execution-context closure -----------------------------
     // The court declares the child executables / runtime libraries / data
@@ -2070,6 +2070,7 @@ pub fn run_once(
         read_exec.extend(crate::sandbox::machinery_paths(
             interpreter.as_ref(),
             native.as_ref(),
+            profile,
         ));
         read_exec.extend(crate::sandbox::context_artifact_paths(
             execution_context.as_ref(),
@@ -2164,6 +2165,7 @@ pub fn run_once(
                         native_runtime: crate::native::runtime_closure(
                             comparator_image.path(),
                             &bytes,
+                            profile,
                         )?,
                     };
                     external_hosts.push(Some(ExternalHost {
@@ -2199,7 +2201,7 @@ pub fn run_once(
                 .iter()
                 .find(|n| &n.id == id)
                 .expect("validated: every applied normalizer is declared");
-            let snapshot = crate::ext::snapshot_program(store, Path::new(&decl.program))?;
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&decl.program), profile)?;
             Ok((decl.clone(), snapshot))
         })
         .collect::<Result<_>>()?;
@@ -2217,7 +2219,7 @@ pub fn run_once(
         .capture_adapters
         .iter()
         .map(|a| {
-            let snapshot = crate::ext::snapshot_program(store, Path::new(&a.program))?;
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&a.program), profile)?;
             Ok((a.clone(), snapshot))
         })
         .collect::<Result<_>>()?;
@@ -2239,7 +2241,7 @@ pub fn run_once(
         .minimizers
         .iter()
         .map(|m| {
-            let snapshot = crate::ext::snapshot_program(store, Path::new(&m.program))?;
+            let snapshot = crate::ext::snapshot_program(store, Path::new(&m.program), profile)?;
             Ok((m.clone(), snapshot))
         })
         .collect::<Result<_>>()?;
@@ -3548,7 +3550,7 @@ pub fn challenge(
             ChallengeOperator::External(decl, _) => {
                 // The provider is snapshotted + sealed BEFORE it runs; its
                 // semantic identity fixes WHAT kind of mutant is asked for.
-                let snap = crate::ext::snapshot_program(store, Path::new(&decl.program))?;
+                let snap = crate::ext::snapshot_program(store, Path::new(&decl.program), profile)?;
                 let semantic = MutationSemantic {
                     id: decl.id.clone(),
                     relation_id: decl.relation.clone(),

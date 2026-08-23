@@ -42,9 +42,16 @@ pub struct ProgramSnapshot {
 }
 
 /// Read + hash + seal a program BEFORE anything executes it, and record its
-/// interpreter chain. The program is a content-addressed object like any
-/// artifact; the executed image is the sealed verified bytes.
-pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
+/// interpreter chain + native runtime closure. The program is a
+/// content-addressed object like any artifact; the executed image is the
+/// sealed verified bytes. `profile` is the EXPLICIT closure-resolution
+/// profile: the loader the program's ELF names is admitted, sealed, and
+/// executed under this profile — never a hardcoded weaker one.
+pub fn snapshot_program(
+    store: &Store,
+    path: &Path,
+    profile: host::ExecProfile,
+) -> Result<ProgramSnapshot> {
     let bytes = host::read_file(path)?;
     let impl_hash = host::sha256_bytes(&bytes);
     let snapshot = store.materialize_object(&bytes, true)?;
@@ -65,7 +72,7 @@ pub fn snapshot_program(store: &Store, path: &Path) -> Result<ProgramSnapshot> {
             .unwrap_or_else(|_| impl_hash.clone()),
         sha256: impl_hash.clone(),
         interpreter,
-        native_runtime: crate::native::runtime_closure(image.path(), &bytes)?,
+        native_runtime: crate::native::runtime_closure(image.path(), &bytes, profile)?,
     };
     Ok(ProgramSnapshot {
         impl_hash,

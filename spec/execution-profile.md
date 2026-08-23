@@ -387,19 +387,41 @@ FRF/RUNTIME-CLOSURE/v1 {
   artifact that is not what it claims is not evidence. A statically linked
   binary (no `PT_INTERP`) has no dynamic loader to bind; the closure is
   refused honestly rather than silently omitted.
-- The resolved dependency closure is produced by invoking the SYSTEM loader
-  read-only (`ld.so --list <executable>`) — the same resolution the side's
-  own exec would perform, with the observation's cache, default
-  directories, and `LD_LIBRARY_PATH` applying. Only the loader executes,
-  never the artifact's code. The `<executable>` is the SEALED EXEC PATH the
-  side actually runs from (`/proc/self/fd/<n>` — the memfd fd the loader
-  child inherits), NEVER the materialized snapshot path: `$ORIGIN`-relative
-  `DT_RUNPATH`/`RPATH` resolution therefore sees the same origin the real
-  execution sees. An unresolvable dependency (`not found`), a loader that
-  refuses to resolve, or an `$ORIGIN` dependency the sealed mechanism cannot
-  find is a REFUSAL: a closure that cannot be bound is an honest outcome,
-  never a silent gap — and a closure resolved from a path the side never
-  runs from would describe an execution that never happened.
+- The loader named by `PT_INTERP` is an UNTRUSTED-INPUT boundary: the
+  artifact does not choose what the harness executes. It must pass the
+  ADMITTED-LOADER policy — an absolute path whose canonical form sits
+  under an admitted system loader root (`/lib`, `/lib64`, `/usr/lib`,
+  `/usr/lib64`, the multiarch triples) with a basename in the loader
+  family (`ld-*.so*`, `ld.so*`, `ld-linux*.so*`, `ld64.so*`, `ld-musl-*`)
+  — and its bytes are read + hashed + SEALED BEFORE anything executes. The
+  executed bytes are therefore exactly the bytes the closure records; an
+  artifact that names `/bin/sh`, a relative path, a nonexistent loader, or
+  a loader-like file outside the admitted roots is REFUSED at the policy,
+  never executed.
+- The resolved dependency closure is produced by invoking the ADMITTED,
+  SEALED loader read-only (`ld.so --list <executable>`) — the same
+  resolution the side's own exec would perform, with the observation's
+  cache, default directories, and `LD_LIBRARY_PATH` applying. Only the
+  loader executes, never the artifact's code. The `<executable>` is the
+  SEALED EXEC PATH the side actually runs from (`/proc/self/fd/<n>` — the
+  memfd fd the loader child inherits), NEVER the materialized snapshot
+  path: `$ORIGIN`-relative `DT_RUNPATH`/`RPATH` resolution therefore sees
+  the same origin the real execution sees. An unresolvable dependency
+  (`not found`), a loader that refuses to resolve, or an `$ORIGIN`
+  dependency the sealed mechanism cannot find is a REFUSAL: a closure that
+  cannot be bound is an honest outcome, never a silent gap — and a closure
+  resolved from a path the side never runs from would describe an
+  execution that never happened.
+- The closure-resolution execution is HARNESS-SIDE instrumentation under
+  an EXPLICIT profile: the loader's `--list` invocation follows the same
+  rule as every extension program (`host::extension_profile`) — under the
+  OCI and I/O-closed profiles the instrumentation runs on the host under
+  the reference profile (the loader cannot be I/O-closed before its own
+  closure is known, and `--list` never runs the artifact's code), and
+  under the reference/cgroup profiles it runs under the side's own
+  profile. It is never the hardcoded weaker host profile: the executed
+  loader is always the admitted + sealed bytes, and the resolution profile
+  is part of the documented contract, not an accident.
 - Every resolved component (loader + libraries) is hashed; components are
   sorted by path, so the identity is a deterministic SET identity. The
   closure's `cid` rederives in any implementation:

@@ -193,6 +193,7 @@ pub fn enforceability_error() -> Option<FrfError> {
 pub fn machinery_paths(
     interpreter: Option<&crate::model::InterpreterIdentity>,
     native: Option<&crate::model::NativeRuntimeClosure>,
+    profile: crate::host::ExecProfile,
 ) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     if let Some(i) = interpreter {
@@ -200,7 +201,7 @@ pub fn machinery_paths(
             out.push(PathBuf::from(&exe.path));
             if let Ok(bytes) = crate::host::read_file(Path::new(&exe.path)) {
                 if let Ok(Some(closure)) =
-                    crate::native::runtime_closure(Path::new(&exe.path), &bytes)
+                    crate::native::runtime_closure(Path::new(&exe.path), &bytes, profile)
                 {
                     out.push(PathBuf::from(&closure.interp.path));
                     for c in &closure.components {

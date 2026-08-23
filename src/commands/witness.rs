@@ -122,7 +122,8 @@ pub fn attest(
         relation_version: relation_version.to_string(),
         specification_hash,
     };
-    let snapshot = crate::ext::snapshot_program(store, Path::new(program))?;
+    let snapshot =
+        crate::ext::snapshot_program(store, Path::new(program), crate::host::ExecProfile::LinuxV1)?;
     let runner = RunnerIdentity {
         schema_version: SCHEMA_RUNNER.to_string(),
         frf_version: env!("CARGO_PKG_VERSION").to_string(),

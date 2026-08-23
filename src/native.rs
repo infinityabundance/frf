@@ -29,7 +29,7 @@
 use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::{NativeRuntimeClosure, NativeRuntimeComponent, SCHEMA_RUNTIME_CLOSURE};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The ELF magic, checked before any parsing.
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
@@ -125,22 +125,91 @@ fn interp_path(bytes: &[u8]) -> Result<String> {
     ))
 }
 
+/// The ADMITTED dynamic-loader policy: the executable named by an untrusted
+/// ELF's `PT_INTERP` is NOT executed because the artifact says so. The path
+/// must be an absolute system dynamic loader — canonicalized under an
+/// admitted loader root with a basename in the loader family — and even
+/// then the loader's bytes are read + hashed + sealed BEFORE execution, so
+/// the executed bytes are exactly the bytes the closure records. An
+/// artifact cannot select `/bin/sh`, a relative path, or any other
+/// arbitrary executable as its loader.
+fn admitted_loader(interp: &str) -> Result<PathBuf> {
+    let p = Path::new(interp);
+    if !p.is_absolute() {
+        return Err(FrfError::new(format!(
+            "refusing the dynamic loader {interp:?}: PT_INTERP must be an absolute path (the kernel requires it, and a relative path is not an admitted system loader)"
+        )));
+    }
+    let canonical = p.canonicalize().map_err(|e| {
+        FrfError::new(format!(
+            "refusing the dynamic loader {interp:?}: it cannot be resolved ({e}) — the native runtime closure binds only EXISTING admitted system loaders"
+        ))
+    })?;
+    let name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let admitted_name = name.starts_with("ld-") && name.contains(".so")
+        || name.starts_with("ld.so")
+        || name.starts_with("ld-linux")
+        || name.starts_with("ld64.so")
+        || name.starts_with("ld-musl-");
+    if !admitted_name {
+        return Err(FrfError::new(format!(
+            "refusing the dynamic loader {interp:?} (canonical {}): the PT_INTERP basename is not in the admitted dynamic-loader family (ld-*.so*, ld.so*, ld-linux*.so*, ld64.so*, ld-musl-*) — an artifact cannot select arbitrary executables as its loader",
+            canonical.display()
+        )));
+    }
+    const ADMITTED_LOADER_ROOTS: &[&str] = &[
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/aarch64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/lib/i386-linux-gnu",
+        "/usr/lib/i386-linux-gnu",
+        "/lib/arm-linux-gnueabihf",
+        "/usr/lib/arm-linux-gnueabihf",
+    ];
+    if !ADMITTED_LOADER_ROOTS
+        .iter()
+        .any(|r| canonical.starts_with(r))
+    {
+        return Err(FrfError::new(format!(
+            "refusing the dynamic loader {interp:?} (canonical {}): it is not under an admitted system loader root (/lib, /lib64, /usr/lib, /usr/lib64, the multiarch triples) — an artifact cannot name a loader from an arbitrary location",
+            canonical.display()
+        )));
+    }
+    Ok(canonical)
+}
+
 /// Invoke the system loader read-only (`ld.so --list <executable>`) and parse
 /// the resolved dependency closure. The loader performs the SAME resolution
 /// the side's own exec would — its cache, default directories, and the
 /// effective `LD_LIBRARY_PATH` of the observation all apply. This executes
 /// only the loader (never the artifact's code): `--list` parses and resolves
-/// without running the binary.
-fn resolve_dependencies(loader: &str, executable: &Path) -> Result<Vec<String>> {
-    let image = host::ExecImage::from_path(Path::new(loader));
+/// without running the binary. The loader is the SEALED bytes the caller
+/// admitted + verified (a path swap between admission and execution cannot
+/// change what runs), and it executes under the EXPLICIT closure-resolution
+/// profile — the same profile the observed side runs under, never a
+/// hardcoded weaker one.
+fn resolve_dependencies(
+    loader_image: &host::ExecImage,
+    loader: &str,
+    executable: &Path,
+    profile: host::ExecProfile,
+) -> Result<Vec<String>> {
     let args = vec![
         "--list".to_string(),
         executable.to_string_lossy().into_owned(),
     ];
     let out = host::run_process(
-        &image,
+        loader_image,
         &args,
-        host::ExecProfile::LinuxV1,
+        profile,
         &host::minimal_execution_environment(),
         None,
     )?;
@@ -183,13 +252,46 @@ fn resolve_dependencies(loader: &str, executable: &Path) -> Result<Vec<String>> 
 /// for a non-ELF artifact (a script — the caller binds the interpreter chain
 /// instead). The closure is content-addressed: `FRF/RUNTIME-CLOSURE/v1` over
 /// the canonical document minus the cid.
-pub fn runtime_closure(exec_path: &Path, bytes: &[u8]) -> Result<Option<NativeRuntimeClosure>> {
+///
+/// The loader itself is an UNTRUSTED-INPUT boundary: the ELF names its
+/// `PT_INTERP`, so the core (1) validates it against the admitted-loader
+/// policy ([`admitted_loader`]), (2) reads + hashes + SEALS its bytes BEFORE
+/// executing anything, and (3) executes the sealed bytes under the EXPLICIT
+/// closure-resolution profile — [`host::extension_profile`], the same rule
+/// every harness-side extension program follows: under the OCI and
+/// I/O-closed profiles the instrumentation runs on the host under the
+/// reference profile (the loader's `--list` invocation never runs the
+/// artifact's code and cannot be I/O-closed before its own closure is
+/// known — a chicken-and-egg the reference profile breaks honestly), and
+/// under the reference/cgroup profiles it runs under the side's own
+/// profile. The loader recorded in the closure is exactly the bytes that
+/// were executed.
+pub fn runtime_closure(
+    exec_path: &Path,
+    bytes: &[u8],
+    profile: host::ExecProfile,
+) -> Result<Option<NativeRuntimeClosure>> {
     if !is_elf(bytes) {
         return Ok(None);
     }
     let loader = interp_path(bytes)?;
+    // 1. The admitted-loader policy: an artifact cannot select arbitrary
+    //    executables as its dynamic loader.
+    let loader_canonical = admitted_loader(&loader)?;
+    // 2. Read + hash + seal BEFORE execution: the executed bytes are the
+    //    recorded bytes, and a path swap between admission and execution
+    //    cannot change what runs.
+    let loader_bytes = std::fs::read(&loader_canonical).map_err(|e| {
+        FrfError::new(format!(
+            "cannot read the admitted dynamic loader {}: {e} — the native runtime closure cannot be bound",
+            loader_canonical.display()
+        ))
+    })?;
+    let loader_sha = host::sha256_bytes(&loader_bytes);
+    let loader_image = host::ExecImage::seal(&loader_bytes, &loader_sha, &loader_canonical)?;
+    let resolution_profile = host::extension_profile(profile);
     let mut components: Vec<NativeRuntimeComponent> = Vec::new();
-    for dep in resolve_dependencies(&loader, exec_path)? {
+    for dep in resolve_dependencies(&loader_image, &loader, exec_path, resolution_profile)? {
         let dep_bytes = std::fs::read(&dep).map_err(|e| {
             FrfError::new(format!(
                 "cannot read the resolved dependency {dep}: {e} — the native runtime closure cannot be bound"
@@ -200,15 +302,11 @@ pub fn runtime_closure(exec_path: &Path, bytes: &[u8]) -> Result<Option<NativeRu
             sha256: host::sha256_bytes(&dep_bytes),
         });
     }
-    // The loader itself is a component too (the kernel invoked it).
-    let loader_bytes = std::fs::read(&loader).map_err(|e| {
-        FrfError::new(format!(
-            "cannot read the dynamic loader {loader}: {e} — the native runtime closure cannot be bound"
-        ))
-    })?;
+    // The loader itself is a component too (the kernel invoked it); its
+    // identity is the hash of the exact sealed bytes that were executed.
     let interp = NativeRuntimeComponent {
         path: loader.clone(),
-        sha256: host::sha256_bytes(&loader_bytes),
+        sha256: loader_sha,
     };
     components.sort_by(|a, b| a.path.cmp(&b.path));
     let mut closure = NativeRuntimeClosure {
@@ -261,9 +359,13 @@ mod tests {
     fn a_script_has_no_runtime_closure() {
         let bytes = b"#!/bin/sh\necho hi\n";
         assert!(!is_elf(bytes));
-        assert!(runtime_closure(Path::new("/nonexistent"), bytes)
-            .unwrap()
-            .is_none());
+        assert!(runtime_closure(
+            Path::new("/nonexistent"),
+            bytes,
+            crate::host::ExecProfile::LinuxV1
+        )
+        .unwrap()
+        .is_none());
     }
 
     // -- the PT_INTERP parser: fail-closed on adversarial bytes ---------------
@@ -404,5 +506,79 @@ mod tests {
         let bytes = elf64(1, 1_000_000, 56, 1, None);
         let err = interp_path(&bytes).unwrap_err();
         assert!(err.0.contains("malformed ELF"), "{err}");
+    }
+
+    // -- the admitted-loader policy (P0: an artifact cannot select what the
+    //    harness executes as its dynamic loader) ------------------------------
+
+    #[test]
+    fn the_admitted_loader_policy_admits_the_host_loader() {
+        let candidates = [
+            "/lib64/ld-linux-x86-64.so.2",
+            "/usr/lib64/ld-linux-x86-64.so.2",
+            "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        ];
+        let mut admitted = false;
+        for c in candidates {
+            if Path::new(c).exists() {
+                admitted_loader(c).expect("the host's own dynamic loader must be admitted");
+                admitted = true;
+                break;
+            }
+        }
+        assert!(
+            admitted,
+            "none of the candidate loader paths exist on this host"
+        );
+    }
+
+    #[test]
+    fn the_admitted_loader_policy_refuses_arbitrary_executables() {
+        let refuse = |interp: &str, needle: &str| {
+            let err = admitted_loader(interp).expect_err("must refuse");
+            assert!(
+                err.0.contains(needle),
+                "the refusal must name the policy ({needle}): {err}"
+            );
+        };
+        // An artifact cannot name an arbitrary executable as its loader.
+        refuse("/bin/sh", "dynamic-loader family");
+        refuse("/usr/bin/python3", "dynamic-loader family");
+        // A nonexistent "loader" refuses at resolution, wherever it points.
+        refuse("/tmp/evil.so", "cannot be resolved");
+        refuse("/opt/custom/ld-linux-x86-64.so.2", "cannot be resolved");
+        // A loader NAMED like one but living outside the admitted roots is
+        // refused at the root policy even when the file exists.
+        let mut rogue_dir = std::env::temp_dir();
+        rogue_dir.push("frf-rogue-loader-root");
+        std::fs::create_dir_all(&rogue_dir).unwrap();
+        let rogue = rogue_dir.join("ld-linux-x86-64.so.2");
+        std::fs::write(&rogue, b"not a loader").unwrap();
+        refuse(rogue.to_str().unwrap(), "admitted system loader root");
+        std::fs::remove_dir_all(&rogue_dir).ok();
+        // Nor a relative path (the kernel requires an absolute PT_INTERP).
+        refuse("ld-linux-x86-64.so.2", "absolute path");
+        // Nor a loader that does not exist.
+        refuse("/nonexistent/ld-linux-x86-64.so.2", "cannot be resolved");
+    }
+
+    #[test]
+    fn a_hostile_pt_interp_is_refused_before_any_execution() {
+        // A crafted ELF whose PT_INTERP names /bin/sh: the closure
+        // computation must REFUSE at the admitted-loader policy — the
+        // harness never executes the artifact-selected executable.
+        let interp = b"/bin/sh";
+        let bytes = elf64(1, 64, 56, 1, Some((3, 120, interp.len() as u64, interp)));
+        let err = runtime_closure(
+            Path::new("/proc/self/fd/1"),
+            &bytes,
+            crate::host::ExecProfile::LinuxV1,
+        )
+        .expect_err("a hostile PT_INTERP must be refused");
+        assert!(
+            err.0.contains("dynamic-loader family"),
+            "the refusal names the admitted-loader policy: {err}"
+        );
     }
 }
