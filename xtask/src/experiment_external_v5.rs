@@ -60,7 +60,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use super::experiment_external::as_str;
-use super::experiment_external_v3::stage_case;
+use super::experiment_external_v3::{case_builds_present, stage_case};
 use super::experiment_external_v4::bare_trigger_env;
 
 /// getrusage(RUSAGE_CHILDREN) user+sys seconds of the terminated children.
@@ -675,6 +675,13 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
         let id = as_str(&case["id"]);
         if id == "log4shell" && !java {
             skipped.push(id.to_string());
+            continue;
+        }
+        if !case_builds_present(&corpus, case) {
+            skipped.push(id.to_string());
+            println!(
+                "  {id}: skipped — build products absent (not committed; materialize with external-corpus/v3/build/build-all.sh)"
+            );
             continue;
         }
         per_case.push(bench_case(&frf, &corpus, &work, case, &mut failures));

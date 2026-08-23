@@ -10,7 +10,7 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 | path | what |
 |---|---|
 | `src/hb.c` | the probe: the exact historical exploit message sequence, linked against the OpenSSL under test. On the leak path it dumps the echoed heartbeat-response bytes (the leaked process memory) to stdout, and reads an optional claimed payload length from the fixture marker (`malformed 0x0FE9`) so a minimizer can reduce the trigger |
-| `builds/hb-1.0.1a..g` | the seven probe binaries (one per release), built hermetically inside the pinned container from the official tarballs (see `../build/build-manifest.json`) |
+| `builds/hb-1.0.1a..g` | the seven probe binaries (one per release), built hermetically inside the pinned container from the official tarballs (see `../build/build-manifest.json`). Build products are NOT committed: `./reproduce.sh build` materializes them (needs podman/docker + network) |
 | `manifest.yaml` | the v3 exit/stderr court (the classic byte-level comparison) |
 | `manifest-leak.yaml` | the semantic court: observable `memory.leak.sensitive` served by `comparators/heartbleed-leak.py`, normalizer `strip-heap-noise`, minimizer `leak-minimize`, mutation provider `seed-leak` |
 | `comparators/heartbleed-leak.py` | the information-leak comparator: flags the probe's HEARTBLEED verdict, a sensitive marker in the echoed content, or a high-entropy binary dump |
@@ -44,3 +44,9 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 ./reproduce.sh run     # regenerate evidence/
 ./reproduce.sh verify  # re-derive and compare — evidence is deterministic
 ```
+
+The probe binaries are NOT committed (they are pinned, hermetic build
+products): a fresh clone runs `./reproduce.sh build` once, then
+`run`/`verify`. CI does not build them — its v3/v4/v5 empirical programs
+skip a case whose build products are absent and record the skip in the
+report.

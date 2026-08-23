@@ -7,7 +7,11 @@
 //! OpenSSL (CVE-2014-0160), and Log4j (CVE-2021-44228), built from the
 //! pinned upstream sources by the hermetic recipes in external-corpus/v3/
 //! (containerized native builds on fedora:41; Maven Central jars pinned by
-//! SHA-256). The committed builds/ artifacts ARE the sides; the fixtures
+//! SHA-256). The BUILT builds/ artifacts ARE the sides — they are NOT
+//! committed (pinned by SHA-256 in build-manifest.json, materialized by
+//! build/build-all.sh with a container runtime + network); a case whose
+//! build products are absent is skipped and recorded in the report (CI does
+//! not build them). The fixtures
 //! are real interactions with the vulnerable code paths:
 //!
 //!   shellshock  the side is the real bash binary; the fixture is a script;
@@ -297,6 +301,25 @@ pub(crate) struct CaseEvidence {
     pub env_runs: Vec<String>,
     /// The clean control's run id.
     pub clean_run: Option<String>,
+}
+
+/// The case's side artifacts must exist to run: the v3 build products are
+/// NOT committed (pinned by SHA-256 in build/build-manifest.json,
+/// materialized by build/build-all.sh — a container runtime + network). A
+/// fresh clone, or CI (which does not build them), skips the case and
+/// records it in the report; the gates apply to executed cases only. The
+/// log4shell sides are tracked launcher scripts whose jars (builds/lib/)
+/// are the real build products, so it additionally requires the jars.
+pub(crate) fn case_builds_present(corpus: &Path, case: &Value) -> bool {
+    let id = as_str(&case["id"]);
+    let case_src = corpus.join(id);
+    let meta = crate::load_json(&case_src.join("case.json"));
+    let side_vuln = as_str(&meta["sides"]["vulnerable"]);
+    let side_fixed = as_str(&meta["sides"]["fixed"]);
+    if id == "log4shell" {
+        return case_src.join("builds").join("lib").is_dir();
+    }
+    case_src.join(side_vuln).is_file() && case_src.join(side_fixed).is_file()
 }
 
 /// Stage one case: copy the corpus builds/ + fixtures/ into the work tree,
@@ -763,6 +786,13 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
         let id = as_str(&case["id"]);
         if id == "log4shell" && !java {
             skipped_cases.push(id.to_string());
+            continue;
+        }
+        if !case_builds_present(&corpus, case) {
+            skipped_cases.push(id.to_string());
+            println!(
+                "  {id}: skipped — build products absent (not committed; materialize with external-corpus/v3/build/build-all.sh)"
+            );
             continue;
         }
         let staged = stage_case(&frf, &corpus, &work, case);

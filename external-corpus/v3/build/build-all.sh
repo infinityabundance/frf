@@ -14,10 +14,11 @@
 # The native builds (bash, openssl) AND the Java probe run INSIDE a pinned
 # container image (fedora:41 pinned by digest + exact package NEVRAs + a
 # pinned JDK) so the toolchain is hermetic and recorded; the produced
-# binaries and the probe.jar are committed to cases/<id>/builds/ so the
-# corpus is self-contained (the experiment itself needs no network and no
-# compiler). The probe.jar is byte-reproducible (pinned JDK + fixed entry
-# timestamps).
+# binaries and the probe.jar are NOT committed — every artifact is pinned by
+# SHA-256 in build-manifest.json and materialized HERE (a fresh clone runs
+# this once; CI does not build them, and the xtask empirical programs skip
+# cases whose build products are absent). The probe.jar is byte-reproducible
+# (pinned JDK + fixed entry timestamps).
 #
 # Prerequisites: podman (or docker), curl, and network access (the pinned
 # source tarballs/jars and the image's package repository).

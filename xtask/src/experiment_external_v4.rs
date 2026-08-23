@@ -63,7 +63,9 @@
 //!
 //! The `log4shell` case needs a JVM; without `java` on PATH it is recorded
 //! in `skipped_cases` and the gates apply to the executed cases only (the
-//! report says exactly what ran). `--check` (default) exits non-zero on any
+//! report says exactly what ran). A case whose build products are absent
+//! (they are NOT committed; CI does not build them) is likewise skipped and
+//! recorded. `--check` (default) exits non-zero on any
 //! lost defect, false positive, unexplained residual survival, exposed
 //! nondeterminism, inflated claim, clean claim that missed a declared axis,
 //! missing universe commitment, insensitive court, failed replay, or failed
@@ -77,8 +79,8 @@ use std::time::Instant;
 
 use super::experiment::dir_size;
 use super::experiment_external_v3::{
-    as_str, read_axis_trajectories, run_case_experiments, run_frf_env, select_by_pattern,
-    stage_case, CleanControl, Expectation, StagedCase, TrajectoryMeasurement,
+    as_str, case_builds_present, read_axis_trajectories, run_case_experiments, run_frf_env,
+    select_by_pattern, stage_case, CleanControl, Expectation, StagedCase, TrajectoryMeasurement,
 };
 use crate::load_evidence;
 
@@ -990,6 +992,13 @@ pub fn run(repo_root: &Path, out_path: &Path, check: bool) {
         let id = as_str(&case["id"]);
         if id == "log4shell" && !java {
             skipped.push(id.to_string());
+            continue;
+        }
+        if !case_builds_present(&corpus, case) {
+            skipped.push(id.to_string());
+            println!(
+                "  {id}: skipped — build products absent (not committed; materialize with external-corpus/v3/build/build-all.sh)"
+            );
             continue;
         }
         let staged = stage_case(&frf, &corpus, &work, case);
