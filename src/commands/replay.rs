@@ -856,7 +856,16 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         let recorded: Vec<ResidualRecord> = capture
             .residuals
             .iter()
-            .filter_map(|rid| store.load_residual(rid).ok())
+            .map(|rid| {
+                // FAIL-CLOSED (0.1.59): a recorded residual that does not
+                // verify — identity or derivation from its parent run — must
+                // refuse the replay, never be silently dropped: the replay's
+                // fresh-fingerprint comparison would otherwise run against a
+                // partial recorded surface.
+                crate::verify::load_residual_verified(store, rid).map(|v| v.record().clone())
+            })
+            .collect::<Result<Vec<ResidualRecord>>>()?
+            .into_iter()
             .filter(|r| r.axis == axis)
             .collect();
         let recorded_fps: BTreeSet<String> = recorded

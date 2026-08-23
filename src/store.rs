@@ -264,7 +264,10 @@ impl Store {
             )));
         }
         for rid in &result.residual_observation_ids {
-            let record = self.load_residual(rid)?;
+            // The comparator result claims these residuals; the check is on
+            // the run binding (the caller that produced the result already
+            // verified the run).
+            let record = self.load_residual(rid)?.into_inner();
             if record.run != run {
                 return Err(FrfError::new(format!(
                     "run {run}: comparator result for axis {axis} references residual {rid} which belongs to run {}",
@@ -809,7 +812,12 @@ impl Store {
             names.sort();
             for name in names {
                 let id = name.trim_end_matches(".json").to_string();
-                let record = self.load_residual(&id)?;
+                // Producer path: the snapshot COMMITS the residual's content
+                // address + fingerprint (computed from the record's own
+                // fields); the blocker scan re-verifies each committed head
+                // and refuses on mismatch before the scope may drive the
+                // claim.
+                let record = self.load_residual(&id)?.into_inner();
                 let events = self.disposition_events(&id)?;
                 let disposition = events
                     .last()
@@ -872,7 +880,11 @@ impl Store {
                 .capture
                 .residuals
                 .iter()
-                .map(|rid| self.load_residual(rid))
+                .map(|rid| {
+                    // The run digest consumes the residual projections; each
+                    // is re-verified before its projections may be hashed.
+                    crate::verify::load_residual_verified(self, rid).map(|v| v.record().clone())
+                })
                 .collect::<Result<_>>()?;
             let cid = verified.digest(&residuals)?;
             snapshot.objects.push(SnapshotObject {
@@ -1979,7 +1991,13 @@ impl Store {
         self.parse_evidence(&path)
     }
 
-    pub fn load_residual(&self, id: &str) -> Result<ResidualRecord> {
+    /// Raw-parse a residual record: canonical document, NO identity/derivation
+    /// proof (the record is not content-addressed — its id is a sequence). The
+    /// returned [`Unverified`] marker must be resolved through
+    /// `verify::load_residual_verified` before the record may drive a
+    /// semantic decision; [`Unverified::into_inner`] is reserved for
+    /// producers.
+    pub fn load_residual(&self, id: &str) -> Result<Unverified<ResidualRecord>> {
         let path = self.residual_path(id)?;
         if !path.exists() {
             return Err(FrfError::new(format!(
@@ -1987,10 +2005,15 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_evidence(&path)
+        Ok(Unverified::new(self.parse_evidence(&path)?))
     }
 
-    pub fn load_capture(&self, run: &str) -> Result<CaptureManifest> {
+    /// Raw-parse a capture document: canonical, NO identity/derivation proof
+    /// (the run id, the recorded identities, the side files, and the residual
+    /// bindings are all claims until recomputed). Resolve through
+    /// `verify::load_capture_verified` before semantic consumption;
+    /// [`Unverified::into_inner`] is reserved for producers.
+    pub fn load_capture(&self, run: &str) -> Result<Unverified<CaptureManifest>> {
         let path = self.run_dir(run)?.join("capture.json");
         if !path.exists() {
             return Err(FrfError::new(format!(
@@ -1998,10 +2021,13 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_evidence(&path)
+        Ok(Unverified::new(self.parse_evidence(&path)?))
     }
 
-    pub fn load_receipt(&self, id: &str) -> Result<Receipt> {
+    /// Raw-parse a receipt document: canonical, NO identity/derivation proof.
+    /// Resolve through `verify::load_receipt_verified` before semantic
+    /// consumption; [`Unverified::into_inner`] is reserved for producers.
+    pub fn load_receipt(&self, id: &str) -> Result<Unverified<Receipt>> {
         let path = self.receipt_path(id)?;
         if !path.exists() {
             return Err(FrfError::new(format!(
@@ -2009,10 +2035,7 @@ impl Store {
                 path.display()
             )));
         }
-        let text = fs::read_to_string(&path)
-            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
-        serde_json::from_str(&text)
-            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
+        Ok(Unverified::new(self.parse_evidence(&path)?))
     }
 
     /// Next zero-padded sequence number for a residual kind: max existing
@@ -2074,8 +2097,12 @@ impl Store {
                 "resolution run must be a new court run, not '{original_run}' — the run that observed the residual"
             )));
         }
-        let original = self.load_capture(original_run)?;
-        let resolution = self.load_capture(resolution_run)?;
+        // 0.1.59: comparability is a SEMANTIC decision — both captures are
+        // verified (identity + derivation) before a single field may decide
+        // whether the resolution closes the question. A forged or corrupted
+        // capture must not be able to grant a `fixed` disposition.
+        let original = crate::verify::load_capture_verified(self, original_run)?.capture;
+        let resolution = crate::verify::load_capture_verified(self, resolution_run)?.capture;
 
         // Same evidentiary question: identical semantic identity. Everything
         // that defines the question is in the hash; only the candidate may

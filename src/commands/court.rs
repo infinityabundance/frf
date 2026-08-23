@@ -3085,17 +3085,20 @@ pub fn challenge(
             }
         };
 
-        // The derived verdicts, from the run's own residuals.
-        let capture = store.load_capture(&run)?;
+        // The derived verdicts, from the run's own residuals — each residual
+        // VERIFIED (identity + derivation from its parent run) before its
+        // axis may decide saw_defect / specificity_clean: a challenge record
+        // may only claim verdicts that recompute from verified observations.
+        let cv = crate::verify::load_capture_verified(store, &run)?;
         let mut observed: Vec<String> = Vec::new();
         let mut on_target = false;
         let mut on_unaffected: Vec<String> = Vec::new();
-        for rid in &capture.residuals {
-            let record = store.load_residual(rid)?;
-            if record.axis.as_str() == target_axis {
+        for rid in &cv.capture.residuals {
+            let record = crate::verify::load_residual_verified(store, rid)?;
+            if record.record().axis.as_str() == target_axis {
                 on_target = true;
             } else {
-                on_unaffected.push(record.axis.as_str().to_string());
+                on_unaffected.push(record.record().axis.as_str().to_string());
             }
             observed.push(rid.clone());
         }

@@ -28,7 +28,13 @@ pub fn run(
     reason: &str,
     resolution_run: Option<String>,
 ) -> Result<()> {
-    let record = store.load_residual(id)?;
+    // 0.1.59: a disposition may only be appended to a VERIFIED residual —
+    // identity + derivation from its parent run are established before the
+    // record's run/axis may drive the closure predicate (a forged residual
+    // must not be closable, and a `fixed` disposition must not be granted
+    // against an unverified resolution comparison).
+    let verified = crate::verify::load_residual_verified(store, id)?;
+    let record = verified.record();
     let before = store.current_disposition(id)?;
 
     let event = match (disposition, resolution_run) {
@@ -68,7 +74,7 @@ pub fn run(
 
     let event = store.append_disposition_event(&event)?;
     // The derived token follows the projected disposition.
-    store.write_token(&record, &event.disposition)?;
+    store.write_token(record, &event.disposition)?;
 
     match &event.disposition {
         Disposition::Fixed {

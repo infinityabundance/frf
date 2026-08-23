@@ -640,16 +640,19 @@ pub fn residual_lineage(
 }
 
 /// The lineage of a stored residual record (loads the authority name from
-/// the record's authority id via the store's authority record).
+/// the record's authority id via the store's authority record, and the
+/// fixture identity from the VERIFIED parent capture — a lineage is a
+/// derivation, and derivation consumes verified evidence).
 pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Result<String> {
     let authority = store.load_authority(&record.authority)?;
+    let capture = crate::verify::load_capture_verified(store, &record.run)?;
     residual_lineage(
         &record.kind,
         &record.axis,
         record.surface.as_deref(),
         &record.scope,
         &authority.name,
-        &store.load_capture(&record.run)?.fixture,
+        &capture.capture.fixture,
     )
 }
 

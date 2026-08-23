@@ -235,7 +235,9 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
             ch.reference_sha256,
             receipt_doc["authority"]["identity_hash"].as_str().unwrap()
         );
-        let cap = store.load_capture(&ch.run).unwrap();
+        let cap = frf::verify::load_capture_verified(&store, &ch.run)
+            .unwrap()
+            .capture;
         assert_eq!(
             cap.court_semantic_identity,
             receipt_doc["court"]["semantic_identity"].as_str().unwrap()

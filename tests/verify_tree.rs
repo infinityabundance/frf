@@ -457,7 +457,9 @@ fn residuals_and_tokens_are_self_consistent() {
             r.run
         );
         // The observation is bound to the exact candidate artifact that ran.
-        let capture = store.load_capture(&r.run).unwrap();
+        let capture = frf::verify::load_capture_verified(&store, &r.run)
+            .unwrap()
+            .capture;
         assert_eq!(
             r.candidate_sha256, capture.candidate_artifact.sha256,
             "residual {} candidate identity must match its run",
@@ -646,7 +648,9 @@ fn receipts_are_self_consistent() {
         );
 
         // Fixture block matches the run.
-        let cap = store.load_capture(run).unwrap();
+        let cap = frf::verify::load_capture_verified(&store, run)
+            .unwrap()
+            .capture;
         assert_eq!(rec.fixtures.len(), 1);
         assert_eq!(rec.fixtures[0].id, cap.fixture);
         assert_eq!(rec.fixtures[0].hash, cap.fixture_sha256);
@@ -787,7 +791,10 @@ fn receipts_are_self_consistent() {
 
         // Every residual entry re-derives from its file.
         for res in &rec.residuals {
-            let record = store.load_residual(&res.id).unwrap();
+            let record = frf::verify::load_residual_verified(&store, &res.id)
+                .unwrap()
+                .record()
+                .clone();
             assert_eq!(res.axis, record.axis.as_str());
             assert_eq!(res.kind, record.kind);
             assert_eq!(res.raw_reference_hash, record.raw_reference_sha256);
@@ -813,7 +820,10 @@ fn receipts_are_self_consistent() {
             // verifier). An empty entry list is a single-run snapshot of emit
             // time — a later experiment referencing the same run does not
             // rewrite a receipt.
-            let record = store.load_residual(&res.id).unwrap();
+            let record = frf::verify::load_residual_verified(&store, &res.id)
+                .unwrap()
+                .record()
+                .clone();
             frf::verify::verify_sign(&store, &record, &res.sign)
                 .unwrap_or_else(|e| panic!("sign of {} fails pinned verification: {e}", res.id));
             let mut seen_coordinate_systems: Vec<&str> = Vec::new();
@@ -901,7 +911,10 @@ fn receipts_are_self_consistent() {
         assert_eq!(rec.endoduction.schema_version, TOKEN_SCHEMA_VERSION);
         assert_eq!(rec.endoduction.tokens.len(), rec.residuals.len());
         for (res, token) in rec.residuals.iter().zip(&rec.endoduction.tokens) {
-            let seen = store.load_residual(&res.id).unwrap();
+            let seen = frf::verify::load_residual_verified(&store, &res.id)
+                .unwrap()
+                .record()
+                .clone();
             let disposition = disposition_from_receipt(res);
             let k = kappa::kappa(&seen, &disposition);
             assert_eq!(token.residual_id, res.id);
@@ -980,7 +993,10 @@ fn trajectories_are_self_consistent() {
                     .residual
                     .as_deref()
                     .expect("an observed entry must name the residual");
-                let rec = store.load_residual(id).unwrap();
+                let rec = frf::verify::load_residual_verified(&store, id)
+                    .unwrap()
+                    .record()
+                    .clone();
                 assert_eq!(
                     rec.run, o.run,
                     "observation residual must belong to its run"
@@ -1030,7 +1046,10 @@ fn trajectories_are_self_consistent() {
             .iter()
             .map(|o| {
                 o.residual.as_ref().and_then(|rid| {
-                    let rec = store.load_residual(rid).unwrap();
+                    let rec = frf::verify::load_residual_verified(&store, rid)
+                        .unwrap()
+                        .record()
+                        .clone();
                     frf::comparators::divergence_magnitude(
                         rec.axis.as_str(),
                         &rec.raw_reference,
@@ -1167,7 +1186,10 @@ fn witness_statements_are_self_consistent() {
         // The subject content address rederives from the evidence object.
         match stmt.subject.kind.as_str() {
             "residual" => {
-                let record = store.load_residual(&stmt.subject.id).unwrap();
+                let record = frf::verify::load_residual_verified(&store, &stmt.subject.id)
+                    .unwrap()
+                    .record()
+                    .clone();
                 assert_eq!(
                     stmt.subject.cid,
                     frf::semantics::residual_fingerprint(&record).unwrap()
@@ -1180,7 +1202,12 @@ fn witness_statements_are_self_consistent() {
                     .capture
                     .residuals
                     .iter()
-                    .map(|rid| store.load_residual(rid).unwrap())
+                    .map(|rid| {
+                        frf::verify::load_residual_verified(&store, rid)
+                            .unwrap()
+                            .record()
+                            .clone()
+                    })
                     .collect();
                 assert_eq!(stmt.subject.cid, verified.digest(&residuals).unwrap());
             }
@@ -1292,7 +1319,9 @@ fn reductions_are_self_consistent() {
         // The bound identities match the residual's run's capture: the
         // reduction held the candidate, authority, environment, and
         // comparator fixed — and the record proves it by binding them.
-        let capture = store.load_capture(&r.source_run).unwrap();
+        let capture = frf::verify::load_capture_verified(&store, &r.source_run)
+            .unwrap()
+            .capture;
         assert_eq!(r.court_semantic_identity, capture.court_semantic_identity);
         assert_eq!(
             r.authority_artifact_sha256,
@@ -1327,7 +1356,10 @@ fn reductions_are_self_consistent() {
         }
         // The residual it minimizes exists, belongs to the source run, and is
         // on the same axis/kind.
-        let record = store.load_residual(&r.residual_id).unwrap();
+        let record = frf::verify::load_residual_verified(&store, &r.residual_id)
+            .unwrap()
+            .record()
+            .clone();
         assert_eq!(record.run, r.source_run);
         assert_eq!(record.axis.as_str(), r.axis);
         assert_eq!(record.kind, r.kind);
@@ -1435,7 +1467,9 @@ fn challenges_are_self_consistent() {
         // The mutant run exists and its residuals are EXACTLY the recorded
         // ones; the derived verdicts recompute from the run — never trusted
         // from the file.
-        let capture = store.load_capture(&r.run).unwrap();
+        let capture = frf::verify::load_capture_verified(&store, &r.run)
+            .unwrap()
+            .capture;
         assert_eq!(
             capture.residuals, r.observed_residuals,
             "challenge {id}: the run's residuals must match the record"
@@ -1443,7 +1477,10 @@ fn challenges_are_self_consistent() {
         let mut on_target = false;
         let mut on_unaffected: Vec<String> = Vec::new();
         for rid in &r.observed_residuals {
-            let record = store.load_residual(rid).unwrap();
+            let record = frf::verify::load_residual_verified(&store, rid)
+                .unwrap()
+                .record()
+                .clone();
             if record.axis.as_str() == r.target_axis {
                 on_target = true;
             } else {
@@ -1568,7 +1605,9 @@ fn claims_are_re_derivable_from_receipts() {
         let (run, _) = rest
             .rsplit_once('-')
             .expect("receipt id must end in the digest");
-        let cap = store.load_capture(run).unwrap();
+        let cap = frf::verify::load_capture_verified(&store, run)
+            .unwrap()
+            .capture;
         assert_eq!(
             claim.candidate.identity_hash, cap.candidate_artifact.sha256,
             "claim {claim_id} is attributed to a candidate artifact the run did not execute"

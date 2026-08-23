@@ -26,6 +26,48 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// A parsed-but-not-yet-verified evidence document (0.1.59).
+///
+/// Parsing evidence-shaped data does not make it evidence: identity and
+/// derivation must be ESTABLISHED before semantic consumption. The raw store
+/// loaders (`Store::load_residual`, `load_capture`, `load_receipt`, …) parse
+/// the canonical document and return `Unverified<T>` — the marker makes raw
+/// loads visible at every call site and keeps new consumers on the verified
+/// path (`verify::load_*_verified`, which returns the private-field
+/// `*Verified` types that only exist after the proofs ran).
+///
+/// The deliberate escapes:
+///
+/// - [`Unverified::into_inner`] — for PRODUCERS (the court constructs the
+///   records it just wrote, the series accumulation reads its own parent
+///   chain) and for the verified loaders themselves (parse, then prove).
+///   Every semantic CONSUMER of an observation record should prefer the
+///   verified loaders.
+/// - [`Unverified::inner`] — a read-only peek without consuming (used where
+///   a caller only reads metadata before deciding which verified loader to
+///   invoke).
+pub struct Unverified<T>(T);
+
+impl<T> Unverified<T> {
+    /// The store loaders' constructor; the field stays private so the marker
+    /// cannot be fabricated outside the store's parse path.
+    pub(crate) fn new(inner: T) -> Unverified<T> {
+        Unverified(inner)
+    }
+
+    /// Explicitly accept the parsed document WITHOUT the identity/derivation
+    /// proofs. Reserved for producers and verified loaders; see the type
+    /// documentation.
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+
+    /// Read-only access to the parsed document without consuming it.
+    pub fn inner(&self) -> &T {
+        &self.0
+    }
+}
+
 pub const SCHEMA_AUTHORITY: &str = "frf-authority-v1";
 /// Execution-context closure schema: the DECLARED runtime closure of an
 /// execution — the child executables, runtime libraries, and data

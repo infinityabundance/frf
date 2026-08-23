@@ -255,6 +255,38 @@ closures MUST be backed by a resolution run that reran the same question
 and closed the axis. Claim compilation accepts only a `ReceiptVerified` —
 parsing data cannot turn it into evidence.
 
+#### Verified-on-read is closed under ALL evidence transforms (0.1.59)
+
+The type discipline is structural, not aspirational. The raw store loaders
+(`Store::load_residual`, `load_capture`, `load_receipt`) parse ONLY and
+return `Unverified<T>`; the verified loaders (`verify::load_residual_verified`
+etc.) — the only producers of the private-field `ResidualVerified` /
+`CaptureVerified` / `ReceiptVerified` types — run the identity + derivation
+proofs and then unwrap. Every semantic consumer operates on verified types:
+
+- `receipt emit` accepts only a `CaptureVerified` and verified residuals — a
+  tampered capture directory cannot mint a receipt;
+- `residual dispose` accepts only a `ResidualVerified` — a forged residual
+  cannot gain a closure, and a `fixed` disposition's resolution
+  comparability is decided on verified captures;
+- trajectory derivation consumes verified captures + residuals;
+- minimization accepts a `ResidualVerified`;
+- challenge verdicts (saw_defect / specificity_clean) recompute from
+  verified mutant-run residuals;
+- the claim blocker scan verifies every committed residual head and refuses
+  on any mismatch against the committed universe;
+- replay compares only verified recorded residuals — a residual that no
+  longer verifies REFUSES the replay (fail-closed, never silently dropped);
+- witness subjects re-derive their content address from verified
+  run/residual/receipt objects;
+- the bundle closure walks verified residuals for lineages and committed
+  heads.
+
+`Unverified::into_inner` is reserved for producers (the court constructs
+the records it just wrote) and for the verified loaders themselves; the
+marker makes every raw load visible at its call site, so new consumers
+default to the verified path and the compiler surfaces any regression.
+
 ### 5.4 The independent verifier
 
 OpenReceipt is a protocol only if a SECOND implementation can take the same

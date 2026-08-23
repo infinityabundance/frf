@@ -680,7 +680,10 @@ fn a_witness_attests_a_content_addressed_subject() {
     assert_eq!(stmt.subject.id, "cli-exit-0001");
     // The subject content address is the residual's fingerprint — rederived
     // by the command, never read from the caller.
-    let record = store.load_residual("cli-exit-0001").unwrap();
+    let record = frf::verify::load_residual_verified(&store, "cli-exit-0001")
+        .unwrap()
+        .record()
+        .clone();
     assert_eq!(
         stmt.subject.cid,
         frf::semantics::residual_fingerprint(&record).unwrap()
@@ -727,7 +730,12 @@ fn a_witness_attests_a_content_addressed_subject() {
             .capture
             .residuals
             .iter()
-            .map(|rid| store.load_residual(rid).unwrap())
+            .map(|rid| {
+                frf::verify::load_residual_verified(&store, rid)
+                    .unwrap()
+                    .record()
+                    .clone()
+            })
             .collect()
     };
     let verified = frf::verify::load_capture_verified(&store, &run).unwrap();
@@ -1068,4 +1076,75 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
     );
     assert!(!out.status.success());
     assert!(stderr(&out).contains("declared authority kind"));
+}
+
+/// 0.1.59 — verified-on-read is closed under ALL evidence transforms: a
+/// receipt cannot be minted from a tampered capture, and a disposition
+/// cannot be appended to a tampered residual. The raw store loaders parse
+/// ONLY (`Unverified<T>`); every semantic consumer goes through the verified
+/// loaders, so a hand-edited observation cannot bind a claim or gain a
+/// closure.
+#[test]
+fn receipt_emit_and_dispose_refuse_tampered_evidence() {
+    let work = Workdir::new("ext-verified-gates");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let run = run_court(&work);
+    let capture_path = work.path(&format!("{ROOT}/captures/{run}/capture.json"));
+
+    // Tamper with the captured candidate exit: a hand-edited observation is
+    // not evidence. `receipt emit` must REFUSE (the run identity no longer
+    // rederives), never mint a receipt that binds the forged bytes.
+    let mut capture: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&capture_path).unwrap()).unwrap();
+    capture["candidate"]["exit"] = serde_json::Value::String("0".into());
+    let json = frf::canon::canonical(&capture).unwrap();
+    fs::write(&capture_path, json).unwrap();
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert!(
+        !out.status.success(),
+        "a tampered capture must not mint a receipt: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("does not rederive") || stderr(&out).contains("refusing"),
+        "the refusal must name the verification failure: {}",
+        stderr(&out)
+    );
+
+    // Tamper with a residual record: `dispose` must refuse (identity +
+    // derivation from the parent run are established before a disposition
+    // may be appended).
+    let residual_path = work.path(&format!("{ROOT}/residuals/cli-exit-0001.json"));
+    let mut residual: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&residual_path).unwrap()).unwrap();
+    residual["raw_reference"] = serde_json::Value::String("9".into());
+    let json = frf::canon::canonical(&residual).unwrap();
+    fs::write(&residual_path, json).unwrap();
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            "cli-exit-0001",
+            "--disposition",
+            "intentional",
+            "--reason",
+            "x",
+        ],
+    );
+    assert!(
+        !out.status.success(),
+        "a tampered residual must not be disposable: {}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("does not rederive")
+            || stderr(&out).contains("does not derive")
+            || stderr(&out).contains("refusing"),
+        "the refusal must name the verification failure: {}",
+        stderr(&out)
+    );
 }

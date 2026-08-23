@@ -55,7 +55,11 @@ pub fn attest(
                 .capture
                 .residuals
                 .iter()
-                .map(|rid| store.load_residual(rid))
+                .map(|rid| {
+                    // The run digest consumes the residual projections; each
+                    // is a verified observation of the run.
+                    crate::verify::load_residual_verified(store, rid).map(|v| v.record().clone())
+                })
                 .collect::<Result<_>>()?;
             let cid = verified.digest(&residuals)?;
             WitnessSubject {

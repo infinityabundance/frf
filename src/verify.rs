@@ -171,7 +171,7 @@ fn first_line(bytes: &[u8]) -> String {
 /// 5. the authority/candidate/fixture snapshots exist and are
 ///    content-addressed (`verified_object_bytes` refuses corrupt objects).
 pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified> {
-    let mut capture = store.load_capture(run)?;
+    let mut capture = store.load_capture(run)?.into_inner();
     if capture.run != run {
         return Err(FrfError::new(format!(
             "capture {run}: the run field inside capture.json is {capture:?} — the name is a claim; refusing to consume"
@@ -180,11 +180,14 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
 
     let mut residuals = Vec::with_capacity(capture.residuals.len());
     for id in &capture.residuals {
-        let record = store.load_residual(id).map_err(|e| {
-            FrfError::new(format!(
-                "capture {run}: listed residual {id} is missing: {e}"
-            ))
-        })?;
+        let record = store
+            .load_residual(id)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "capture {run}: listed residual {id} is missing: {e}"
+                ))
+            })?
+            .into_inner();
         if record.run != run {
             return Err(FrfError::new(format!(
                 "capture {run}: residual {id} belongs to run {}; the capture is not self-consistent",
@@ -636,7 +639,7 @@ impl ResidualVerified {
 pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerified> {
     // 1. The document must parse as strict canonical evidence (the store
     //    loader refuses non-canonical bytes and duplicate property names).
-    let record = store.load_residual(id)?;
+    let record = store.load_residual(id)?.into_inner();
 
     // 2. The parent capture verifies: run identity rederives, side files
     //    rehash, snapshots + extension instruments are intact.
@@ -860,7 +863,13 @@ pub fn rebind_subject(
                 .capture
                 .residuals
                 .iter()
-                .map(|rid| store.load_residual(rid))
+                .map(|rid| {
+                    // The digest recomputation consumes the residual
+                    // PROJECTIONS; each is a verified observation of the run
+                    // (the residual of a verified capture cannot be forged
+                    // without breaking the run identity).
+                    load_residual_verified(store, rid).map(|v| v.record().clone())
+                })
                 .collect::<Result<_>>()?;
             verified.digest(&residuals)?
         }
@@ -1375,7 +1384,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         )));
     }
     for res in &body.residuals {
-        let record = store.load_residual(&res.id)?;
+        let record = store.load_residual(&res.id)?.into_inner();
         if record.run != run {
             return Err(FrfError::new(format!(
                 "receipt {id}: residual {} belongs to run {}",

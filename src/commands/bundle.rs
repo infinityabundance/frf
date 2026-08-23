@@ -456,9 +456,12 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
             );
         }
         for head in &parsed.knowledge_snapshot.residual_heads {
-            let record = store.load_residual(&head.id)?;
-            if !runs.contains(&record.run) {
-                runs.push(record.run.clone());
+            // The committed head's run enters the walk; the head is VERIFIED
+            // (identity + derivation) and its content address must match the
+            // committed universe before its run may drive the closure.
+            let verified = crate::verify::load_residual_verified(store, &head.id)?;
+            if !runs.contains(&verified.record().run) {
+                runs.push(verified.record().run.clone());
             }
         }
         // The typed universe objects: the claim's absence search depended on
@@ -1003,9 +1006,11 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                     },
                 );
                 // Trajectories for the lineages this run's residuals belong
-                // to, within this series.
-                let record = store.load_residual(id)?;
-                let lineage = crate::semantics::residual_lineage_of_record(store, &record)?;
+                // to, within this series. The residual is VERIFIED before its
+                // lineage may name the trajectory file.
+                let verified = crate::verify::load_residual_verified(store, id)?;
+                let lineage =
+                    crate::semantics::residual_lineage_of_record(store, verified.record())?;
                 let t_path = store.trajectory_path(&lineage, &s.coordinate_system, &s.id)?;
                 if t_path.is_file() {
                     let bytes = read(&t_path, "trajectory")?;

@@ -23,14 +23,24 @@ fn read(path: &Path, what: &str) -> Result<Vec<u8>> {
 }
 
 pub fn run(store: &Store, run: &str) -> Result<String> {
-    let capture = store.load_capture(run)?;
+    // 0.1.59: a receipt may only be emitted from VERIFIED evidence. The run
+    // identity rederives, the recorded identities recompute, the side files
+    // rehash, and every residual is a verified observation of the run —
+    // minting a receipt from a hand-crafted capture directory would let a
+    // forged observation bind a claim.
+    let cv = crate::verify::load_capture_verified(store, run)?;
+    let capture = cv.capture;
     let authority = store.load_authority(&capture.authority)?;
     let spec = &capture.court_spec;
 
     // Load the residuals this run observed, with their current dispositions.
     let mut residuals: Vec<ResidualRecord> = Vec::new();
     for id in &capture.residuals {
-        residuals.push(store.load_residual(id)?);
+        residuals.push(
+            crate::verify::load_residual_verified(store, id)?
+                .record()
+                .clone(),
+        );
     }
 
     let family = &spec.admissibility_envelope.fixture_family;
