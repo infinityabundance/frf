@@ -8,7 +8,8 @@
 //! | exit    | exit-class         | class-change            | cli-exit-minimize       | `{scope} exit parity`               |
 //! | stderr  | diagnostic-routing  | first-line-token-change | cli-diagnostic-minimize | byte-identical diagnostics          |
 //! | stdout  | stdout-routing      | first-line-token-change | cli-stdout-minimize     | byte-identical stdout               |
-//! | memory.leak.sensitive | leak-scan | observed                | leak-minimize           | `{scope} memory.leak.sensitive parity` |
+//! | tls.heartbeat.illegal_response | verdict-scan | observed    | leak-minimize           | `{scope} tls.heartbeat.illegal_response parity` |
+//! | memory.leak.seeded_canary | canary-scan  | observed                | leak-minimize           | `{scope} memory.leak.seeded_canary parity` |
 //! | (other) | `{axis}-divergence` | observed                | none                    | `{scope} {axis} parity`             |
 //!
 //! The generic row is deterministic and honest: an axis the built-in router
@@ -52,11 +53,20 @@ pub fn token_shape(axis: &ObservableId) -> TokenShape {
             magnitude: "first-line-token-change".to_string(),
             next_court: "cli-stdout-minimize".to_string(),
         },
-        // The Heartbleed information-leak axis (external-corpus/v3/heartbleed):
-        // a routed row like the built-ins, so a declared minimizer
-        // (`leak-minimize`) can serve its residuals via `frf court minimize`.
-        "memory.leak.sensitive" => TokenShape {
-            surface: "leak-scan".to_string(),
+        // The Heartbleed information-leak axes (external-corpus/v3/heartbleed):
+        // routed rows like the built-ins, so the declared minimizer
+        // (`leak-minimize`) can serve either axis's residuals via
+        // `frf court minimize`. The split is deliberate: the illegal-response
+        // proposition (a malformed heartbeat was answered) and the
+        // seeded-canary proposition (the exact synthetic canary bytes escaped)
+        // are separate observables with separate comparators.
+        "tls.heartbeat.illegal_response" => TokenShape {
+            surface: "verdict-scan".to_string(),
+            magnitude: "observed".to_string(),
+            next_court: "leak-minimize".to_string(),
+        },
+        "memory.leak.seeded_canary" => TokenShape {
+            surface: "canary-scan".to_string(),
             magnitude: "observed".to_string(),
             next_court: "leak-minimize".to_string(),
         },

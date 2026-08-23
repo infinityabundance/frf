@@ -12,10 +12,11 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 | `src/hb.c` | the probe: the exact historical exploit message sequence, linked against the OpenSSL under test. RAW-MEMORY PUBLICATION BOUNDARY: on the leak path it never writes the echoed process memory to any observed stream — it plants a deterministic synthetic canary in its heap, hashes the echoed window, and prints a projection (`hb-leak-projection len=… sha256=… canary=… fraction=…`). Reads an optional claimed payload length from the fixture marker (`malformed 0x0FE9`) so a minimizer can reduce the trigger |
 | `builds/hb-1.0.1a..g` | the seven probe binaries (one per release), built hermetically inside the pinned container from the official tarballs (see `../build/build-manifest.json`). Build products are NOT committed: `./reproduce.sh build` materializes them (needs podman/docker + network) |
 | `manifest.yaml` | the v3 exit/stderr court (the classic byte-level comparison) |
-| `manifest-leak.yaml` | the semantic court: observable `memory.leak.sensitive` served by `comparators/heartbleed-leak.py`, minimizer `leak-minimize`, mutation provider `seed-leak` |
-| `comparators/heartbleed-leak.py` | the information-leak comparator: flags the probe's HEARTBLEED verdict, a well-formed leak projection (len + SHA-256 commitment + canary), or a sensitive marker in the echoed content |
+| `manifest-leak.yaml` | the semantic court: TWO leak observables — `tls.heartbeat.illegal_response` (served by `comparators/heartbeat-verdict.py`) and `memory.leak.seeded_canary` (served by `comparators/heartbeat-canary.py`) — plus minimizer `leak-minimize` and mutation provider `seed-leak` |
+| `comparators/heartbeat-verdict.py` | the illegal-response comparator: did the malformed heartbeat get an ANSWER (RFC 6520 §4 requires discarding it) — the probe's HEARTBLEED verdict, no content interpretation |
+| `comparators/heartbeat-canary.py` | the seeded-canary comparator: did the EXACT planted synthetic canary bytes escape — the projection's `canary=present`, no entropy heuristic, no markers |
 | `minimizers/heartbeat-length.py` | reduces the claimed payload length; proposes the empirical floor 0x0FE9 for court verification |
-| `mutations/seed-leak.py` | the challenge operator: proposes a mutant that dumps a seeded PEM key + `SECRET_KEY=12345` |
+| `mutations/seed-leak.py` | the challenge operator: proposes a mutant reproducing the EXACT observable shape of a real leak — the projection with `canary=present` + the HEARTBLEED verdict — deterministic and deliberately synthetic |
 | `fixtures/` | `defect.conf` (`malformed 0x4000` — the historical trigger), `clean.conf` (`handshake` — the clean control) |
 | `evidence/` | the committed, deterministic evidence tree: 7-run series + boundary-localized trajectory, the f/g receipts, the seed-leak challenge, the court-verified reduction (reproducer `malformed 0x0FE9`), and the sensitivity-backed claim |
 | `claims/heartbleed-trajectory.md` | the comparative claim: the measured lifecycle table, the minimized trigger, the sensitivity proof |
@@ -24,20 +25,21 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 
 ## The measured story
 
-* every vulnerable release (1.0.1a..f) echoes 16384 bytes of process memory
-  in response to the malformed heartbeat; 1.0.1g silently discards it —
+* every vulnerable release (1.0.1a..f) answers the malformed heartbeat and
+  echoes 16384 bytes of process memory; 1.0.1g silently discards it —
   the engine classifies the 7-point series as `boundary-localized`, `abrupt`,
-  one band. The published evidence carries each echo as a projection
-  (length + SHA-256 commitment + planted-canary observation), never the raw
-  process-memory bytes;
+  one band on BOTH leak observables. The published evidence carries each
+  echo as a projection (length + SHA-256 commitment + planted-canary
+  observation), never the raw process-memory bytes;
 * the court-verified minimal trigger is a claimed payload length of
   **0x0FE9 (4073)** — the lowest claimed length at which this admitted
   1.0.1f court/probe configuration produces the observable residual (an
   observation boundary, not an intrinsic Heartbleed minimum: below it the
   vulnerable library constructs the response but never flushes it — a
   deterministic 1.0.1f write-path quirk);
-* the seed-leak challenge passes: the court can SEE a leak-shaped divergence
-  on `memory.leak.sensitive` and nothing else;
+* the seed-leak challenge passes: the court can SEE both leak-shaped
+  divergences — the illegal response and the escaped canary — and nothing
+  else;
 * the fixed release's claim compiles under the `sensitivity-backed` policy,
   backed by that challenge.
 
@@ -49,8 +51,8 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 ./reproduce.sh verify  # re-derive and compare — evidence is deterministic
 ```
 
-The probe binaries are NOT committed (they are pinned, hermetic build
-products): a fresh clone runs `./reproduce.sh build` once, then
-`run`/`verify`. CI does not build them — its v3/v4/v5 empirical programs
-skip a case whose build products are absent and record the skip in the
-report.
+The probe binaries are NOT committed (they are pinned build products): a
+fresh clone runs `./reproduce.sh build` once, then `run`/`verify`. Hosted CI
+does not build or execute them — its V3 publication-integrity gate verifies
+the detached publication instead (prohibited payloads absent, source hashes
+declared, reconstruction recipes present, evidence canonical).

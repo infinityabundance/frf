@@ -2,14 +2,14 @@ court:
   id: heartbeat-leak-check
   question: >-
     For the malformed-heartbeat trigger in fixture family heartbeat, does the
-    candidate's linked TLS library leak process memory in response
-    (CVE-2014-0160) — judged SEMANTICALLY by the memory.leak.sensitive axis,
-    not by a byte diff?
+    candidate's linked TLS library preserve the fixed reference's behavior on
+    the two leak observables (CVE-2014-0160) — judged SEMANTICALLY, never by
+    a byte diff?
   falsifier: >-
-    The candidate's linked library echoes process memory in response to the
-    malformed heartbeat: the leak comparator sees the probe's HEARTBLEED
-    verdict or a well-formed leak projection (length + SHA-256 commitment
-    + planted-canary observation).
+    The candidate's linked library answers the malformed heartbeat
+    (tls.heartbeat.illegal_response) or echoes the probe's planted synthetic
+    canary bytes (memory.leak.seeded_canary) where the fixed reference
+    discards it.
   authority: ref-hb-1.0.1g
   candidate:
     name: cand-hb
@@ -35,16 +35,22 @@ court:
   admissibility_envelope:
     fixture_family: heartbeat
     platforms: ["x86_64-linux"]
-    observables: [memory.leak.sensitive]
+    observables: [tls.heartbeat.illegal_response, memory.leak.seeded_canary]
     normalizers: []
     replay_scope: single-run
 comparators:
-  - axis: memory.leak.sensitive
+  - axis: tls.heartbeat.illegal_response
     relation: eq
-    extractor: leak-scan
+    extractor: verdict-scan
     residual_classifier: text
     relation_version: "v1"
-    program: comparators/heartbleed-leak.py
+    program: comparators/heartbeat-verdict.py
+  - axis: memory.leak.seeded_canary
+    relation: eq
+    extractor: canary-scan
+    residual_classifier: text
+    relation_version: "v1"
+    program: comparators/heartbeat-canary.py
 minimizers:
   - id: leak-minimize
     relation: reduce-claimed-payload-length
@@ -54,7 +60,7 @@ mutations:
   - id: seed-leak
     relation: seed-sensitive-leak
     relation_version: "v1"
-    target_axes: [memory.leak.sensitive]
+    target_axes: [tls.heartbeat.illegal_response, memory.leak.seeded_canary]
     program: mutations/seed-leak.py
 # The capture surface — the PUBLICATION BOUNDARY, declared per observed
 # stream (spec/publication-surface.md). The probe NEVER writes raw process

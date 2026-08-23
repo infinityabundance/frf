@@ -13,7 +13,7 @@ mkdir -p "$WORK/builds" "$WORK/fixtures" "$WORK/courts/hb"
 cp "$HB"/builds/hb-1.0.1? "$WORK/builds/"
 cp "$HB/fixtures/defect.conf" "$HB/fixtures/clean.conf" "$WORK/fixtures/"
 mkdir -p "$WORK/comparators" "$WORK/minimizers" "$WORK/mutations"
-cp "$HB/comparators/heartbleed-leak.py" "$WORK/comparators/"
+cp "$HB"/comparators/heartbeat-verdict.py "$HB"/comparators/heartbeat-canary.py "$WORK/comparators/"
 cp "$HB/minimizers/heartbeat-length.py" "$WORK/minimizers/"
 cp "$HB/mutations/seed-leak.py" "$WORK/mutations/"
 chmod +x "$WORK"/comparators/*.py "$WORK"/minimizers/*.py "$WORK"/mutations/*.py
@@ -28,7 +28,7 @@ step() { echo; echo "== $* =="; }
 step "admit the fixed reference (1.0.1g) as authority ref-hb"
 "$FRF" --root ev authority admit builds/hb-1.0.1g --name ref-hb --version 1.0.1g
 
-step "leak court: vulnerable 1.0.1f (must diverge on memory.leak.sensitive)"
+step "leak court: vulnerable 1.0.1f (must diverge on both leak observables)"
 RUN_F=$("$FRF" --root ev court run courts/hb/manifest-leak.yaml | tail -1)
 echo "run: $RUN_F"
 
@@ -45,8 +45,23 @@ for r in $SERIES_OUT; do echo "  series run: $r"; done
 step "challenge: seed-leak mutation (the sensitivity proof)"
 "$FRF" --root ev court challenge courts/hb/manifest-leak.yaml --operators seed-leak
 
-step "minimize the leak residual (claimed payload length -> empirical floor)"
-RESID=$(ls ev/residuals | grep '^cli-text-' | head -1 | sed 's/\.json$//')
+step "minimize the canary residual (claimed payload length -> empirical floor)"
+# The two leak observables are separate residuals; the minimizer reduces the
+# fixture's claimed payload length, and the information-leak proposition is
+# the seeded-canary one — pick ITS residual explicitly.
+RESID=$(python3 - <<'PY'
+import json, os, sys
+root = "ev/residuals"
+for name in sorted(os.listdir(root)):
+    if not name.endswith(".json"):
+        continue
+    rec = json.load(open(os.path.join(root, name)))
+    if rec.get("axis") == "memory.leak.seeded_canary":
+        print(name[:-5])
+        sys.exit(0)
+sys.exit(1)
+PY
+)
 echo "residual: $RESID"
 "$FRF" --root ev court minimize "$RESID"
 

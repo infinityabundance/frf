@@ -1,0 +1,3 @@
+#!/bin/sh
+printf '%s\n' 'HEARTBLEED: the linked libssl echoed 16384 bytes in the heartbeat response' >&2
+exit 1

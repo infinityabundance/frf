@@ -384,8 +384,14 @@ int main(int argc, char **argv) {
          * child, the client role in the parent. A FRESH child per attempt:
          * the previous one is reaped before the next connection. */
         pid_t pid = fork();
-        if (pid < 0)
-            die("fork");
+        if (pid < 0) {
+            /* fork failed under load (commit pressure, pid table): a
+             * retryable failure like any other flow race — retry the whole
+             * flow silently; the verdict is deterministic, so a retry
+             * converges. Only an exhausted attempt budget is a failure. */
+            last_failure = "fork";
+            continue;
+        }
 
         if (pid == 0) {
             int sfd = accept(lfd, NULL, NULL);

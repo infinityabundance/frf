@@ -1,0 +1,1 @@
+{"expected_affected_surfaces":["tls.heartbeat.illegal_response"],"failure":null,"mutant_base64":"IyEvYmluL3NoCnByaW50ZiAnJXNcbicgJ0hFQVJUQkxFRUQ6IHRoZSBsaW5rZWQgbGlic3NsIGVjaG9lZCAxNjM4NCBieXRlcyBpbiB0aGUgaGVhcnRiZWF0IHJlc3BvbnNlJyA+JjIKZXhpdCAxCg==","request_id":"955de2847792ac109f732461f2497272ef2d49b0658309d8ce0c74394c53aae3","schema_version":"frf-mutation-response-v1"}

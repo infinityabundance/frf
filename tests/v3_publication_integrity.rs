@@ -131,8 +131,8 @@ fn the_v3_publication_integrity_gate_holds() {
             .iter()
             .filter(|o| o.role == "mutation-request")
             .count(),
-        1,
-        "the mutation request (embedded reference bytes) is withheld too"
+        2,
+        "each challenge operator's mutation request (embedded reference bytes) is withheld too"
     );
     for o in &declaration.objects {
         assert!(

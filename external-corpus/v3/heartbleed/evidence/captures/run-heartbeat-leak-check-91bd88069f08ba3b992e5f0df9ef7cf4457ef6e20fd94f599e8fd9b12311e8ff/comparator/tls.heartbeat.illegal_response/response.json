@@ -1,0 +1,1 @@
+{"equivalent":false,"failure":null,"indeterminate":false,"request_id":"400a9bd78e5a73e6d4d569c1ef6343e8e2a3a51dee999f12470c5e2c17424408","residuals":[{"raw_candidate":"HEARTBLEED: the linked libssl echoed 16384 bytes in the heartbeat response","raw_reference":"hb: indeterminate (fork)","surface":"verdict-scan"}],"schema_version":"frf-comparator-response-v2"}
