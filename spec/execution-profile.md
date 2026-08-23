@@ -18,12 +18,14 @@ This document separates two questions that must not be conflated:
 ## Execution profiles
 
 A profile names a normative execution contract. The reference engine
-implements one profile today:
+implements these profiles:
 
 | Profile            | Meaning                                                    |
 | ------------------ | ---------------------------------------------------------- |
 | `frf-exec-linux-v1`| Direct-exec Linux process capture (the reference profile)  |
 | `frf-exec-linux-v2`| The cgroup v2 per-side AGGREGATE envelope on top of v1     |
+| `frf-exec-linux-v3`| The filesystem/ambient-channel CLOSURE envelope on top of v2 (§ `frf-exec-linux-v3`) |
+| `frf-exec-oci`     | The side runs inside a digest-pinned OCI container (a complete root filesystem) (§ `frf-exec-oci`) |
 
 A profile defines exactly what its engine records and enforces:
 argv, stdin policy, working directory, environment, locale, timezone,

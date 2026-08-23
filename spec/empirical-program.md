@@ -193,10 +193,12 @@ The build provenance (`external-corpus/v3/build/build-manifest.json`)
 pins every input: source URLs + SHA-256, the container image ID, the
 toolchain versions, the compat patches (era-correct `-std=gnu89` for bash;
 the documented `termio.h` removal workaround for openssl), and the SHA-256
-of every committed artifact. Rebuilding from these exact inputs reproduces
-the committed bytes. The native runtime closure (spec/execution-profile.md
-§ native runtime closure) binds what the real binaries loaded at
-observation time.
+of every produced artifact (the artifacts themselves are NOT committed —
+they are prohibited payloads; the corpus publishes detached evidence and
+the pins are the reconstruction ground truth). Rebuilding from these exact
+inputs reproduces the pinned bytes. The native runtime closure
+(spec/execution-profile.md § native runtime closure) binds what the real
+binaries loaded at observation time.
 
 ## The comparative measurement study (v4)
 

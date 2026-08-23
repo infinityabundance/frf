@@ -3836,6 +3836,13 @@ pub struct ReductionMinimality {
     pub proposal_minimality_claimed: Option<bool>,
 }
 
+impl ReductionMinimality {
+    /// The closed minimality-predicate vocabulary (documented in
+    /// spec/reduction.md): classic ddmin's one-minimal at a removal
+    /// granularity, and the domain-aware observation boundary.
+    pub const KINDS: &'static [&'static str] = &["one-minimal", "boundary"];
+}
+
 /// The derivation of a minimization experiment.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3942,6 +3949,13 @@ impl ReductionRecord {
             ));
         }
         let m = &self.derivation.minimality;
+        if !ReductionMinimality::KINDS.contains(&m.kind.as_str()) {
+            return Err(format!(
+                "unknown minimality kind {:?} — the protocol admits {}",
+                m.kind,
+                ReductionMinimality::KINDS.join(" | ")
+            ));
+        }
         let boundary_coords = [
             ("domain", &m.domain),
             ("ordering", &m.ordering),
