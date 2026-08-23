@@ -1058,6 +1058,11 @@
       "status": "active"
     },
     {
+      "id": "frf-exec-linux-v3",
+      "meaning": "The I/O-CLOSED profile (0.1.65): on top of the reference setrlimit layer, the side's world is CLOSED before it runs a single instruction \u2014 the FILESYSTEM closure (Landlock, Linux >= 5.13): read/execute only the content-addressed objects directory, the execution machinery (the interpreter chain + its own native closure, the artifact's native runtime closure, the declared execution-context artifacts), and the declared randomness channel; the produced-output staging directory is the ONLY writable surface (absent = none at all); and the AMBIENT-CHANNEL closure (seccomp BPF): no network, no Unix sockets, no shared memory, no ptrace, no cross-process memory. A side that violates a closure fails visibly and the court OBSERVES the denial. The side executes its VERIFIED SNAPSHOT PATH (the sealed-memfd mechanism is incompatible with a Landlock closure: the kernel cannot bind access rules to anonymous-inode memfds \u2014 proven empirically); the OCI profile remains the mechanism that closes both the path race and the ambient-environment race. Replay rebuilds the closure from the capture's recorded machinery. Requires Landlock; without it the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+      "status": "active"
+    },
+    {
       "id": "frf-exec-oci",
       "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest \u2014 a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery \u2014 the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run \u2014 never a silent substitution. Extensions are harness-side instrumentation and run on the host. The reference profile remains frf-exec-linux-v1; high-assurance admission requires it",
       "status": "active"

@@ -82,18 +82,25 @@ pub const EXEC_RLIMIT_NPROC: u64 = 4096;
 // ---------------------------------------------------------------------------
 
 /// The declared harness contract an execution runs under (see
-/// `spec/execution-profile.md`). The engine implements two Linux profiles:
-/// the reference `frf-exec-linux-v1` (per-process setrlimit layer) and
+/// `spec/execution-profile.md`). The engine implements three Linux profiles:
+/// the reference `frf-exec-linux-v1` (per-process setrlimit layer),
 /// `frf-exec-linux-v2` (the cgroup v2 per-side AGGREGATE envelope on top of
-/// the same setrlimit layer). A profile is a protocol identifier; exact
-/// replay requires the same profile, and a requested profile is ENFORCED,
-/// never approximated (v2 without a writable cgroup v2 subtree refuses).
+/// the same setrlimit layer), and `frf-exec-linux-v3` (the I/O-CLOSED
+/// profile: a Landlock filesystem closure + a seccomp ambient-channel
+/// closure on top of the same setrlimit layer), plus the OCI container
+/// profile. A profile is a protocol identifier; exact replay requires the
+/// same profile, and a requested profile is ENFORCED, never approximated
+/// (v2 without a writable cgroup v2 subtree refuses, v3 without Landlock
+/// refuses).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecProfile {
     /// `frf-exec-linux-v1` — the reference profile.
     LinuxV1,
     /// `frf-exec-linux-v2` — cgroup v2 aggregate envelope + setrlimit.
     LinuxV2,
+    /// `frf-exec-linux-v3` — I/O-closed: Landlock filesystem closure +
+    /// seccomp ambient-channel closure + setrlimit.
+    LinuxV3,
     /// `frf-exec-oci` — each side runs inside a container from a
     /// digest-pinned OCI image (the complete root filesystem is the
     /// execution machinery).
@@ -108,11 +115,13 @@ impl ExecProfile {
         match s {
             crate::model::EXECUTION_PROFILE_LINUX => Ok(ExecProfile::LinuxV1),
             crate::model::EXECUTION_PROFILE_LINUX_V2 => Ok(ExecProfile::LinuxV2),
+            crate::model::EXECUTION_PROFILE_LINUX_V3 => Ok(ExecProfile::LinuxV3),
             crate::model::EXECUTION_PROFILE_OCI => Ok(ExecProfile::Oci),
             other => Err(crate::error::FrfError::new(format!(
-                "unsupported execution profile {other:?}: this engine implements {} (the reference profile), {} (the cgroup v2 aggregate envelope), and {} (the OCI container profile)",
+                "unsupported execution profile {other:?}: this engine implements {} (the reference profile), {} (the cgroup v2 aggregate envelope), {} (the I/O-closed profile), and {} (the OCI container profile)",
                 crate::model::EXECUTION_PROFILE_LINUX,
                 crate::model::EXECUTION_PROFILE_LINUX_V2,
+                crate::model::EXECUTION_PROFILE_LINUX_V3,
                 crate::model::EXECUTION_PROFILE_OCI
             ))),
         }
@@ -122,6 +131,7 @@ impl ExecProfile {
         match self {
             ExecProfile::LinuxV1 => crate::model::EXECUTION_PROFILE_LINUX,
             ExecProfile::LinuxV2 => crate::model::EXECUTION_PROFILE_LINUX_V2,
+            ExecProfile::LinuxV3 => crate::model::EXECUTION_PROFILE_LINUX_V3,
             ExecProfile::Oci => crate::model::EXECUTION_PROFILE_OCI,
         }
     }
@@ -1059,13 +1069,10 @@ pub fn run_process(
     env: &std::collections::BTreeMap<String, String>,
     container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, None, None, profile, env, container)
+    run_impl(image, args, None, None, profile, env, container, None)
 }
 
-/// [`run_process`] with a declared working directory: the side runs from
-/// `cwd`, so recorded root-relative argv paths resolve against the layout
-/// the replay reconstructed (bundle replay executes sides from the temp
-/// invocation root, never from the user's cwd).
+/// [`run_process`] with a declared working directory.
 pub fn run_process_in(
     image: &ExecImage,
     args: &[String],
@@ -1074,15 +1081,10 @@ pub fn run_process_in(
     env: &std::collections::BTreeMap<String, String>,
     container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, None, Some(cwd), profile, env, container)
+    run_impl(image, args, None, Some(cwd), profile, env, container, None)
 }
 
-/// Execute `image` with `args` and the given bytes on stdin (used by the
-/// comparator extension protocol: the canonical request is written to the
-/// comparator's stdin, which sees EOF once the write completes). Same
-/// hostile-runner guarantees as [`run_process`]: own process group, pipes
-/// drained concurrently (stdin written concurrently too), bounded timeout,
-/// descendant termination.
+/// [`run_process`] with a declared stdin (the extension protocols' request).
 pub fn run_process_with_stdin(
     image: &ExecImage,
     args: &[String],
@@ -1091,7 +1093,16 @@ pub fn run_process_with_stdin(
     env: &std::collections::BTreeMap<String, String>,
     container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, Some(stdin), None, profile, env, container)
+    run_impl(
+        image,
+        args,
+        Some(stdin),
+        None,
+        profile,
+        env,
+        container,
+        None,
+    )
 }
 
 /// [`run_process_with_stdin`] with a declared working directory (bundle
@@ -1105,7 +1116,33 @@ pub fn run_process_with_stdin_in(
     env: &std::collections::BTreeMap<String, String>,
     container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, Some(stdin), Some(cwd), profile, env, container)
+    run_impl(
+        image,
+        args,
+        Some(stdin),
+        Some(cwd),
+        profile,
+        env,
+        container,
+        None,
+    )
+}
+
+/// [`run_process`] under the I/O-CLOSED profile: the side runs inside the
+/// declared Landlock filesystem closure + seccomp ambient-channel closure
+/// (`frf-exec-linux-v3`). The sandbox MUST be present exactly when the
+/// profile is v3 — a v3 side without its closure REFUSES (a declared
+/// profile is enforced, never approximated). The side runs with the
+/// inherited working directory unless `cwd` is given.
+pub fn run_process_closed(
+    image: &ExecImage,
+    args: &[String],
+    cwd: Option<&Path>,
+    profile: ExecProfile,
+    env: &std::collections::BTreeMap<String, String>,
+    sandbox: &crate::sandbox::IoClosedSandbox,
+) -> std::result::Result<ProcessOutcome, RunError> {
+    run_impl(image, args, None, cwd, profile, env, None, Some(sandbox))
 }
 
 /// The profile EXTENSION programs run under (0.1.62): extensions are
@@ -1116,7 +1153,10 @@ pub fn run_process_with_stdin_in(
 /// records the host profile honestly.
 pub fn extension_profile(side_profile: ExecProfile) -> ExecProfile {
     match side_profile {
-        ExecProfile::Oci => ExecProfile::LinuxV1,
+        // Under the OCI and I/O-closed profiles the sandbox applies to the
+        // OBSERVED sides only; extension programs are harness-side
+        // instrumentation and run on the host under the reference profile.
+        ExecProfile::Oci | ExecProfile::LinuxV3 => ExecProfile::LinuxV1,
         other => other,
     }
 }
@@ -1352,6 +1392,7 @@ fn run_oci(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_impl(
     image: &ExecImage,
     args: &[String],
@@ -1360,6 +1401,7 @@ fn run_impl(
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
     container: Option<&crate::model::OciImage>,
+    sandbox: Option<&crate::sandbox::IoClosedSandbox>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
     // The program name the process observes (argv[0]) is the materialized
     // snapshot path — a sealed execution must not silently change argv[0]
@@ -1376,7 +1418,51 @@ fn run_impl(
     if profile == ExecProfile::Oci {
         return run_oci(image, args, stdin, cwd, env, container);
     }
-    let mut command = Command::new(image.path());
+    // `frf-exec-linux-v3`: the I/O-CLOSED profile. The closure is ENFORCED,
+    // never approximated: Landlock must be available, the caller must supply
+    // the sandbox (a v3 side without its closure refuses), and the writable
+    // surface must exist before the spawn (Landlock rules bind real paths).
+    #[cfg(target_os = "linux")]
+    if profile == ExecProfile::LinuxV3 {
+        if let Some(err) = crate::sandbox::enforceability_error() {
+            return Err(err.into());
+        }
+        let sb = sandbox.ok_or_else(|| {
+            RunError::new(format!(
+                "{} was requested without an I/O-closed sandbox — the side cannot be closed; refusing to run it unclosed",
+                ExecProfile::LinuxV3.as_str()
+            ))
+        })?;
+        if let Some(w) = &sb.write_dir {
+            std::fs::create_dir_all(w).map_err(|e| {
+                RunError::new(format!(
+                    "cannot create the I/O-closed write surface {}: {e}",
+                    w.display()
+                ))
+            })?;
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    if profile == ExecProfile::LinuxV3 {
+        return Err(RunError::new(format!(
+            "{} is a Linux profile; this host cannot enforce the Landlock filesystem closure — use the reference profile {}",
+            ExecProfile::LinuxV3.as_str(),
+            ExecProfile::LinuxV1.as_str()
+        )));
+    }
+    let mut command = if profile == ExecProfile::LinuxV3 {
+        // The I/O-CLOSED profile executes the VERIFIED SNAPSHOT PATH, not the
+        // sealed memfd: the kernel cannot bind a Landlock access rule to an
+        // anonymous-inode memfd (and both path-based and AT_EMPTY_PATH exec of
+        // one are denied under a closure) — the sandbox module documents the
+        // empirical proof. The snapshot lives inside the objects directory the
+        // closure allows, sealed read-only, and is itself content-addressed;
+        // the residual same-UID verify->execute window is documented in
+        // spec/execution-profile.md (the OCI profile closes both races).
+        Command::new(image.argv0())
+    } else {
+        Command::new(image.path())
+    };
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1457,11 +1543,22 @@ fn run_impl(
         let nofile = rlimit_nofile();
         let nproc = rlimit_nproc();
         let cgroup_procs_fd = cgroup.as_ref().map(CgroupV2::procs_fd);
+        // The I/O-closed profile's sandbox, owned by the child closure: the
+        // Landlock filesystem closure + seccomp ambient-channel closure are
+        // installed FIRST (before the cgroup move — the sandbox cannot block
+        // the inherited cgroup.procs fd write, and installing it first means
+        // the side NEVER runs a single instruction unclosed).
+        let closed = (profile == ExecProfile::LinuxV3)
+            .then(|| sandbox.cloned())
+            .flatten();
         // SAFETY: `pre_exec` runs after fork(2), before execve(2), in the
-        // single-threaded child; setrlimit(2) and write(2) are
-        // async-signal-safe.
+        // single-threaded child; setrlimit(2), write(2), prctl(2), and the
+        // Landlock/seccomp syscalls are async-signal-safe.
         unsafe {
             command.pre_exec(move || {
+                if let Some(sb) = &closed {
+                    crate::sandbox::install(sb)?;
+                }
                 if let Some(fd) = cgroup_procs_fd {
                     // Move the side into its cgroup BEFORE exec: descendants
                     // inherit the cgroup at fork, so the aggregate envelope

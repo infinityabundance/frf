@@ -270,6 +270,70 @@ downstream interpreter) is recorded for every script artifact, so a changed
 `/usr/bin/env` or downstream interpreter is visible to exact replay even
 when the kernel is unchanged.
 
+## `frf-exec-linux-v3` — the I/O-closed side (0.1.65)
+
+On top of the reference setrlimit layer, the side's WORLD is closed before
+it runs a single instruction. Two kernel mechanisms, both installed in the
+child before exec (fail-closed: a side that could not be closed never runs):
+
+- **the filesystem closure — Landlock** (Linux ≥ 5.13, unprivileged with
+  `no_new_privs`). The side may read/execute ONLY:
+  - the content-addressed objects directory (`objects/sha256/`) — every
+    object there is a DECLARED, verified artifact: the side's own snapshot,
+    the fixture, the context artifacts;
+  - the execution machinery: the interpreter chain (and the interpreter's
+    OWN native closure — a script's machinery is its interpreter PLUS
+    bash→libc, libdl, …), the artifact's native runtime closure (the
+    dynamic loader + the resolved `DT_NEEDED` closure), and the declared
+    execution-context artifacts;
+  - the declared randomness channel (`/dev/urandom`) and the null device;
+  - the produced-output staging directory — the ONLY writable surface
+    (a court with no `produce` clause grants NO writable surface at all).
+  Everything else on the host — `/etc/passwd`, `/proc`, the court
+  manifests, other users' files — is `EACCES`.
+- **the ambient-channel closure — seccomp** (BPF). `socket` (every address
+  family, including `AF_UNIX`), `connect`, `bind`, `listen`, `accept`,
+  `accept4`, SysV shared memory (`shmget`/`shmctl`/`shmat`/`shmdt`),
+  `ptrace`, and `process_vm_readv`/`process_vm_writev` return `EPERM`: no
+  network, no Unix sockets, no shared memory, no cross-process inspection.
+
+A side that violates a closure does not crash the harness: the access is
+denied and the court OBSERVES the denial like any other output divergence
+(the candidate's exit/stderr carry the failed access and the run records
+residuals against the reference — never a silent pass).
+
+### The execution-mechanism tradeoff (empirically established)
+
+The reference profile executes the side from a SEALED MEMFD
+(`/proc/self/fd/<n>`) to close the same-UID verify→execute race. Under a
+Landlock filesystem closure that is impossible: the kernel refuses to bind
+an access rule to an anonymous-inode memfd (`landlock_add_rule` →
+EBADF/EBADFD), and both path-based exec (`/proc/self/fd/<n>`) and
+`execveat(AT_EMPTY_PATH)` of an inherited memfd are denied (`EACCES`) even
+when the memfd predates the restriction. This was proven empirically, not
+assumed: any implementation of an I/O-closed profile on Linux must make
+the same choice unless the kernel grows anon-inode Landlock rules.
+
+Therefore `frf-exec-linux-v3` executes the VERIFIED SNAPSHOT PATH —
+content-addressed under `objects/sha256/`, sealed read-only, and itself
+inside the closure — and documents the residual same-UID window exactly as
+the normal operating model does (permissions plus rehashing; the OCI
+profile remains the mechanism that closes both the path race and the
+ambient-environment race).
+
+### Refusal semantics and replay
+
+A profile is ENFORCED, never approximated: if Landlock is unavailable
+(kernel < 5.13, disabled at boot, syscall absent) the run REFUSES with a
+message naming the missing mechanism — never a silent fallback to an
+unclosed profile. **Replay rebuilds the closure from the capture's recorded
+machinery** (the interpreter chains, the native closures, the declared
+execution context, the objects directory) — a v3 observation is replayed
+under the SAME closed contract, never unclosed. Extensions (comparators,
+normalizers, adapters, minimizers, mutation providers, witnesses) are
+harness-side instrumentation and run on the host under the reference
+profile, exactly as under `frf-exec-oci`.
+
 ## Native runtime closure — `executable hash` is not `executable semantics`
 
 For a native (ELF) executable, the artifact's behavior depends on more than

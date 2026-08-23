@@ -1762,6 +1762,45 @@ pub fn run_once(
         None
     };
 
+    // -- the I/O-closed sandbox (frf-exec-linux-v3) -------------------------
+    // The side's world, closed: the content-addressed objects directory
+    // (every object there is a declared, verified artifact) may be read and
+    // executed; the execution machinery (the interpreter chain, the native
+    // runtime closure, the declared execution-context artifacts) may be read
+    // and executed; the produced-output staging directory is the ONLY
+    // writable surface; everything else on the host is EACCES. The runtime
+    // channels (/dev/null, /dev/urandom) are granted by the sandbox itself.
+    let io_sandbox = |interpreter: &Option<crate::model::InterpreterIdentity>,
+                      native: &Option<NativeRuntimeClosure>|
+     -> Result<crate::sandbox::IoClosedSandbox> {
+        // The content-addressed objects directory: every object there is a
+        // DECLARED, verified artifact — the side reads AND executes its own
+        // snapshot (and the fixture) from it. The execution machinery is the
+        // interpreter chain (+ its own native closure) and the artifact's
+        // native runtime closure. The produced-output staging directory is
+        // the only writable surface (absent = no writable surface at all).
+        let mut read_exec: Vec<PathBuf> = vec![store.root.join("objects").join("sha256")];
+        read_exec.extend(crate::sandbox::machinery_paths(
+            interpreter.as_ref(),
+            native.as_ref(),
+        ));
+        read_exec.extend(crate::sandbox::context_artifact_paths(
+            execution_context.as_ref(),
+        ));
+        let write_dir = produce_path.as_ref().map(|p| {
+            std::env::current_dir()
+                .map(|c| c.join(p))
+                .unwrap_or_else(|_| p.clone())
+        });
+        Ok(crate::sandbox::IoClosedSandbox {
+            read: Vec::new(),
+            read_exec,
+            write_dir,
+        })
+    };
+    let reference_sandbox = io_sandbox(&authority_interpreter, &authority_native)?;
+    let candidate_sandbox = io_sandbox(&candidate_interpreter, &candidate_native)?;
+
     // -- identities, bound NOW (observation time) ----------------------------
     // Two questions, answered separately: WHAT question was asked (semantic
     // identity from comparator SEMANTICS + artifact hashes) and WHO asked it
@@ -2055,13 +2094,28 @@ pub fn run_once(
     // `harness_events` (v15) so the run's bundle carries the bound-firing
     // evidence.
     let mut harness_events: Vec<String> = Vec::new();
-    let reference_out = match host::run_process(
-        &authority_image,
-        &arguments,
-        profile,
-        &declared_environment,
-        container_image.as_ref(),
-    ) {
+    // The observed sides run under the declared profile: the I/O-CLOSED
+    // profile (v3) installs the Landlock filesystem closure + seccomp
+    // ambient-channel closure around the side before exec; the reference and
+    // aggregate profiles run the sealed image as always.
+    let reference_out = match if profile == host::ExecProfile::LinuxV3 {
+        host::run_process_closed(
+            &authority_image,
+            &arguments,
+            None,
+            profile,
+            &declared_environment,
+            &reference_sandbox,
+        )
+    } else {
+        host::run_process(
+            &authority_image,
+            &arguments,
+            profile,
+            &declared_environment,
+            container_image.as_ref(),
+        )
+    } {
         Ok(out) => out,
         Err(e) => {
             // The refusal-root: a failed observation attempt is itself
@@ -2147,13 +2201,24 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
-    let candidate_out = match host::run_process(
-        &candidate_image,
-        &arguments,
-        profile,
-        &declared_environment,
-        container_image.as_ref(),
-    ) {
+    let candidate_out = match if profile == host::ExecProfile::LinuxV3 {
+        host::run_process_closed(
+            &candidate_image,
+            &arguments,
+            None,
+            profile,
+            &declared_environment,
+            &candidate_sandbox,
+        )
+    } else {
+        host::run_process(
+            &candidate_image,
+            &arguments,
+            profile,
+            &declared_environment,
+            container_image.as_ref(),
+        )
+    } {
         Ok(out) => out,
         Err(e) => {
             let mut events: Vec<String> = Vec::new();

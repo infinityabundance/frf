@@ -432,6 +432,32 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     if let Some(prod) = &produce_path {
         clear_produce(prod)?;
     }
+    // The I/O-CLOSED profile reproduces its closure at replay: the sandbox
+    // is rebuilt from the CAPTURE's recorded machinery (the interpreter
+    // chains + native closures + declared execution context) and the store's
+    // objects directory — replay re-executes the sides under the SAME closed
+    // contract the observation was made under, never unclosed.
+    let replay_sandbox = |side: &str| -> Result<crate::sandbox::IoClosedSandbox> {
+        let artifact = match side {
+            "reference" => &capture.authority_artifact,
+            _ => &capture.candidate_artifact,
+        };
+        let mut read_exec: Vec<PathBuf> = vec![store.root.join("objects").join("sha256")];
+        read_exec.extend(crate::sandbox::machinery_paths(
+            artifact.interpreter.as_ref(),
+            artifact.native_runtime.as_ref(),
+        ));
+        read_exec.extend(crate::sandbox::context_artifact_paths(
+            capture.execution_context.as_ref(),
+        ));
+        Ok(crate::sandbox::IoClosedSandbox {
+            read: Vec::new(),
+            read_exec,
+            write_dir: produce_path.clone(),
+        })
+    };
+    let reference_sandbox = replay_sandbox("reference")?;
+    let candidate_sandbox = replay_sandbox("candidate")?;
     // The DECLARED execution environment recorded at observation time: the
     // sides AND the extension programs are re-spawned with EXACTLY this
     // environment (the ambient host environment is never inherited — replay
@@ -495,14 +521,25 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         );
         Ok(())
     };
-    let raw_reference_out = match host::run_process_in(
-        &authority_image,
-        &capture.arguments,
-        side_cwd,
-        profile,
-        declared_environment,
-        capture.container_image.as_ref(),
-    ) {
+    let raw_reference_out = match if profile == host::ExecProfile::LinuxV3 {
+        host::run_process_closed(
+            &authority_image,
+            &capture.arguments,
+            Some(side_cwd),
+            profile,
+            declared_environment,
+            &reference_sandbox,
+        )
+    } else {
+        host::run_process_in(
+            &authority_image,
+            &capture.arguments,
+            side_cwd,
+            profile,
+            declared_environment,
+            capture.container_image.as_ref(),
+        )
+    } {
         Ok(out) => out,
         Err(e) => {
             if let Some(v) = &e.violation {
@@ -533,14 +570,25 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
     } else {
         None
     };
-    let raw_candidate_out = match host::run_process_in(
-        &candidate_image,
-        &capture.arguments,
-        side_cwd,
-        profile,
-        declared_environment,
-        capture.container_image.as_ref(),
-    ) {
+    let raw_candidate_out = match if profile == host::ExecProfile::LinuxV3 {
+        host::run_process_closed(
+            &candidate_image,
+            &capture.arguments,
+            Some(side_cwd),
+            profile,
+            declared_environment,
+            &candidate_sandbox,
+        )
+    } else {
+        host::run_process_in(
+            &candidate_image,
+            &capture.arguments,
+            side_cwd,
+            profile,
+            declared_environment,
+            capture.container_image.as_ref(),
+        )
+    } {
         Ok(out) => out,
         Err(e) => {
             if let Some(v) = &e.violation {

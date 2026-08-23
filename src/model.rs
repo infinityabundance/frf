@@ -285,6 +285,27 @@ pub const EXECUTION_PROFILE_LINUX: &str = "frf-exec-linux-v1";
 /// approximated.
 pub const EXECUTION_PROFILE_LINUX_V2: &str = "frf-exec-linux-v2";
 
+/// The I/O-CLOSED execution profile (`frf-exec-linux-v3`, 0.1.65,
+/// `spec/execution-profile.md`): on top of the reference setrlimit layer,
+/// each side's world is CLOSED — the filesystem closure (Landlock: the side
+/// may read/execute only the content-addressed objects directory, the
+/// execution machinery (interpreter, native runtime closure, declared
+/// execution-context artifacts), the declared randomness channel, and the
+/// produced-output staging directory — its only writable surface) and the
+/// ambient channel closure (seccomp: no network, no Unix sockets, no shared
+/// memory, no ptrace, no cross-process memory). A side that violates a
+/// closure fails visibly and the observation captures the denial — the
+/// court OBSERVES the denied access. The side executes its VERIFIED SNAPSHOT
+/// PATH (the sealed-memfd mechanism is incompatible with a Landlock closure:
+/// the kernel cannot bind access rules to anonymous-inode memfds — proven
+/// empirically, see `src/sandbox.rs`); the OCI profile remains the mechanism
+/// that closes both the path race and the ambient-environment race. Requires
+/// Landlock (kernel >= 5.13, in the boot-time LSM list); without it the
+/// profile REFUSES to run — a declared profile is enforced, never
+/// approximated. The reference profile remains `frf-exec-linux-v1`;
+/// `high-assurance` claim admission requires it.
+pub const EXECUTION_PROFILE_LINUX_V3: &str = "frf-exec-linux-v3";
+
 /// The OCI execution profile (`frf-exec-oci`, `spec/execution-profile.md`):
 /// each side runs INSIDE a container spawned from a content-addressed OCI
 /// image (digest-pinned — the image is resolved by its manifest digest, and
