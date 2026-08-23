@@ -442,6 +442,10 @@ pub fn execution_identity(cap: &Value) -> String {
         "normalizer_implementations": impls("normalizer_implementations"),
         "adapter_implementations": impls("adapter_implementations"),
         "minimizer_implementations": impls("minimizer_implementations"),
+        // 0.1.62: the OCI image the observation ran inside (null when the
+        // court did not declare frf-exec-oci) — the complete root filesystem
+        // is execution machinery, bound by digest.
+        "container_image": cap.get("container_image").cloned().unwrap_or(Value::Null),
     });
     preimage("FRF/EXECUTION/v1", &doc)
 }

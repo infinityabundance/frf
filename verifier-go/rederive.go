@@ -710,7 +710,7 @@ func executionIdentity(cap *jcs.Object) (string, error) {
 		Values: []jcs.Value{str(bounds, "timeout_ms"), str(bounds, "max_stream_bytes"), str(bounds, "produced_max_files"), str(bounds, "produced_max_bytes"), str(bounds, "produced_max_file_bytes"), str(bounds, "rlimit_as_mb"), str(bounds, "rlimit_cpu_s"), str(bounds, "rlimit_nofile"), str(bounds, "rlimit_nproc"), recVal(bounds, "cgroup_pids_max"), recVal(bounds, "cgroup_memory_max"), recVal(bounds, "cgroup_cpu_max")},
 	}
 	doc := &jcs.Object{
-		Keys: []string{"execution_profile", "capture_bounds", "runner_hash", "authority_interpreter", "candidate_interpreter", "comparator_implementations", "normalizer_implementations", "adapter_implementations", "minimizer_implementations"},
+		Keys: []string{"execution_profile", "capture_bounds", "runner_hash", "authority_interpreter", "candidate_interpreter", "comparator_implementations", "normalizer_implementations", "adapter_implementations", "minimizer_implementations", "container_image"},
 		Values: []jcs.Value{
 			str(cap, "execution_profile"),
 			cb,
@@ -721,6 +721,10 @@ func executionIdentity(cap *jcs.Object) (string, error) {
 			impls("normalizer_implementations"),
 			impls("adapter_implementations"),
 			impls("minimizer_implementations"),
+			// 0.1.62: the OCI image the observation ran inside (null when the
+			// court did not declare frf-exec-oci) — the complete root
+			// filesystem is execution machinery, bound by digest.
+			recVal(cap, "container_image"),
 		},
 	}
 	return hashPreimage("FRF/EXECUTION/v1", doc)

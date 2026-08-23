@@ -112,6 +112,7 @@ fn resolve_dependencies(loader: &str, executable: &Path) -> Result<Vec<String>> 
         &args,
         host::ExecProfile::LinuxV1,
         &host::minimal_execution_environment(),
+        None,
     )?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(

@@ -138,6 +138,51 @@ silent downgrade can never record a contract the harness did not enforce.
 The reference profile remains `frf-exec-linux-v1`; `high-assurance` claim
 admission requires it.
 
+## `frf-exec-oci` — the containerized side (0.1.62)
+
+Where the declared execution-context closure (frf-execution-context-v1)
+binds the runtime machinery artifact by artifact, the OCI profile binds the
+WHOLE root filesystem: each side runs inside a container spawned from a
+digest-pinned OCI image. The image is the complete execution machinery —
+the interpreter, the shared libraries, the loader configuration, the
+certificates — bound by its manifest digest in the execution identity. A
+court declares:
+
+```yaml
+court:
+  execution_profile: frf-exec-oci
+  # The image reference MUST carry its manifest digest — the image is
+  # content-addressed machinery; a mutable tag is refused.
+  execution_image: docker.io/library/busybox@sha256:73aaf090…
+```
+
+- The runtime (`podman` or `docker`) must be present AND must resolve the
+exact image: `image inspect <reference-with-digest>` must succeed. A missing
+runtime or a missing image **REFUSES** the run — the image is never
+silently substituted (this is the same enforced-never-approximated rule as
+the v2 cgroup delegation).
+- The side runs as the container command: the container executes the
+MATERIALIZED snapshot path (argv[0] — the path the observation sees), never
+the sealed memfd path (`/proc/self/fd/<n>` is a host descriptor, invisible
+inside the container). The working directory is bind-mounted at its own
+absolute path, so the side's recorded root-relative argv (the materialized
+object path, the fixture, the produce path) resolves inside the container
+exactly as it does on the host; produced trees are captured from the mount
+after the container exits.
+- The container runs with no network, the DECLARED environment, and is
+removed on exit (`--rm`). The capture discipline — drain, timeout, stream
+overflow refusal — is identical to the reference profile; the harness
+event records apply unchanged.
+- The capture records the image identity (`container_image`: reference,
+digest, runtime + version at observation time), and the execution identity
+commits it: an observation inside the image is NOT the same execution as
+the same sides on the host, and exact replay re-runs inside the same image.
+- EXTENSIONS are harness-side instrumentation, not the observed software:
+under the OCI profile they run on the HOST under the reference capture
+discipline (their invocation evidence records the host execution honestly).
+- The reference profile remains `frf-exec-linux-v1`; `high-assurance` claim
+admission requires it — an OCI observation is a different execution contract.
+
 ### Capture bounds (the parameters that actually applied)
 
 | Parameter            | Default      | Meaning                                             |

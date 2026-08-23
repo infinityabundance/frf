@@ -767,7 +767,19 @@ pub fn run_external(
     profile: host::ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
 ) -> Result<(ComparatorOutcome, Vec<u8>)> {
-    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile, env)?;
+    // A comparator is harness-side instrumentation: under frf-exec-oci it
+    // runs on the HOST (the container binding applies to the observed
+    // sides), so the caller passes the side profile and the extension
+    // mapping happens here.
+    let out = host::run_process_with_stdin_in(
+        image,
+        &[],
+        request_bytes,
+        cwd,
+        host::extension_profile(profile),
+        env,
+        None,
+    )?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "comparator for axis {} exited {}; refusing to record evidence from a failed comparator",

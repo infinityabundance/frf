@@ -501,6 +501,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         side_cwd,
         profile,
         declared_environment,
+        capture.container_image.as_ref(),
     ) {
         Ok(out) => out,
         Err(e) => {
@@ -538,6 +539,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
         side_cwd,
         profile,
         declared_environment,
+        capture.container_image.as_ref(),
     ) {
         Ok(out) => out,
         Err(e) => {
@@ -599,7 +601,7 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
             raw_outcome,
             recorded.as_deref(),
             side_cwd,
-            profile,
+            host::extension_profile(profile),
             declared_environment,
         )
     };

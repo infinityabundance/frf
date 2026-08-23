@@ -117,6 +117,12 @@ jobs:
           FRF_BENCH_WARMUPS: "1"
         run: |
           cargo xtask external-experiment-v5 golden/work/external-experiment-v5.json
+      - name: The OCI execution profile — the side runs inside the digest-pinned image
+        env:
+          FRF_TEST_OCI: "1"
+        run: |
+          podman image inspect docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 >/dev/null 2>&1 || podman pull docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+          cargo test --test execution_profile -- oci
 
   go-verifier:
     name: "Go verifier: the third triangle point"

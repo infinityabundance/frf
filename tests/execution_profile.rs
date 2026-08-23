@@ -553,3 +553,189 @@ fn a_cpu_limit_signal_records_the_event_without_refusing_the_run() {
     let out = frf(&work, &["--root", ROOT, "bundle", "verify", "b/"]);
     assert_success(&out, "bundle verify with the harness event");
 }
+
+/// 0.1.62 — the OCI execution profile (`frf-exec-oci`): each side runs
+/// INSIDE a container from a digest-pinned OCI image — the complete root
+/// filesystem is the execution machinery, bound by digest in the execution
+/// identity. The profile is ENFORCED, never approximated: no declared image,
+/// an image declared without the profile, or an image the runtime does not
+/// have all REFUSE the run.
+#[test]
+fn the_oci_profile_is_enforced_never_approximated() {
+    let work = Workdir::new("oci-refusals");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    let base = |extra: &str| -> String {
+        format!(
+            "court:\n  id: oci-test\n  question: q\n  falsifier: f\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{{fixture}}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [exit, stderr]\n    normalizers: []\n    replay_scope: single-run\n{extra}"
+        )
+    };
+    let manifest = work.path("oci-court.yaml");
+
+    // (1) The OCI profile without a declared image: refused — the image is
+    // part of the declared machinery, never invented.
+    fs::write(&manifest, base("  execution_profile: frf-exec-oci\n")).unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", "oci-court.yaml"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("execution_image"),
+        "the refusal must name the missing image: {}",
+        stderr(&out)
+    );
+
+    // (2) A declared image under the reference profile: refused — the image
+    // is only meaningful under the OCI profile.
+    fs::write(
+        &manifest,
+        base("  execution_image: docker.io/library/busybox@sha256:aaaa\n"),
+    )
+    .unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", "oci-court.yaml"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("execution_image"),
+        "the refusal must name the misdeclared image: {}",
+        stderr(&out)
+    );
+
+    // (3) A mutable tag (no digest) under the OCI profile: refused — the
+    // image is content-addressed machinery, never a mutable tag.
+    fs::write(
+        &manifest,
+        base("  execution_profile: frf-exec-oci\n  execution_image: docker.io/library/busybox:latest\n"),
+    )
+    .unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", "oci-court.yaml"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("digest"),
+        "the refusal must demand a digest: {}",
+        stderr(&out)
+    );
+
+    // (4) An image the runtime does not have: refused (when a runtime is
+    // present; without one the profile refuses earlier with the same
+    // enforcement message).
+    fs::write(
+        &manifest,
+        base("  execution_profile: frf-exec-oci\n  execution_image: docker.io/library/nonexistent-frf-image@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"),
+    )
+    .unwrap();
+    let out = frf(&work, &["--root", ROOT, "court", "run", "oci-court.yaml"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("image") || err.contains("runtime"),
+        "the refusal must name the image or the runtime: {err}"
+    );
+}
+
+/// 0.1.62 — the OCI happy path, env-gated (`FRF_TEST_OCI=1`, set by the CI
+/// demo job): the side runs INSIDE the digest-pinned busybox image, the
+/// capture records the profile + image identity, the execution identity
+/// binds the image (a different image is a different execution), and exact
+/// replay reproduces.
+#[test]
+fn oci_profile_runs_the_side_inside_the_declared_image() {
+    if std::env::var("FRF_TEST_OCI")
+        .map(|v| v != "1")
+        .unwrap_or(true)
+    {
+        eprintln!("skipping: set FRF_TEST_OCI=1 to run the OCI container test");
+        return;
+    }
+    // A container runtime must be present (the profile is enforced).
+    let runtime_ok = ["podman", "docker"].iter().any(|bin| {
+        std::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+    if !runtime_ok {
+        eprintln!("skipping: no container runtime (podman/docker)");
+        return;
+    }
+    // The digest-pinned busybox image the court declares. Pulling by digest
+    // is deterministic and content-addressed; the runtime must have it.
+    const IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
+    let pulled = std::process::Command::new("podman")
+        .args(["image", "inspect", IMAGE])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !pulled {
+        eprintln!(
+            "skipping: the pinned busybox image is not present; load it (podman pull {IMAGE})"
+        );
+        return;
+    }
+
+    let work = Workdir::new("oci-run");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let manifest = work.path("oci-court.yaml");
+    fs::write(
+        &manifest,
+        format!(
+            "court:\n  id: oci-test\n  question: q\n  falsifier: f\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{{fixture}}\"]\n  execution_profile: frf-exec-oci\n  execution_image: {IMAGE}\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [exit, stderr]\n    normalizers: []\n    replay_scope: single-run\n"
+        ),
+    )
+    .unwrap();
+
+    let out = frf(&work, &["--root", ROOT, "court", "run", "oci-court.yaml"]);
+    assert_success(&out, "the OCI court runs the sides inside the image");
+    let run = stdout(&out);
+    assert!(run.starts_with("run-oci-test-"));
+
+    // The capture records the profile and the image identity (digest +
+    // runtime), and the residual divergences are the same ones the host
+    // court observes (the exit class + the first stderr line).
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(capture["execution_profile"], "frf-exec-oci");
+    assert_eq!(
+        capture["container_image"]["digest"],
+        "sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+    );
+    assert!(capture["container_image"]["runtime"]
+        .as_str()
+        .unwrap()
+        .contains("podman"));
+    assert_eq!(capture["reference"]["exit"], "2");
+    assert_eq!(capture["candidate"]["exit"], "1");
+    assert!(!capture["residuals"].as_array().unwrap().is_empty());
+
+    // The execution identity binds the image: the OCI observation is NOT the
+    // same execution as the reference-profile observation of the same sides.
+    // (Both runs exist in the same store; the OCI run id differs.)
+    let host_run = run_court(&work);
+    assert_ne!(
+        run, host_run,
+        "the OCI execution is a different execution identity than the host execution"
+    );
+    let host_capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/captures/{host_run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(host_capture["execution_profile"], "frf-exec-linux-v1");
+    assert_ne!(
+        capture["execution_identity"], host_capture["execution_identity"],
+        "the container image is execution machinery and must change the execution identity"
+    );
+
+    // The receipt carries the profile; exact replay re-runs the sides inside
+    // the same image and reproduces.
+    let receipt = receipt_emit(&work, &run);
+    let body = receipt_json(&work, &receipt);
+    assert_eq!(body["execution_profile"], "frf-exec-oci");
+    let out = frf(
+        &work,
+        &["--root", ROOT, "replay", &receipt, "--policy", "exact"],
+    );
+    assert_success(&out, "exact replay of the OCI observation");
+    assert!(stdout(&out).contains("reproduced"));
+}

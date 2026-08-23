@@ -102,6 +102,7 @@ pub fn capture_digest(capture: &CaptureManifest, residuals: &[ResidualRecord]) -
         normalizer_implementations: &capture.provenance.normalizer_implementations,
         adapter_implementations: &capture.provenance.adapter_implementations,
         minimizer_implementations: &capture.provenance.minimizer_implementations,
+        container_image: capture.container_image.as_ref(),
     };
     crate::semantics::run_identity(&pre)
 }
@@ -140,6 +141,7 @@ pub fn capture_identities(
         normalizer_implementations: &capture.provenance.normalizer_implementations,
         adapter_implementations: &capture.provenance.adapter_implementations,
         minimizer_implementations: &capture.provenance.minimizer_implementations,
+        container_image: capture.container_image.as_ref(),
     };
     Ok((
         crate::semantics::observation_identity(&pre)?,
@@ -3052,6 +3054,7 @@ mod tests {
             environment: None,
             environment_points: None,
             execution_context: None,
+            execution_image: None,
         };
         let semantic = crate::semantics::court_semantic_identity(
             &spec,

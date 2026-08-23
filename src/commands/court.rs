@@ -840,12 +840,14 @@ fn run_attempt(
         &arguments,
         profile,
         &capture.environment.environment,
+        capture.container_image.as_ref(),
     )?;
     let raw_candidate_out = host::run_process(
         candidate_image,
         &arguments,
         profile,
         &capture.environment.environment,
+        capture.container_image.as_ref(),
     )?;
     // The comparison surface is the NORMALIZED streams: re-apply the exact
     // snapshotted normalizers the court bound (a fresh attempt is a NEW
@@ -857,7 +859,7 @@ fn run_attempt(
         &raw_reference_out,
         None,
         std::path::Path::new("."),
-        profile,
+        host::extension_profile(profile),
         &capture.environment.environment,
     )?;
     let candidate_out = crate::normalizers::apply_capture_normalizers(
@@ -867,7 +869,7 @@ fn run_attempt(
         &raw_candidate_out,
         None,
         std::path::Path::new("."),
-        profile,
+        host::extension_profile(profile),
         &capture.environment.environment,
     )?;
     let reference = SideCapture::from_outcome(&reference_out);
@@ -991,7 +993,7 @@ fn minimize_external(
         &snapshot,
         &request_bytes,
         std::path::Path::new("."),
-        profile,
+        host::extension_profile(profile),
         &capture.environment.environment,
     )?;
     // The protocol says canonical JSON: the response must BE its own
@@ -1391,6 +1393,46 @@ pub fn run_once(
             .as_deref()
             .unwrap_or(crate::model::EXECUTION_PROFILE_LINUX),
     )?;
+
+    // The OCI image for `frf-exec-oci` (0.1.62): the declared image reference
+    // must carry its digest (e.g. `alpine@sha256:…`) — the image is the
+    // complete execution machinery, bound by digest in the execution
+    // identity. A runtime must be present (the profile is enforced, never
+    // approximated) and must resolve the exact image; the record carries the
+    // runtime + version at observation time.
+    let container_image: Option<crate::model::OciImage> = if profile == host::ExecProfile::Oci {
+        let reference = spec.execution_image.as_ref().ok_or_else(|| {
+                FrfError::new(format!(
+                    "the {} profile requires the court to declare `execution_image` (the digest-pinned OCI image the sides run inside)",
+                    crate::model::EXECUTION_PROFILE_OCI
+                ))
+            })?;
+        if !reference.contains("@sha256:") {
+            return Err(FrfError::new(format!(
+                    "the declared execution_image {reference:?} must carry its digest (reference@sha256:…) — the image is content-addressed execution machinery, never a mutable tag"
+                )));
+        }
+        let digest = reference
+            .rsplit_once('@')
+            .map(|(_, d)| d.to_string())
+            .unwrap_or_default();
+        let (runtime_bin, runtime_version) = host::container_runtime()?;
+        host::verify_container_image(&runtime_bin, reference)?;
+        Some(crate::model::OciImage {
+            reference: reference.clone(),
+            digest,
+            runtime: runtime_version,
+        })
+    } else {
+        if spec.execution_image.is_some() {
+            return Err(FrfError::new(format!(
+                    "`execution_image` is declared but the execution profile is {} — the OCI image is only valid under {}",
+                    profile.as_str(),
+                    crate::model::EXECUTION_PROFILE_OCI
+                )));
+        }
+        None
+    };
 
     let authority = store.load_authority(&spec.authority)?;
 
@@ -1957,23 +1999,28 @@ pub fn run_once(
     // `harness_events` (v15) so the run's bundle carries the bound-firing
     // evidence.
     let mut harness_events: Vec<String> = Vec::new();
-    let reference_out =
-        match host::run_process(&authority_image, &arguments, profile, &declared_environment) {
-            Ok(out) => out,
-            Err(e) => {
-                if let Some(v) = &e.violation {
-                    record_harness_event(
-                        store,
-                        "reference",
-                        &spec.id,
-                        profile.as_str(),
-                        &runner.frf_executable_hash,
-                        v,
-                    )?;
-                }
-                return Err(e.into());
+    let reference_out = match host::run_process(
+        &authority_image,
+        &arguments,
+        profile,
+        &declared_environment,
+        container_image.as_ref(),
+    ) {
+        Ok(out) => out,
+        Err(e) => {
+            if let Some(v) = &e.violation {
+                record_harness_event(
+                    store,
+                    "reference",
+                    &spec.id,
+                    profile.as_str(),
+                    &runner.frf_executable_hash,
+                    v,
+                )?;
             }
-        };
+            return Err(e.into());
+        }
+    };
     if let Some(v) = &reference_out.violation {
         harness_events.push(record_harness_event(
             store,
@@ -2010,23 +2057,28 @@ pub fn run_once(
         clear_produce(prod)?;
     }
 
-    let candidate_out =
-        match host::run_process(&candidate_image, &arguments, profile, &declared_environment) {
-            Ok(out) => out,
-            Err(e) => {
-                if let Some(v) = &e.violation {
-                    record_harness_event(
-                        store,
-                        "candidate",
-                        &spec.id,
-                        profile.as_str(),
-                        &runner.frf_executable_hash,
-                        v,
-                    )?;
-                }
-                return Err(e.into());
+    let candidate_out = match host::run_process(
+        &candidate_image,
+        &arguments,
+        profile,
+        &declared_environment,
+        container_image.as_ref(),
+    ) {
+        Ok(out) => out,
+        Err(e) => {
+            if let Some(v) = &e.violation {
+                record_harness_event(
+                    store,
+                    "candidate",
+                    &spec.id,
+                    profile.as_str(),
+                    &runner.frf_executable_hash,
+                    v,
+                )?;
             }
-        };
+            return Err(e.into());
+        }
+    };
     if let Some(v) = &candidate_out.violation {
         harness_events.push(record_harness_event(
             store,
@@ -2200,7 +2252,7 @@ pub fn run_once(
                 &snap.image,
                 &request_bytes,
                 std::path::Path::new("."),
-                profile,
+                host::extension_profile(profile),
                 &declared_environment,
             )?;
             // The protocol says canonical JSON: the response must BE its own
@@ -2440,6 +2492,7 @@ pub fn run_once(
         normalizer_implementations: &provenance.normalizer_implementations,
         adapter_implementations: &provenance.adapter_implementations,
         minimizer_implementations: &provenance.minimizer_implementations,
+        container_image: container_image.as_ref(),
     };
     let observation_identity = crate::semantics::observation_identity(&pre)?;
     let execution_identity = crate::semantics::execution_identity(&pre)?;
@@ -2716,6 +2769,7 @@ pub fn run_once(
         harness_events,
         evidence_refs,
         execution_context,
+        container_image,
     };
     let json = store.to_evidence(&capture)?;
     store.write_once(&run_dir.join("capture.json"), &json)?;

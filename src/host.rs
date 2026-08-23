@@ -94,6 +94,10 @@ pub enum ExecProfile {
     LinuxV1,
     /// `frf-exec-linux-v2` — cgroup v2 aggregate envelope + setrlimit.
     LinuxV2,
+    /// `frf-exec-oci` — each side runs inside a container from a
+    /// digest-pinned OCI image (the complete root filesystem is the
+    /// execution machinery).
+    Oci,
 }
 
 impl ExecProfile {
@@ -104,10 +108,12 @@ impl ExecProfile {
         match s {
             crate::model::EXECUTION_PROFILE_LINUX => Ok(ExecProfile::LinuxV1),
             crate::model::EXECUTION_PROFILE_LINUX_V2 => Ok(ExecProfile::LinuxV2),
+            crate::model::EXECUTION_PROFILE_OCI => Ok(ExecProfile::Oci),
             other => Err(crate::error::FrfError::new(format!(
-                "unsupported execution profile {other:?}: this engine implements {} (the reference profile) and {} (the cgroup v2 aggregate envelope)",
+                "unsupported execution profile {other:?}: this engine implements {} (the reference profile), {} (the cgroup v2 aggregate envelope), and {} (the OCI container profile)",
                 crate::model::EXECUTION_PROFILE_LINUX,
-                crate::model::EXECUTION_PROFILE_LINUX_V2
+                crate::model::EXECUTION_PROFILE_LINUX_V2,
+                crate::model::EXECUTION_PROFILE_OCI
             ))),
         }
     }
@@ -116,6 +122,7 @@ impl ExecProfile {
         match self {
             ExecProfile::LinuxV1 => crate::model::EXECUTION_PROFILE_LINUX,
             ExecProfile::LinuxV2 => crate::model::EXECUTION_PROFILE_LINUX_V2,
+            ExecProfile::Oci => crate::model::EXECUTION_PROFILE_OCI,
         }
     }
 }
@@ -1012,13 +1019,18 @@ pub struct ProcessOutcome {
 ///
 /// `ETXTBSY` (`ExecutableFileBusy`) is retried within [`SPAWN_RETRY_BUDGET`]
 /// before failing; everything else fails immediately.
+///
+/// Under `frf-exec-oci`, `container` is the declared OCI image the side runs
+/// INSIDE (the complete root filesystem is the execution machinery); it must
+/// be `Some` for the OCI profile and is ignored otherwise.
 pub fn run_process(
     image: &ExecImage,
     args: &[String],
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, None, None, profile, env)
+    run_impl(image, args, None, None, profile, env, container)
 }
 
 /// [`run_process`] with a declared working directory: the side runs from
@@ -1031,8 +1043,9 @@ pub fn run_process_in(
     cwd: &Path,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, None, Some(cwd), profile, env)
+    run_impl(image, args, None, Some(cwd), profile, env, container)
 }
 
 /// Execute `image` with `args` and the given bytes on stdin (used by the
@@ -1047,8 +1060,9 @@ pub fn run_process_with_stdin(
     stdin: &[u8],
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, Some(stdin), None, profile, env)
+    run_impl(image, args, Some(stdin), None, profile, env, container)
 }
 
 /// [`run_process_with_stdin`] with a declared working directory (bundle
@@ -1060,8 +1074,253 @@ pub fn run_process_with_stdin_in(
     cwd: &Path,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
-    run_impl(image, args, Some(stdin), Some(cwd), profile, env)
+    run_impl(image, args, Some(stdin), Some(cwd), profile, env, container)
+}
+
+/// The profile EXTENSION programs run under (0.1.62): extensions are
+/// harness-side instrumentation — the FRF-provided machinery — so under
+/// `frf-exec-oci` they execute on the HOST under the reference capture
+/// discipline (the container binding applies to the OBSERVED sides; an
+/// extension is not the observed software). Their invocation evidence
+/// records the host profile honestly.
+pub fn extension_profile(side_profile: ExecProfile) -> ExecProfile {
+    match side_profile {
+        ExecProfile::Oci => ExecProfile::LinuxV1,
+        other => other,
+    }
+}
+
+/// Locate the container runtime (`podman`, then `docker`) and its version —
+/// `frf-exec-oci` is ENFORCED, never approximated: without a runtime the
+/// profile refuses to run.
+pub(crate) fn container_runtime() -> Result<(String, String)> {
+    for bin in ["podman", "docker"] {
+        if let Ok(out) = Command::new(bin).arg("--version").output() {
+            if out.status.success() {
+                let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                return Ok((bin.to_string(), version));
+            }
+        }
+    }
+    Err(FrfError::new(format!(
+        "{} was requested but no container runtime is available: neither `podman` nor `docker` is on PATH — the profile is enforced, never approximated; install a runtime and load the declared image, or use the reference profile {}",
+        crate::model::EXECUTION_PROFILE_OCI,
+        crate::model::EXECUTION_PROFILE_LINUX
+    )))
+}
+
+/// Verify the runtime resolves the declared image reference to the exact
+/// image: `image inspect <reference>` must succeed. Because the reference
+/// carries the digest (e.g. `alpine@sha256:…`), a runtime that has any
+/// OTHER image under that name cannot satisfy it — the image is
+/// content-addressed, and a missing image REFUSES the run (never a silent
+/// substitution).
+pub(crate) fn verify_container_image(bin: &str, reference: &str) -> Result<()> {
+    let out = Command::new(bin)
+        .args(["image", "inspect", reference])
+        .output()
+        .map_err(|e| FrfError::new(format!("cannot run `{bin} image inspect {reference}`: {e}")))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(FrfError::new(format!(
+            "the declared OCI image {reference} is not present in the {bin} store: the image is part of the declared execution machinery and may not be silently substituted; load the exact image (pull by digest or import) and re-run"
+        )))
+    }
+}
+
+/// The `frf-exec-oci` execution path: the side runs INSIDE a container from
+/// the declared digest-pinned image. The image is the COMPLETE execution
+/// machinery — the whole root filesystem (interpreter, shared libraries,
+/// loader configuration, certificates) is bound by the digest in the
+/// execution identity. The container runs with no network, the declared
+/// environment, and the working directory bind-mounted at its own absolute
+/// path, so the side's recorded root-relative argv (the materialized object
+/// path, the fixture) resolve inside the container exactly as they do on the
+/// host. The container is removed on exit; the capture discipline (drain,
+/// timeout, overflow refusal) is the same as the reference profile.
+fn run_oci(
+    image: &ExecImage,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    cwd: Option<&Path>,
+    env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
+) -> std::result::Result<ProcessOutcome, RunError> {
+    let oci = container.ok_or_else(|| {
+        RunError::new(format!(
+            "{} requires the declared OCI image; the court must declare `execution_image`",
+            crate::model::EXECUTION_PROFILE_OCI
+        ))
+    })?;
+    let (runtime_bin, _runtime_version) = container_runtime().map_err(|e| RunError::new(e.0))?;
+    verify_container_image(&runtime_bin, &oci.reference).map_err(|e| RunError::new(e.0))?;
+
+    // The working directory the container sees: the bind mount target equals
+    // the host path, so recorded relative argv paths resolve identically.
+    let workdir = cwd
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+    let program = image.argv0();
+
+    let mut command = Command::new(&runtime_bin);
+    command
+        .arg("run")
+        .arg("--rm")
+        .arg("--network=none")
+        .arg("-v")
+        .arg(format!("{}:{}", workdir.display(), workdir.display()))
+        .arg("-w")
+        .arg(&workdir);
+    for (k, v) in env {
+        command.arg("--env").arg(format!("{k}={v}"));
+    }
+    command.arg(&oci.reference);
+    // The container command is the MATERIALIZED snapshot path (argv[0] — the
+    // path the observation sees), NOT the sealed memfd path: `/proc/self/fd/N`
+    // is a host descriptor, invisible inside the container. The materialized
+    // path resolves inside the container through the working-directory bind
+    // mount, and its bytes are the verified snapshot (the store re-seals it
+    // on every use).
+    command.arg(image.argv0());
+    command.args(args);
+    command
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    // Every side runs in its own process group (unix) so the harness can
+    // terminate the runtime and its tree when the side exits, times out, or
+    // overflows its capture cap.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    let mut child = command.spawn().map_err(|e| {
+        RunError::new(format!(
+            "failed to execute {} in the OCI image {}: {e}",
+            program.display(),
+            oci.reference
+        ))
+    })?;
+    let group = child.id();
+    let start = Instant::now();
+    let overflow = Arc::new(AtomicBool::new(false));
+    let overflow_detail: Arc<Mutex<Option<(String, usize)>>> = Arc::new(Mutex::new(None));
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let timeout = exec_timeout();
+    let max_bytes = max_stream_bytes();
+    let mut stdin_pipe = child.stdin.take();
+    let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
+    let status = std::thread::scope(|s| {
+        if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin.map(|b| b.to_vec())) {
+            s.spawn(move || {
+                let _ = pipe.write_all(&bytes);
+            });
+        }
+        let _drain_out = s.spawn(|| {
+            drain_capped(
+                &mut stdout_pipe,
+                &mut stdout,
+                max_bytes,
+                group,
+                &overflow,
+                &overflow_detail,
+                "stdout",
+            )
+        });
+        let _drain_err = s.spawn(|| {
+            drain_capped(
+                &mut stderr_pipe,
+                &mut stderr,
+                max_bytes,
+                group,
+                &overflow,
+                &overflow_detail,
+                "stderr",
+            )
+        });
+        let result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break Err(RunError {
+                            message: format!(
+                                "{} exceeded the execution timeout ({} ms) inside the OCI image {}",
+                                program.display(),
+                                timeout.as_millis(),
+                                oci.reference
+                            ),
+                            violation: Some(Box::new(HarnessViolation {
+                                event_kind: "timeout",
+                                target: "wall".to_string(),
+                                cap: timeout.as_millis().to_string(),
+                                observed: start.elapsed().as_millis().to_string(),
+                                detail: oci.reference.clone(),
+                            })),
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => {
+                    break Err(RunError::new(format!(
+                        "failed to wait on {}: {e}",
+                        program.display()
+                    )))
+                }
+            }
+        };
+        // The runtime is gone; terminate whatever remains in its group so the
+        // capture streams reach EOF and the drains can join.
+        #[cfg(unix)]
+        terminate_process_group(group);
+        result
+    })?;
+
+    if overflow.load(Ordering::SeqCst) {
+        let (target, observed) = overflow_detail
+            .lock()
+            .expect("overflow detail lock")
+            .clone()
+            .unwrap_or(("stdout".to_string(), max_bytes));
+        return Err(RunError {
+            message: format!(
+                "{} exceeded the execution profile's {} byte per-stream capture cap inside the OCI image {}; refusing to record truncated output as evidence",
+                program.display(),
+                max_bytes,
+                oci.reference
+            ),
+            violation: Some(Box::new(HarnessViolation {
+                event_kind: "stream-overflow",
+                target,
+                cap: max_bytes.to_string(),
+                observed: observed.to_string(),
+                detail: String::new(),
+            })),
+        });
+    }
+
+    let exit = exit_string(&status);
+    Ok(ProcessOutcome {
+        stdout,
+        stderr,
+        exit,
+        violation: None,
+    })
 }
 
 fn run_impl(
@@ -1071,12 +1330,23 @@ fn run_impl(
     cwd: Option<&Path>,
     profile: ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
+    container: Option<&crate::model::OciImage>,
 ) -> std::result::Result<ProcessOutcome, RunError> {
     // The program name the process observes (argv[0]) is the materialized
     // snapshot path — a sealed execution must not silently change argv[0]
     // to `/proc/self/fd/<n>`: many programs inspect argv[0], and the
     // observation must match the path-based contract.
     let program = image.argv0();
+    // `frf-exec-oci`: the side runs INSIDE a container spawned from the
+    // declared OCI image (digest-pinned — the runtime must resolve the exact
+    // image; a missing or different image REFUSES the run). The image is the
+    // complete execution machinery: the whole root filesystem is bound by
+    // the digest. The side's materialized path + the declared argv are made
+    // visible inside the container by bind-mounting the working directory at
+    // its own absolute path; the capture records the image identity.
+    if profile == ExecProfile::Oci {
+        return run_oci(image, args, stdin, cwd, env, container);
+    }
     let mut command = Command::new(image.path());
     #[cfg(unix)]
     {
@@ -1873,6 +2143,7 @@ mod tests {
             &[],
             ExecProfile::LinuxV1,
             &test_env(),
+            None,
         )
         .unwrap();
         assert_eq!(out.exit, "7");
@@ -1894,7 +2165,7 @@ mod tests {
         let hash_a = sha256_bytes(&bytes_a);
         let image = ExecImage::seal(&bytes_a, &hash_a, &materialized).unwrap();
 
-        let out = run_process(&image, &[], ExecProfile::LinuxV1, &test_env()).unwrap();
+        let out = run_process(&image, &[], ExecProfile::LinuxV1, &test_env(), None).unwrap();
         assert_eq!(out.exit, "0");
         assert_eq!(out.stdout, b"sealed-A\n", "the sealed bytes must run");
         assert_eq!(
@@ -1907,7 +2178,7 @@ mod tests {
         // and BEFORE execution. A path-based exec would run the tampered
         // bytes; the sealed image still runs the verified bytes.
         std::fs::write(&materialized, b"#!/bin/sh\necho TAMPERED\n").unwrap();
-        let out2 = run_process(&image, &[], ExecProfile::LinuxV1, &test_env()).unwrap();
+        let out2 = run_process(&image, &[], ExecProfile::LinuxV1, &test_env(), None).unwrap();
         assert_eq!(
             out2.stdout, b"sealed-A\n",
             "the executed image must be the sealed verified bytes, not the mutated pathname"
@@ -1972,6 +2243,7 @@ echo "zero=$0 one=$1"
             &["argX".to_string()],
             ExecProfile::LinuxV1,
             &test_env(),
+            None,
         )
         .unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -2028,6 +2300,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV2,
                 &test_env(),
+                None,
             )
             .unwrap_err()
             .message;
@@ -2059,6 +2332,7 @@ echo "zero=$0 one=$1"
                     &[],
                     ExecProfile::LinuxV2,
                     &test_env(),
+                    None,
                 )
                 .unwrap_err()
                 .message;
@@ -2105,6 +2379,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV2,
                 &env,
+                None,
             )
             .unwrap();
             assert_eq!(out.exit, "0");
@@ -2311,6 +2586,7 @@ echo "zero=$0 one=$1"
             &[],
             ExecProfile::LinuxV1,
             &test_env(),
+            None,
         )
         .unwrap_err();
         assert!(err.message.contains("failed to execute"));
@@ -2338,6 +2614,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV1,
                 &test_env(),
+                None,
             )
             .unwrap();
             assert_eq!(out.exit, "0");
@@ -2364,6 +2641,7 @@ echo "zero=$0 one=$1"
             &[],
             ExecProfile::LinuxV1,
             &test_env(),
+            None,
         )
         .unwrap();
         assert_eq!(out.exit, "signal(15)");
@@ -2391,6 +2669,7 @@ echo "zero=$0 one=$1"
             &[],
             ExecProfile::LinuxV1,
             &test_env(),
+            None,
         )
         .unwrap_err();
         drop(held);
@@ -2425,6 +2704,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV1,
                 &test_env(),
+                None,
             )
             .unwrap();
             assert_eq!(out.exit, "0");
@@ -2462,6 +2742,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV1,
                 &test_env(),
+                None,
             )
             .unwrap_err();
             assert!(
@@ -2504,6 +2785,7 @@ echo "zero=$0 one=$1"
                     &[],
                     ExecProfile::LinuxV1,
                     &test_env(),
+                    None,
                 )
                 .unwrap();
                 assert!(
@@ -2569,6 +2851,7 @@ echo "zero=$0 one=$1"
                 &[],
                 ExecProfile::LinuxV1,
                 &test_env(),
+                None,
             )
             .unwrap();
             let text = String::from_utf8_lossy(&out.stdout);
@@ -2614,6 +2897,7 @@ echo "zero=$0 one=$1"
                     &[],
                     ExecProfile::LinuxV1,
                     &test_env(),
+                    None,
                 );
                 assert!(
                     start.elapsed() < Duration::from_secs(8),

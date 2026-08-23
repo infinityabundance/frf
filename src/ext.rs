@@ -89,7 +89,15 @@ pub fn run_program(
     profile: host::ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
 ) -> Result<Vec<u8>> {
-    let out = host::run_process_with_stdin_in(image, &[], request_bytes, cwd, profile, env)?;
+    let out = host::run_process_with_stdin_in(
+        image,
+        &[],
+        request_bytes,
+        cwd,
+        host::extension_profile(profile),
+        env,
+        None,
+    )?;
     if out.exit != "0" {
         return Err(FrfError::new(format!(
             "extension program {} exited {}; refusing to record evidence from a failed participant",

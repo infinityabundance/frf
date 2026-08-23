@@ -431,6 +431,10 @@ pub struct RunPreimage<'a> {
     pub normalizer_implementations: &'a [NormalizerImplementation],
     pub adapter_implementations: &'a [CaptureAdapterImplementation],
     pub minimizer_implementations: &'a [MinimizerImplementation],
+    /// The OCI image the observation ran inside (0.1.62), present exactly
+    /// when the court declared `frf-exec-oci`: the complete root filesystem
+    /// is execution machinery, bound by digest.
+    pub container_image: Option<&'a OciImage>,
 }
 
 /// The side projection shared by the observation and run identities: the
@@ -552,6 +556,11 @@ pub fn execution_identity(p: &RunPreimage) -> Result<String> {
             .iter()
             .map(|i| implementation_projection(&i.id, &i.implementation_hash))
             .collect::<Vec<_>>(),
+        "container_image": p.container_image.map(|img| json!({
+            "reference": img.reference,
+            "digest": img.digest,
+            "runtime": img.runtime,
+        })),
     });
     hash_preimage("FRF/EXECUTION/v1", &doc)
 }
@@ -1414,6 +1423,7 @@ mod tests {
             environment: None,
             environment_points: None,
             execution_context: None,
+            execution_image: None,
         }
     }
 
@@ -1726,6 +1736,7 @@ mod tests {
                 normalizer_implementations: &[],
                 adapter_implementations: &[],
                 minimizer_implementations: &[],
+                container_image: None,
             };
             (
                 observation_identity(&pre).unwrap(),
@@ -1870,6 +1881,7 @@ mod tests {
             harness_events: vec![],
             evidence_refs: vec![],
             execution_context: None,
+            container_image: None,
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

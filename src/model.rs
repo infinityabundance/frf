@@ -285,6 +285,20 @@ pub const EXECUTION_PROFILE_LINUX: &str = "frf-exec-linux-v1";
 /// approximated.
 pub const EXECUTION_PROFILE_LINUX_V2: &str = "frf-exec-linux-v2";
 
+/// The OCI execution profile (`frf-exec-oci`, `spec/execution-profile.md`):
+/// each side runs INSIDE a container spawned from a content-addressed OCI
+/// image (digest-pinned — the image is resolved by its manifest digest, and
+/// a missing or different image REFUSES the run). The image is the COMPLETE
+/// execution machinery: instead of declaring the runtime closure artifact by
+/// artifact (frf-execution-context-v1), the whole root filesystem — the
+/// interpreter, the shared libraries, the loader configuration, the
+/// certificates — is bound by the image digest in the execution identity. A
+/// container runtime (`podman` or `docker`) must be present; without one the
+/// profile REFUSES to run — a declared profile is enforced, never
+/// approximated. The reference profile remains `frf-exec-linux-v1`;
+/// `high-assurance` claim admission requires it.
+pub const EXECUTION_PROFILE_OCI: &str = "frf-exec-oci";
+
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
 
@@ -1923,6 +1937,13 @@ pub struct CourtSpec {
     /// bound to the exact bytes, never assumed.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub execution_context: Option<ExecutionContextDeclaration>,
+    /// The OCI image for the `frf-exec-oci` profile (0.1.62): the reference
+    /// the runtime must resolve to its digest (e.g.
+    /// `docker.io/library/alpine@sha256:…`). The image IS the complete
+    /// execution machinery — the whole root filesystem is bound by the
+    /// digest. Only valid with `execution_profile: frf-exec-oci`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub execution_image: Option<String>,
 }
 
 /// The produced-artifact clause. v0: one output directory per side,
@@ -2087,6 +2108,13 @@ pub struct CaptureManifest {
     /// observation time.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub execution_context: Option<ExecutionContextClosure>,
+    /// The OCI image the observation ran inside, present exactly when the
+    /// court declared `execution_profile: frf-exec-oci` (0.1.62): the
+    /// complete root filesystem the side ran under, bound by digest in the
+    /// execution identity — the containerized equivalent of the declared
+    /// execution-context closure.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub container_image: Option<OciImage>,
 }
 
 /// Who executed the court. `frf_executable_hash` is the SHA-256 of the frf
@@ -2330,6 +2358,25 @@ pub struct ExecutionContextArtifactDeclaration {
     /// The role: `child-executable`, `runtime-library`, or `data` (a
     /// declared artifact whose role is not in the protocol set is refused).
     pub role: String,
+}
+
+/// The OCI image an `frf-exec-oci` observation ran inside (0.1.62): the
+/// content-addressed container image, resolved by its manifest digest, and
+/// the runtime that spawned it. The image IS the execution machinery — the
+/// complete root filesystem the side ran under is bound by the digest in the
+/// execution identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OciImage {
+    /// The image reference as declared (e.g. `docker.io/library/alpine@sha256:…`)
+    /// — the digest component is what the runtime must resolve to.
+    pub reference: String,
+    /// The digest the image must resolve to (e.g. `sha256:…`); a runtime
+    /// that resolves the reference to a DIFFERENT digest refuses the run.
+    pub digest: String,
+    /// The container runtime that executed the side (`podman` or `docker`)
+    /// and its version, at observation time.
+    pub runtime: String,
 }
 
 /// The court's DECLARED execution-context closure: the runtime dependencies
