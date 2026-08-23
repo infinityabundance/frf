@@ -81,29 +81,11 @@ pub fn status(store: &Store) -> Result<()> {
         );
     }
     // The publication manifest (written by `publish-detached`) is part of a
-    // publication's contract: when present it must parse and its withheld
-    // count must match the verified captures' surfaces.
-    let manifest_path = store.root.join("publication-manifest.json");
-    if manifest_path.is_file() {
-        let manifest: crate::model::PublicationManifest =
-            serde_json::from_str(&std::fs::read_to_string(&manifest_path).map_err(|e| {
-                FrfError::new(format!(
-                    "cannot read the publication manifest {}: {e}",
-                    manifest_path.display()
-                ))
-            })?)
-            .map_err(|e| {
-                FrfError::new(format!(
-                    "the publication manifest {} is not a valid publication manifest: {e}",
-                    manifest_path.display()
-                ))
-            })?;
-        if manifest.schema_version != crate::model::SCHEMA_PUBLICATION_MANIFEST {
-            return Err(FrfError::new(format!(
-                "the publication manifest has an unsupported schema {:?}",
-                manifest.schema_version
-            )));
-        }
+    // publication's contract: when present it must VERIFY — strict canonical
+    // JSON, the closed schema, every disposition naming a run that exists —
+    // and its withheld count must match the verified captures' surfaces.
+    let manifest = crate::verify::load_publication_manifest_verified(store)?;
+    if let Some(manifest) = &manifest {
         let manifest_withheld = manifest.streams.iter().filter(|s| !s.published).count();
         if manifest_withheld != s.surface_withheld {
             return Err(FrfError::new(format!(

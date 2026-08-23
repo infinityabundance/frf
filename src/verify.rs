@@ -94,6 +94,116 @@ pub struct CaptureVerified {
     pub detached: Vec<crate::model::DetachedObjectRef>,
 }
 
+/// Load + verify ONE withheld-stream disposition record
+/// (`<side>.<stream>.pub.json`, written by `publish-detached` where the
+/// withheld bytes used to live): strict canonical JSON (duplicate property
+/// names and non-canonical bytes refused — the same discipline as every
+/// evidence document), the closed schema, and the POSITION-BOUND contract: a
+/// disposition record names its own position (side + stream), the capture
+/// surface's declared policy, and the EXACT bytes the capture recorded. A
+/// record cannot move, cannot claim a different policy, and cannot name
+/// different bytes — a withheld stream cannot silently disappear or change
+/// what it withholds.
+pub fn load_stream_publication_verified(
+    store: &Store,
+    dir: &Path,
+    side: &str,
+    stream: &str,
+    recorded_sha: &str,
+    expected_policy: &str,
+) -> Result<crate::model::StreamPublicationRecord> {
+    let disp_path = dir.join(format!("{side}.{stream}.pub.json"));
+    let record: crate::model::StreamPublicationRecord =
+        store.parse_evidence(&disp_path).map_err(|e| {
+            FrfError::new(format!(
+                "{} is not a canonical stream-publication record: {e}",
+                disp_path.display()
+            ))
+        })?;
+    if record.schema_version != crate::model::SCHEMA_STREAM_PUBLICATION {
+        return Err(FrfError::new(format!(
+            "{} has an unsupported schema {:?}",
+            disp_path.display(),
+            record.schema_version
+        )));
+    }
+    if record.side != side || record.stream != stream {
+        return Err(FrfError::new(format!(
+            "{} names {}:{} — a disposition record cannot move",
+            disp_path.display(),
+            record.side,
+            record.stream
+        )));
+    }
+    if record.policy != expected_policy {
+        return Err(FrfError::new(format!(
+            "{} policy {:?} does not match the declared surface policy {:?}",
+            disp_path.display(),
+            record.policy,
+            expected_policy
+        )));
+    }
+    if record.sha256 != recorded_sha {
+        return Err(FrfError::new(format!(
+            "{} names bytes {} that do not hash to the recorded {} — the withheld stream's identity is broken",
+            disp_path.display(),
+            &record.sha256[..16.min(record.sha256.len())],
+            &recorded_sha[..16.min(recorded_sha.len())]
+        )));
+    }
+    Ok(record)
+}
+
+/// Load + verify the publication manifest (`publication-manifest.json`, written
+/// by `publish-detached`): strict canonical JSON (duplicate property names and
+/// non-canonical bytes refused — the same discipline as every evidence
+/// document), the closed schema, and the cross-references: every stream
+/// disposition must name a run that EXISTS in this store, and the
+/// (run, side, stream) triple is unique — a manifest cannot invent an
+/// observation and cannot record a stream twice. Absent when the store is not
+/// a publication.
+pub fn load_publication_manifest_verified(
+    store: &Store,
+) -> Result<Option<crate::model::PublicationManifest>> {
+    let path = store.root.join("publication-manifest.json");
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let manifest: crate::model::PublicationManifest = store.parse_evidence(&path).map_err(|e| {
+        FrfError::new(format!(
+            "the publication manifest {} is not canonical evidence: {e}",
+            path.display()
+        ))
+    })?;
+    if manifest.schema_version != crate::model::SCHEMA_PUBLICATION_MANIFEST {
+        return Err(FrfError::new(format!(
+            "the publication manifest has an unsupported schema {:?}",
+            manifest.schema_version
+        )));
+    }
+    let mut seen: std::collections::BTreeSet<(String, String, String)> =
+        std::collections::BTreeSet::new();
+    for d in &manifest.streams {
+        let key = (d.run.clone(), d.side.clone(), d.stream.clone());
+        if !seen.insert(key.clone()) {
+            return Err(FrfError::new(format!(
+                "the publication manifest records the stream {}:{} of run {} TWICE — a stream has exactly one disposition",
+                d.side,
+                d.stream,
+                &d.run[..16.min(d.run.len())]
+            )));
+        }
+        let run_dir = store.run_dir(&d.run)?;
+        if !run_dir.is_dir() {
+            return Err(FrfError::new(format!(
+                "the publication manifest names run {} which does not exist in this store — a disposition cannot invent an observation",
+                &d.run[..16.min(d.run.len())]
+            )));
+        }
+    }
+    Ok(Some(manifest))
+}
+
 impl CaptureVerified {
     /// The run identity DIGEST (the hash component of the run id), recomputed
     /// from the capture's own recorded fields — the same function the court
@@ -312,44 +422,18 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
                         "capture {run}: cannot read {side}.{stream} and no capture-surface policy withholds it"
                     )));
                 }
-                let disp_path = dir.join(format!("{side}.{stream}.pub.json"));
-                let record: crate::model::StreamPublicationRecord =
-                    serde_json::from_str(&fs::read_to_string(&disp_path).map_err(|_| {
-                        FrfError::new(format!(
-                            "capture {run}: {side}.{stream} is absent and its disposition record {} is missing — a withheld stream cannot silently disappear",
-                            disp_path.display()
-                        ))
-                    })?)
-                    .map_err(|e| {
-                        FrfError::new(format!(
-                            "capture {run}: {side}.{stream}.pub.json is not a canonical stream-publication record: {e}"
-                        ))
-                    })?;
-                if record.schema_version != crate::model::SCHEMA_STREAM_PUBLICATION {
-                    return Err(FrfError::new(format!(
-                        "capture {run}: {side}.{stream}.pub.json has an unsupported schema {:?}",
-                        record.schema_version
-                    )));
-                }
-                if record.side != side || record.stream != stream {
-                    return Err(FrfError::new(format!(
-                        "capture {run}: {side}.{stream}.pub.json names {}:{} — a disposition record cannot move",
-                        record.side, record.stream
-                    )));
-                }
-                if record.policy != policy.as_deref().unwrap_or_default() {
-                    return Err(FrfError::new(format!(
-                        "capture {run}: {side}.{stream}.pub.json policy {:?} does not match the declared surface policy",
-                        record.policy
-                    )));
-                }
-                if record.sha256 != recorded_sha {
-                    return Err(FrfError::new(format!(
-                        "capture {run}: {side}.{stream}.pub.json names bytes {} that do not hash to the recorded {} — the withheld stream's identity is broken",
-                        &record.sha256[..16],
-                        &recorded_sha[..16]
-                    )));
-                }
+                let record = load_stream_publication_verified(
+                    store,
+                    dir,
+                    side,
+                    stream,
+                    recorded_sha,
+                    policy.as_deref().unwrap_or_default(),
+                )
+                .map_err(|e| FrfError::new(format!("capture {run}: {e}")))?;
+                // The verified record's checks (position, policy, bytes) all
+                // held; the withheld stream's identity is intact.
+                let _ = record;
                 Ok(None)
             }
         }
@@ -3978,6 +4062,9 @@ impl WholeStoreReport {
 /// - `harness/`          — identity-rederiving harness-event load;
 /// - `claims/`           — [`load_claim_verified`] (the full re-verification:
 ///   identity, premises, scope algebra, universe, policy evidence).
+/// - `publication-manifest.json` — the publication transform's explicit
+///   stream-disposition record: strict canonical evidence, the closed schema,
+///   and every disposition naming an EXISTING run ([`load_publication_manifest_verified`]).
 ///
 /// The `by-receipt` claim index and the derived `objects/` store are not
 /// protocol-object namespaces: the index is non-normative, and the objects
@@ -4407,6 +4494,21 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
             }
         }
         count(&mut counts, "claims", n);
+    }
+
+    // publication-manifest.json — the publication transform's explicit
+    // stream-disposition record (written by `publish-detached`): strict
+    // canonical evidence + the closed schema + every disposition naming an
+    // EXISTING run (the verified loader). A publication whose manifest is
+    // missing, malformed, or self-contradictory is refused — the transform's
+    // record cannot be silently altered. The per-stream `<side>.<stream>.<pub>`
+    // disposition records are verified inside every capture's verified loader.
+    if store.root.join("publication-manifest.json").is_file() {
+        match load_publication_manifest_verified(store) {
+            Ok(Some(_)) => count(&mut counts, "publication-manifest", 1),
+            Ok(None) => unreachable!("the manifest file exists"),
+            Err(e) => errors.push(format!("publication-manifest: {e}")),
+        }
     }
 
     counts.sort();
