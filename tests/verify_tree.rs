@@ -1469,23 +1469,36 @@ fn reductions_are_self_consistent() {
                     );
                 }
             }
-            "boundary" => {
+            "adjacent-boundary" => {
                 let m = &r.derivation.minimality;
                 assert!(
-                    m.domain.is_some() && m.ordering.is_some(),
-                    "reduction {id}: a boundary carries its domain and ordering"
+                    m.reduction_domain.is_some(),
+                    "reduction {id}: an adjacent-boundary carries its typed reduction domain"
                 );
                 assert!(
-                    m.passing_point.is_some() && m.adjacent_nonpassing_point.is_some(),
-                    "reduction {id}: a boundary carries both points"
+                    m.boundary.is_some(),
+                    "reduction {id}: an adjacent-boundary carries its two-point boundary"
                 );
+                if let Some(boundary) = &m.boundary {
+                    assert_ne!(
+                        boundary.predecessor, boundary.value,
+                        "reduction {id}: a boundary needs two distinct points"
+                    );
+                }
                 if m.proven {
                     assert!(
                         r.attempts.iter().any(|a| {
                             a.role == frf::model::ReductionAttemptRole::BoundaryControl
                                 && a.outcome == frf::model::ReductionAttemptOutcome::Lost
                         }),
-                        "reduction {id}: a proven boundary requires the core's own lost boundary control"
+                        "reduction {id}: a proven adjacent-boundary requires the core's own lost boundary control"
+                    );
+                    assert!(
+                        r.attempts.iter().any(|a| {
+                            a.role == frf::model::ReductionAttemptRole::FinalVerification
+                                && a.outcome == frf::model::ReductionAttemptOutcome::Preserved
+                        }),
+                        "reduction {id}: a proven adjacent-boundary requires the preserved final verification"
                     );
                 }
             }

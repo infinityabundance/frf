@@ -382,6 +382,12 @@ pub fn regen_corpus(dir: &Path) {
         if is_receipt {
             bump(&mut doc, true, true);
         }
+        // A REDUCTION record's `id` is its content address: it must rederive
+        // from the record's own (possibly changed) fields, so the regen
+        // recomputes it — the fixture is never pinned with a stale address.
+        if name.starts_with("reduction-") {
+            doc["id"] = json!(crate::rederive::reduction_identity_from_doc(&doc));
+        }
         let canonical = canonical(&doc);
         write(dir, &format!("valid/{name}"), &canonical);
         write(dir, &format!("canonical/{name}"), &canonical);

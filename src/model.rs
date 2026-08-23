@@ -746,7 +746,7 @@ pub const SCHEMA_NORMALIZER_RESULT: &str = "frf-normalizer-result-v1";
 /// the residual's lineage to survive; proposals that do not survive are
 /// recorded but never accepted.
 pub const SCHEMA_MINIMIZER_REQUEST: &str = "frf-minimizer-request-v1";
-pub const SCHEMA_MINIMIZER_RESPONSE: &str = "frf-minimizer-response-v1";
+pub const SCHEMA_MINIMIZER_RESPONSE: &str = "frf-minimizer-response-v2";
 pub const SCHEMA_MINIMIZER_INVOCATION: &str = "frf-minimizer-invocation-v1";
 pub const SCHEMA_MINIMIZER_RESULT: &str = "frf-minimizer-result-v1";
 
@@ -993,33 +993,75 @@ pub struct MinimizerResponse {
 }
 
 /// The domain-aware minimality DECLARATION a minimizer may attach to its
-/// proposal (frf-minimizer-response-v1): the proposal claims to sit at an
-/// observation boundary of a numeric parameter. Every coordinate is a STRING
-/// (the canonical JSON value domain is strings/arrays/booleans/null). The
-/// core verifies the adjacent fixture hashes to its declared sha256, is not
-/// the proposal itself, and then EXECUTES it: the boundary is proven only
-/// when the adjacent point loses the lineage and the proposal preserves it.
+/// proposal (frf-minimizer-response-v2): the proposal claims to sit at an
+/// observation boundary of a numeric parameter. The domain is TYPED
+/// ([`ReductionDomain`]), and the two boundary points carry their claimed
+/// preservation (a boundary is exactly: the predecessor does NOT preserve
+/// the lineage, the value DOES). Every coordinate is a STRING (the
+/// canonical JSON value domain is strings/arrays/booleans/null). The core
+/// verifies the adjacent fixture hashes to its declared sha256, is not the
+/// proposal itself, and then EXECUTES it: the boundary is proven only when
+/// the adjacent point loses the lineage and the proposal preserves it — the
+/// declaration is a claim, never proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinimizerMinimality {
-    /// `boundary` in this version.
+    /// `adjacent-boundary` in this version.
     pub kind: String,
-    /// The domain the boundary is over (e.g.
-    /// `heartbeat.claimed_payload_length`).
-    pub domain: String,
-    /// The declared ordering of the boundary domain (e.g.
-    /// `integer-ascending`).
-    pub ordering: String,
-    /// The passing point (decimal string) — the parameter value at which
-    /// the proposal preserves the lineage.
-    pub passing_point: String,
-    /// The adjacent non-passing point (decimal string) — one step below the
-    /// passing point in the declared ordering.
-    pub adjacent_nonpassing_point: String,
+    /// The typed reduction domain the boundary is over (e.g.
+    /// `ordered-integer` over `tls.heartbeat.claimed_payload_length`).
+    pub reduction_domain: ReductionDomain,
+    /// The two boundary points with their CLAIMED preservation: a boundary
+    /// declaration claims `predecessor_preserves=false` (the point below the
+    /// value does not preserve the lineage) and `value_preserves=true` (the
+    /// proposal does).
+    pub boundary: MinimalityBoundary,
     /// The ADJACENT NON-PASSING FIXTURE (base64 + SHA-256): the exact bytes
     /// the core executes to observe the boundary's other side.
     pub adjacent_fixture_sha256: String,
     pub adjacent_fixture_base64: String,
+}
+
+/// The typed reduction domain of a domain-aware minimality predicate: the
+/// parameter KIND and its SEMANTIC identifier. `ordered-integer` is the one
+/// domain kind in this version (a numeric parameter with an integer
+/// ordering); the vocabulary is closed per version and documented in
+/// spec/reduction.md.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReductionDomain {
+    /// `ordered-integer` in this version.
+    pub kind: String,
+    /// The semantic identifier of the parameter being minimized (e.g.
+    /// `tls.heartbeat.claimed_payload_length`).
+    pub semantic: String,
+}
+
+impl ReductionDomain {
+    /// The closed domain-kind vocabulary (spec/reduction.md): the
+    /// observation boundary over an integer-ordered numeric parameter.
+    pub const KINDS: &'static [&'static str] = &["ordered-integer"];
+}
+
+/// The two observed points of an adjacent-boundary predicate: the `value`
+/// (the passing point) and its `predecessor` in the declared ordering (one
+/// step below). Each carries its OBSERVED preservation — whether the
+/// lineage survived at that point — so a refuted boundary records the
+/// refuting observation IN BAND (`predecessor_preserves=true`), never only
+/// as `proven=false`. Every coordinate is a STRING (the canonical JSON
+/// value domain has no numbers).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MinimalityBoundary {
+    /// The predecessor point, a decimal string (e.g. `4072`).
+    pub predecessor: String,
+    /// Whether the lineage SURVIVED at the predecessor point (the core's
+    /// own observation, or the minimizer's claim in a declaration).
+    pub predecessor_preserves: bool,
+    /// The value point, a decimal string (e.g. `4073`).
+    pub value: String,
+    /// Whether the lineage SURVIVED at the value point.
+    pub value_preserves: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4100,7 +4142,7 @@ impl DetachedObjects {
 /// transform declaration: what the reduction permitted to move (the fixture)
 /// and what it required to stay (candidate, authority, comparator,
 /// environment — each bound by identity, not label).
-pub const SCHEMA_REDUCTION: &str = "frf-reduction-v4";
+pub const SCHEMA_REDUCTION: &str = "frf-reduction-v5";
 
 /// The general evidence-transform description — one frame for all six
 /// evidence operations (observation, resolution, replay, trajectory,
@@ -4320,37 +4362,33 @@ pub struct ReductionAttempt {
 /// - `one-minimal` — classic ddmin establishes that no single line can be
 ///   removed while preserving the lineage (not global cardinality
 ///   minimality), at the declared removal `granularity`.
-/// - `boundary` — the proposal sits at an OBSERVATION BOUNDARY of a numeric
-///   parameter: at `passing_point` the lineage survives, at the adjacent
-///   `adjacent_nonpassing_point` it does not. The boundary coordinates are
-///   the minimizer's domain interpretation; the core ESTABLISHES the pair
-///   by executing BOTH points itself (the boundary-control attempt must be
-///   lost and the final verification preserved) before `proven` can be true.
+/// - `adjacent-boundary` — the proposal sits at an OBSERVATION BOUNDARY of a
+///   typed numeric parameter: at `boundary.value` the lineage survives, at
+///   its `boundary.predecessor` (one step below in the domain ordering) it
+///   does not. The `reduction_domain` types the parameter (kind +
+///   semantic identifier); the two points carry their OBSERVED preservation
+///   (a refuted boundary records the refuting observation in band —
+///   `predecessor_preserves=true` — never only as `proven=false`). The core
+///   ESTABLISHES the pair by executing BOTH points itself (the
+///   boundary-control attempt lost, the final verification preserved) before
+///   `proven` can be true; an external minimizer's declaration is a claim,
+///   recorded in `proposal_minimality_claimed`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionMinimality {
-    /// The minimality predicate KIND: `one-minimal` or `boundary`.
+    /// The minimality predicate KIND: `one-minimal` or `adjacent-boundary`.
     pub kind: String,
     /// The granularity of removal (`line`) — present for `one-minimal` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granularity: Option<String>,
-    /// The domain the boundary is over (e.g.
-    /// `heartbeat.claimed_payload_length`) — `boundary` only.
+    /// The TYPED reduction domain (kind + semantic identifier) — present for
+    /// `adjacent-boundary` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
-    /// The declared ordering of the boundary domain (e.g.
-    /// `integer-ascending`) — `boundary` only.
+    pub reduction_domain: Option<ReductionDomain>,
+    /// The two observed boundary points (predecessor + value, each with its
+    /// observed preservation) — present for `adjacent-boundary` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ordering: Option<String>,
-    /// The passing point, a decimal STRING (the canonical JSON value domain
-    /// has no numbers) — the parameter value at which the lineage survives.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub passing_point: Option<String>,
-    /// The adjacent non-passing point (decimal string) — the parameter value
-    /// at which the lineage does NOT survive, executed and observed by the
-    /// core itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adjacent_nonpassing_point: Option<String>,
+    pub boundary: Option<MinimalityBoundary>,
     /// Whether the CORE actually established the predicate: a completed
     /// one-minimal search at the declared granularity, or a core-executed
     /// boundary (both points observed), or a separately verifiable proof the
@@ -4370,8 +4408,8 @@ pub struct ReductionMinimality {
 impl ReductionMinimality {
     /// The closed minimality-predicate vocabulary (documented in
     /// spec/reduction.md): classic ddmin's one-minimal at a removal
-    /// granularity, and the domain-aware observation boundary.
-    pub const KINDS: &'static [&'static str] = &["one-minimal", "boundary"];
+    /// granularity, and the domain-aware adjacent observation boundary.
+    pub const KINDS: &'static [&'static str] = &["one-minimal", "adjacent-boundary"];
 }
 
 /// The derivation of a minimization experiment.
@@ -4465,13 +4503,17 @@ impl ReductionRecord {
     /// never a relayed claim.
     ///
     /// - `one-minimal`: the removal `granularity` is present and the
-    ///   boundary coordinates are absent; `proven` can only be the built-in
-    ///   reducer's COMPLETED search, so a proven one-minimal record carries
-    ///   no relayed external claim.
-    /// - `boundary`: the boundary coordinates are present and no removal
-    ///   `granularity` is recorded; `proven` requires the record's own
-    ///   attempts to carry the core's observations — a LOST
-    ///   `boundary_control` attempt AND an accepted `final_verification`.
+    ///   domain-aware coordinates are absent; `proven` can only be the
+    ///   built-in reducer's COMPLETED search, so a proven one-minimal record
+    ///   carries no relayed external claim.
+    /// - `adjacent-boundary`: the typed `reduction_domain` and the two-point
+    ///   `boundary` are present and no removal `granularity` is recorded;
+    ///   the boundary's OBSERVED preservation flags must match the record's
+    ///   own attempts (the boundary_control attempt's outcome is
+    ///   `predecessor_preserves`, the final_verification's is
+    ///   `value_preserves` — a refuted boundary records its refutation in
+    ///   band); `proven` requires the control to be LOST and the final
+    ///   verification ACCEPTED.
     pub fn validate_semantics(&self) -> std::result::Result<(), String> {
         if self.schema_version != SCHEMA_REDUCTION {
             return Err(format!(
@@ -4487,23 +4529,13 @@ impl ReductionRecord {
                 ReductionMinimality::KINDS.join(" | ")
             ));
         }
-        let boundary_coords = [
-            ("domain", &m.domain),
-            ("ordering", &m.ordering),
-            ("passing_point", &m.passing_point),
-            ("adjacent_nonpassing_point", &m.adjacent_nonpassing_point),
-        ];
         match m.kind.as_str() {
             "one-minimal" => {
                 if m.granularity.is_none() {
                     return Err("one-minimal minimality requires a granularity".into());
                 }
-                for (name, value) in boundary_coords {
-                    if value.is_some() {
-                        return Err(format!(
-                            "one-minimal minimality carries a boundary coordinate {name:?}"
-                        ));
-                    }
+                if m.reduction_domain.is_some() || m.boundary.is_some() {
+                    return Err("one-minimal minimality carries a domain-aware coordinate".into());
                 }
                 if m.proven && m.proposal_minimality_claimed == Some(true) {
                     return Err(
@@ -4512,39 +4544,103 @@ impl ReductionRecord {
                     );
                 }
             }
-            "boundary" => {
+            "adjacent-boundary" => {
                 if m.granularity.is_some() {
-                    return Err("boundary minimality has no removal granularity".into());
+                    return Err("adjacent-boundary minimality has no removal granularity".into());
                 }
-                for (name, value) in boundary_coords {
-                    if value.is_none() {
-                        return Err(format!("boundary minimality requires {name}"));
+                let (Some(domain), Some(boundary)) = (&m.reduction_domain, &m.boundary) else {
+                    return Err(
+                        "adjacent-boundary minimality requires reduction_domain and boundary"
+                            .into(),
+                    );
+                };
+                if !ReductionDomain::KINDS.contains(&domain.kind.as_str()) {
+                    return Err(format!(
+                        "unknown reduction domain kind {:?} — the protocol admits {}",
+                        domain.kind,
+                        ReductionDomain::KINDS.join(" | ")
+                    ));
+                }
+                if domain.semantic.is_empty() {
+                    return Err("reduction_domain.semantic must not be empty".into());
+                }
+                // The two points must be distinct in the declared ordering:
+                // a boundary needs two sides, never a single point.
+                if boundary.predecessor == boundary.value {
+                    return Err(
+                        "adjacent-boundary requires two distinct points (predecessor != value)"
+                            .into(),
+                    );
+                }
+                // The recorded preservation flags are OBSERVATIONS: they
+                // must match the record's own attempts. The
+                // boundary_control attempt executed the predecessor; the
+                // final_verification executed the value.
+                let control = self
+                    .attempts
+                    .iter()
+                    .find(|a| a.role == ReductionAttemptRole::BoundaryControl);
+                let final_attempt = self
+                    .attempts
+                    .iter()
+                    .find(|a| a.role == ReductionAttemptRole::FinalVerification);
+                match (control, final_attempt) {
+                    (Some(control), Some(final_attempt)) => {
+                        let control_preserved =
+                            control.outcome == ReductionAttemptOutcome::Preserved;
+                        let final_preserved =
+                            final_attempt.outcome == ReductionAttemptOutcome::Preserved;
+                        if control_preserved != boundary.predecessor_preserves {
+                            return Err(format!(
+                                "adjacent-boundary records predecessor_preserves={} but the boundary_control attempt observed {}",
+                                boundary.predecessor_preserves,
+                                control.outcome.as_str()
+                            ));
+                        }
+                        if final_preserved != boundary.value_preserves {
+                            return Err(format!(
+                                "adjacent-boundary records value_preserves={} but the final_verification attempt observed {}",
+                                boundary.value_preserves,
+                                final_attempt.outcome.as_str()
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(
+                            "adjacent-boundary requires the core's boundary_control + final_verification attempts"
+                                .into(),
+                        );
                     }
                 }
                 if m.proven {
-                    let control = self
-                        .attempts
-                        .iter()
-                        .find(|a| a.role == ReductionAttemptRole::BoundaryControl);
-                    let Some(control) = control else {
+                    if boundary.predecessor_preserves {
                         return Err(
-                            "boundary proven=true requires a boundary_control attempt the core executed"
+                            "adjacent-boundary proven=true requires the predecessor to be LOST (a preserved control is a refutation)"
                                 .into(),
                         );
-                    };
+                    }
+                    if !boundary.value_preserves {
+                        return Err(
+                            "adjacent-boundary proven=true requires the value to be PRESERVED"
+                                .into(),
+                        );
+                    }
+                    let control = control.expect("checked above");
                     if control.outcome != ReductionAttemptOutcome::Lost {
                         return Err(
-                            "boundary proven=true requires the boundary_control attempt to be LOST (a preserved control is a refutation)"
+                            "adjacent-boundary proven=true requires the boundary_control attempt to be LOST (a preserved control is a refutation)"
                                 .into(),
                         );
                     }
                     let last = self
                         .attempts
+                        .iter()
+                        .filter(|a| a.role == ReductionAttemptRole::FinalVerification)
                         .last()
                         .ok_or("a proven boundary requires attempts")?;
-                    if last.role != ReductionAttemptRole::FinalVerification || !last.accepted {
+                    if !last.accepted {
                         return Err(
-                            "boundary proven=true requires an accepted final_verification of the passing point"
+                            "adjacent-boundary proven=true requires an accepted final_verification of the value point"
                                 .into(),
                         );
                     }

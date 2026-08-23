@@ -9,7 +9,7 @@ is the versioning policy (the 0.2 protocol freeze).
 ## 1. Schema versions
 
 Every protocol object carries `schema_version` (e.g. `frf-receipt-v20`,
-`frf-reduction-v4`, `frf-stream-publication-v1`). The registry
+`frf-reduction-v5`, `frf-stream-publication-v1`). The registry
 (`protocol/registry.json`) lists every schema with a status:
 
 - `active` — the CURRENT shape the reference engine writes and every

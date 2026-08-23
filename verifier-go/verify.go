@@ -1083,7 +1083,7 @@ func verifyCorpus(dir string) int {
 			continue
 		}
 		if strings.HasPrefix(name, "reduction-") {
-			// The reduction-record family (frf-reduction-v4): structurally
+			// The reduction-record family (frf-reduction-v5): structurally
 			// valid, semantically refused — the minimality predicate must be
 			// exactly what the record's own attempts establish.
 			if len(reductionSemanticViolations(v)) == 0 {

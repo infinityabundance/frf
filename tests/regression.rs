@@ -2016,7 +2016,7 @@ fn minimize_reduces_the_fixture_with_a_court_verified_reproducer() {
         &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v4");
+    assert_eq!(rec["schema_version"], "frf-reduction-v5");
     assert_eq!(rec["residual_id"], exit_id);
     assert_eq!(rec["axis"], "exit");
     assert_eq!(rec["derivation"]["strategy"], "ddmin-lines");

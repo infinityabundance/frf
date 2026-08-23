@@ -1952,7 +1952,7 @@ fn verify_corpus(dir: &Path) {
             continue;
         }
         if name.starts_with("reduction-") {
-            // The reduction-record family (frf-reduction-v4): structurally
+            // The reduction-record family (frf-reduction-v5): structurally
             // valid, semantically refused — the minimality predicate must be
             // exactly what the record's own attempts establish.
             if reduction_semantic_violations(&doc).is_empty() {

@@ -1612,38 +1612,68 @@ pub fn detached_semantic_violations(doc: &Value) -> Vec<String> {
     v
 }
 
-/// Reduction-record semantic conformance (frf-reduction-v4): the minimality
+/// Reduction-record semantic conformance (frf-reduction-v5): the minimality
 /// predicate must be exactly what the record's own attempts establish, and
 /// `proven` is never a relayed claim — a proven one-minimal carries no
-/// external claim, a proven boundary carries the core's own LOST
-/// boundary-control attempt.
+/// external claim, a proven adjacent-boundary carries the core's own LOST
+/// boundary-control attempt AND the accepted final verification, and the
+/// boundary's OBSERVED preservation flags must match those attempts (a
+/// refuted boundary records its refutation in band).
 pub fn reduction_semantic_violations(doc: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&doc["schema_version"]) != "frf-reduction-v4" {
+    if as_str(&doc["schema_version"]) != "frf-reduction-v5" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-reduction-v4",
+            "schema_version is {:?}, expected frf-reduction-v5",
             doc["schema_version"]
         ));
     }
     let minimality = &doc["derivation"]["minimality"];
     let kind = as_str(&minimality["kind"]);
-    let coordinates = [
-        "domain",
-        "ordering",
-        "passing_point",
-        "adjacent_nonpassing_point",
-    ];
+    let domain_aware = |v: &mut Vec<String>| {
+        if minimality.get("reduction_domain").is_none() {
+            v.push("adjacent-boundary minimality requires reduction_domain".to_string());
+        } else {
+            let domain = &minimality["reduction_domain"];
+            let dkind = as_str(&domain["kind"]);
+            if dkind != "ordered-integer" {
+                v.push(format!(
+                    "unknown reduction domain kind {dkind:?} — the protocol admits ordered-integer"
+                ));
+            }
+            if as_str(&domain["semantic"]).is_empty() {
+                v.push("reduction_domain.semantic must not be empty".to_string());
+            }
+        }
+        if minimality.get("boundary").is_none() {
+            v.push("adjacent-boundary minimality requires boundary".to_string());
+        } else {
+            let boundary = &minimality["boundary"];
+            let predecessor = as_str(&boundary["predecessor"]);
+            let value = as_str(&boundary["value"]);
+            if predecessor == value {
+                v.push(
+                    "adjacent-boundary requires two distinct points (predecessor != value)"
+                        .to_string(),
+                );
+            }
+            if boundary["predecessor_preserves"].as_bool().unwrap_or(false)
+                || !boundary["value_preserves"].as_bool().unwrap_or(false)
+            {
+                v.push(
+                    "adjacent-boundary must claim predecessor_preserves=false and value_preserves=true"
+                        .to_string(),
+                );
+            }
+        }
+    };
     match kind {
         "one-minimal" => {
             if minimality.get("granularity").is_none() {
                 v.push("one-minimal minimality requires a granularity".to_string());
             }
-            for key in coordinates {
-                if minimality.get(key).is_some() {
-                    v.push(format!(
-                        "one-minimal minimality carries a boundary coordinate {key:?}"
-                    ));
-                }
+            if minimality.get("reduction_domain").is_some() || minimality.get("boundary").is_some()
+            {
+                v.push("one-minimal minimality carries a domain-aware coordinate".to_string());
             }
             let proven = minimality["proven"].as_bool().unwrap_or(false);
             let claimed = minimality["proposal_minimality_claimed"]
@@ -1656,24 +1686,50 @@ pub fn reduction_semantic_violations(doc: &Value) -> Vec<String> {
                 );
             }
         }
-        "boundary" => {
+        "adjacent-boundary" => {
             if minimality.get("granularity").is_some() {
-                v.push("boundary minimality has no removal granularity".to_string());
+                v.push("adjacent-boundary minimality has no removal granularity".to_string());
             }
-            for key in coordinates {
-                if minimality.get(key).is_none() {
-                    v.push(format!("boundary minimality requires {key}"));
+            domain_aware(&mut v);
+            let boundary = &minimality["boundary"];
+            let attempts = doc["attempts"].as_array().cloned().unwrap_or_default();
+            let control = attempts
+                .iter()
+                .find(|a| as_str(&a["role"]) == "boundary_control");
+            let final_attempt = attempts
+                .iter()
+                .find(|a| as_str(&a["role"]) == "final_verification");
+            match (control, final_attempt) {
+                (Some(control), Some(final_attempt)) => {
+                    let control_preserved = as_str(&control["outcome"]) == "preserved";
+                    let final_preserved = as_str(&final_attempt["outcome"]) == "preserved";
+                    if control_preserved
+                        != boundary["predecessor_preserves"].as_bool().unwrap_or(false)
+                    {
+                        v.push(
+                            "adjacent-boundary predecessor_preserves does not match the boundary_control attempt's outcome"
+                                .to_string(),
+                        );
+                    }
+                    if final_preserved != boundary["value_preserves"].as_bool().unwrap_or(false) {
+                        v.push(
+                            "adjacent-boundary value_preserves does not match the final_verification attempt's outcome"
+                                .to_string(),
+                        );
+                    }
+                    if minimality["proven"].as_bool().unwrap_or(false)
+                        && (as_str(&control["outcome"]) != "lost"
+                            || as_str(&final_attempt["outcome"]) != "preserved")
+                    {
+                        v.push(
+                            "adjacent-boundary proven=true requires the core's lost boundary_control AND preserved final_verification"
+                                .to_string(),
+                        );
+                    }
                 }
-            }
-            if minimality["proven"].as_bool().unwrap_or(false) {
-                let lost_control = doc["attempts"].as_array().map(|attempts| {
-                    attempts.iter().any(|a| {
-                        as_str(&a["role"]) == "boundary_control" && as_str(&a["outcome"]) == "lost"
-                    })
-                });
-                if lost_control != Some(true) {
+                _ => {
                     v.push(
-                        "boundary proven=true requires the core's lost boundary_control attempt"
+                        "adjacent-boundary requires the core's boundary_control + final_verification attempts"
                             .to_string(),
                     );
                 }

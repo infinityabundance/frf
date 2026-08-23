@@ -957,19 +957,20 @@ func detachedSemanticViolations(doc jcs.Value) []string {
 }
 
 // reductionSemanticViolations: reduction-record semantic conformance
-// (frf-reduction-v4). The minimality predicate must be exactly what the
+// (frf-reduction-v5). The minimality predicate must be exactly what the
 // record's own attempts establish, and `proven` is never a relayed claim —
-// a proven one-minimal carries no external claim, a proven boundary carries
-// the core's own LOST boundary-control attempt.
+// a proven one-minimal carries no external claim, a proven adjacent-boundary
+// carries the core's own LOST boundary-control attempt AND the preserved
+// final verification, and the boundary's OBSERVED preservation flags must
+// match those attempts (a refuted boundary records its refutation in band).
 func reductionSemanticViolations(doc jcs.Value) []string {
 	var out []string
 	o := obj(doc)
-	if str(o, "schema_version") != "frf-reduction-v4" {
-		out = append(out, "schema_version must be frf-reduction-v4")
+	if str(o, "schema_version") != "frf-reduction-v5" {
+		out = append(out, "schema_version must be frf-reduction-v5")
 	}
 	m := obj(recVal(obj(recVal(o, "derivation")), "minimality"))
 	kind := str(m, "kind")
-	coordinates := []string{"domain", "ordering", "passing_point", "adjacent_nonpassing_point"}
 	pushIf := func(cond bool, msg string) {
 		if cond {
 			out = append(out, msg)
@@ -979,31 +980,59 @@ func reductionSemanticViolations(doc jcs.Value) []string {
 		_, ok := m.Get(key)
 		return ok
 	}
+	domainAware := func() {
+		if !has("reduction_domain") {
+			pushIf(true, "adjacent-boundary minimality requires reduction_domain")
+		} else {
+			d, _ := m.Get("reduction_domain")
+			do := obj(d)
+			pushIf(str(do, "kind") != "ordered-integer", "unknown reduction domain kind (the protocol admits ordered-integer)")
+			pushIf(str(do, "semantic") == "", "reduction_domain.semantic must not be empty")
+		}
+		if !has("boundary") {
+			pushIf(true, "adjacent-boundary minimality requires boundary")
+		} else {
+			bv, _ := m.Get("boundary")
+			bo := obj(bv)
+			pushIf(str(bo, "predecessor") == str(bo, "value"), "adjacent-boundary requires two distinct points (predecessor != value)")
+			pp, _ := bo.Get("predecessor_preserves")
+			vp, _ := bo.Get("value_preserves")
+			pushIf(pp == true || vp != true, "adjacent-boundary must claim predecessor_preserves=false and value_preserves=true")
+		}
+	}
+	attempt := func(role string) *jcs.Object {
+		av, _ := o.Get("attempts")
+		for _, a := range arr(av) {
+			ao := obj(a)
+			if str(ao, "role") == role {
+				return ao
+			}
+		}
+		return nil
+	}
 	switch kind {
 	case "one-minimal":
 		pushIf(!has("granularity"), "one-minimal minimality requires a granularity")
-		for _, key := range coordinates {
-			pushIf(has(key), fmt.Sprintf("one-minimal minimality carries a boundary coordinate %q", key))
-		}
+		pushIf(has("reduction_domain") || has("boundary"), "one-minimal minimality carries a domain-aware coordinate")
 		pv, _ := m.Get("proven")
 		cv, _ := m.Get("proposal_minimality_claimed")
 		pushIf(pv == true && cv == true, "one-minimal proven=true must never be a relayed external-minimizer claim")
-	case "boundary":
-		pushIf(has("granularity"), "boundary minimality has no removal granularity")
-		for _, key := range coordinates {
-			pushIf(!has(key), fmt.Sprintf("boundary minimality requires %s", key))
-		}
-		pv, _ := m.Get("proven")
-		if pv == true {
-			lost := false
-			av, _ := o.Get("attempts")
-			for _, a := range arr(av) {
-				ao := obj(a)
-				if str(ao, "role") == "boundary_control" && str(ao, "outcome") == "lost" {
-					lost = true
-				}
-			}
-			pushIf(!lost, "boundary proven=true requires the core's lost boundary_control attempt")
+	case "adjacent-boundary":
+		pushIf(has("granularity"), "adjacent-boundary minimality has no removal granularity")
+		domainAware()
+		bv, _ := m.Get("boundary")
+		bo := obj(bv)
+		control := attempt("boundary_control")
+		finalAttempt := attempt("final_verification")
+		if control != nil && finalAttempt != nil {
+			pp, _ := bo.Get("predecessor_preserves")
+			vp, _ := bo.Get("value_preserves")
+			pushIf((str(control, "outcome") == "preserved") != (pp == true), "adjacent-boundary predecessor_preserves does not match the boundary_control attempt's outcome")
+			pushIf((str(finalAttempt, "outcome") == "preserved") != (vp == true), "adjacent-boundary value_preserves does not match the final_verification attempt's outcome")
+			pv, _ := m.Get("proven")
+			pushIf(pv == true && (str(control, "outcome") != "lost" || str(finalAttempt, "outcome") != "preserved"), "adjacent-boundary proven=true requires the core's lost boundary_control AND preserved final_verification")
+		} else {
+			pushIf(true, "adjacent-boundary requires the core's boundary_control + final_verification attempts")
 		}
 	default:
 		out = append(out, fmt.Sprintf("unknown minimality kind %q", kind))

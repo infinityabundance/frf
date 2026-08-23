@@ -63,14 +63,14 @@ fn capture_surface_policies_match_the_spec_vocabulary() {
 fn reduction_minimality_kinds_match_the_spec() {
     assert_eq!(
         frf::model::ReductionMinimality::KINDS.to_vec(),
-        vec!["one-minimal", "boundary"],
+        vec!["one-minimal", "adjacent-boundary"],
         "spec/reduction.md documents exactly these two predicate kinds"
     );
     // The semantic validator's unknown-kind refusal names the same set (a
     // kind the validator accepts must be in the const, and vice versa).
     let zeros = "0".repeat(64);
     let record: frf::model::ReductionRecord = serde_json::from_str(&format!(
-        r#"{{"schema_version":"frf-reduction-v4","id":"{z}","residual_id":"r","source_run":"s","axis":"exit","kind":"exit","court_semantic_identity":"{z}","authority_artifact_sha256":"{z}","candidate_artifact_sha256":"{z}","environment_digest":"{z}","comparator_semantic_id":"exit","comparator_semantic_hash":"{z}","comparator_implementation_hash":"{z}","argv_template":[],"original_fixture_sha256":"{z}","final_fixture_sha256":"{z}","attempts":[],"derivation":{{"strategy":"x","original_lines":"1","final_lines":"1","minimality":{{"kind":"bogus-kind","proven":false}}}},"transform":{{"kind":"reduction","source":"r","observation_relation":"eq(x)","success_predicate":"lineage-survives","invariant_dimensions":["candidate"],"varying_dimensions":["fixture"]}}}}"#,
+        r#"{{"schema_version":"frf-reduction-v5","id":"{z}","residual_id":"r","source_run":"s","axis":"exit","kind":"exit","court_semantic_identity":"{z}","authority_artifact_sha256":"{z}","candidate_artifact_sha256":"{z}","environment_digest":"{z}","comparator_semantic_id":"exit","comparator_semantic_hash":"{z}","comparator_implementation_hash":"{z}","argv_template":[],"original_fixture_sha256":"{z}","final_fixture_sha256":"{z}","attempts":[],"derivation":{{"strategy":"x","original_lines":"1","final_lines":"1","minimality":{{"kind":"bogus-kind","proven":false}}}},"transform":{{"kind":"reduction","source":"r","observation_relation":"eq(x)","success_predicate":"lineage-survives","invariant_dimensions":["candidate"],"varying_dimensions":["fixture"]}}}}"#,
         z = zeros
     ))
     .expect("the fixture must deserialize");
@@ -78,7 +78,7 @@ fn reduction_minimality_kinds_match_the_spec() {
         .validate_semantics()
         .expect_err("an unknown minimality kind must be refused");
     assert!(
-        err.contains("unknown minimality kind") && err.contains("one-minimal | boundary"),
+        err.contains("unknown minimality kind") && err.contains("one-minimal | adjacent-boundary"),
         "the refusal names the documented vocabulary: {err}"
     );
 }
@@ -326,7 +326,7 @@ fn the_registry_supersession_rules_are_coherent() {
     for required in [
         "frf-receipt-v20",
         "frf-disposition-v3",
-        "frf-reduction-v4",
+        "frf-reduction-v5",
         "frf-detached-objects-v1",
         "frf-stream-publication-v1",
         "frf-publication-manifest-v1",

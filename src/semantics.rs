@@ -870,25 +870,26 @@ pub fn reduction_identity(
         "kind": derivation.minimality.kind,
         "proven": derivation.minimality.proven,
     });
-    // The domain-aware predicate fields enter the identity ONLY when the
-    // record carries them, exactly as they serialize: a `one-minimal` record
-    // (kind + granularity + proven) and a `boundary` record (kind + the
-    // boundary coordinates + proven) are different preimages, and records
-    // written before the domain-aware generalization rederive identically.
+    // The predicate fields enter the identity ONLY when the record carries
+    // them, exactly as they serialize: a `one-minimal` record (kind +
+    // granularity + proven) and an `adjacent-boundary` record (kind + the
+    // typed reduction_domain + the two-point boundary + proven) are different
+    // preimages, and a record missing a coordinate would refuse to load
+    // (deny_unknown_fields) rather than alias.
     if let Some(granularity) = &derivation.minimality.granularity {
         minimality["granularity"] = json!(granularity);
     }
-    if let Some(domain) = &derivation.minimality.domain {
-        minimality["domain"] = json!(domain);
+    if let Some(domain) = &derivation.minimality.reduction_domain {
+        minimality["reduction_domain"] =
+            json!({ "kind": domain.kind, "semantic": domain.semantic });
     }
-    if let Some(ordering) = &derivation.minimality.ordering {
-        minimality["ordering"] = json!(ordering);
-    }
-    if let Some(point) = &derivation.minimality.passing_point {
-        minimality["passing_point"] = json!(point);
-    }
-    if let Some(point) = &derivation.minimality.adjacent_nonpassing_point {
-        minimality["adjacent_nonpassing_point"] = json!(point);
+    if let Some(boundary) = &derivation.minimality.boundary {
+        minimality["boundary"] = json!({
+            "predecessor": boundary.predecessor,
+            "predecessor_preserves": boundary.predecessor_preserves,
+            "value": boundary.value,
+            "value_preserves": boundary.value_preserves,
+        });
     }
     // The minimizer's claim enters the identity ONLY when the record carries
     // one: an absent claim (built-in reducer) and an explicit claim (external

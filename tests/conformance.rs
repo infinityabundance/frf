@@ -37,7 +37,7 @@ fn is_detached_fixture(name: &str) -> bool {
 }
 
 /// The reduction-record fixtures are a third document family: they
-/// deserialize as [`ReductionRecord`] (frf-reduction-v4) and must pass the
+/// deserialize as [`ReductionRecord`] (frf-reduction-v5) and must pass the
 /// reduction semantic validator. Named `reduction-*.json`.
 fn is_reduction_fixture(name: &str) -> bool {
     name.starts_with("reduction-")

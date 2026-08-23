@@ -434,7 +434,7 @@ fn an_external_minimizer_is_court_verified() {
         &fs::read_to_string(work.path(&format!("frf/reductions/{reduction_id}.json"))).unwrap(),
     )
     .unwrap();
-    assert_eq!(rec["schema_version"], "frf-reduction-v4");
+    assert_eq!(rec["schema_version"], "frf-reduction-v5");
     assert_eq!(rec["minimizer_semantic_id"], "cli-exit-minimize");
     assert!(rec["minimizer_semantic_hash"].as_str().unwrap().len() == 64);
     assert!(rec["minimizer_implementation_hash"].as_str().unwrap().len() == 64);
@@ -532,7 +532,7 @@ req = json.loads(raw.decode(\"utf-8\"))\n\
 request_id = hashlib.sha256(raw).hexdigest()\n\
 empty = b\"\"\n\
 response = {\n\
-    \"schema_version\": \"frf-minimizer-response-v1\",\n\
+    \"schema_version\": \"frf-minimizer-response-v2\",\n\
     \"request_id\": request_id,\n\
     \"fixture_sha256\": hashlib.sha256(empty).hexdigest(),\n\
     \"fixture_base64\": base64.b64encode(empty).decode(\"ascii\"),\n\

@@ -682,6 +682,41 @@ pub fn series_identity(
 /// comparator semantic + implementation) plus the attempts, the derivation,
 /// the transform declaration, and the external-minimizer binding when an
 /// external minimizer performed the reduction.
+/// The content address of a REDUCTION record computed from its document
+/// (the `reduction_identity` wrapper the regen uses to re-pin fixtures after
+/// a schema change): every field the identity commits is read from the
+/// document's own recorded values, and the minimizer binding is the store's
+/// `minimizer_binding` mirror ([`minimizer_doc`]).
+pub fn reduction_identity_from_doc(doc: &Value) -> String {
+    use crate::as_str;
+    let s = |key: &str| as_str(&doc[key]);
+    reduction_identity(
+        &s("residual_id"),
+        &s("source_run"),
+        &s("axis"),
+        &s("kind"),
+        &s("court_semantic_identity"),
+        &s("authority_artifact_sha256"),
+        &s("candidate_artifact_sha256"),
+        &s("environment_digest"),
+        &s("comparator_semantic_id"),
+        &s("comparator_semantic_hash"),
+        &s("comparator_implementation_hash"),
+        &doc["argv_template"],
+        &s("original_fixture_sha256"),
+        &s("final_fixture_sha256"),
+        &doc["attempts"],
+        &doc["derivation"],
+        &doc["transform"],
+        &minimizer_doc(doc),
+    )
+}
+
+/// The content address of a REDUCTION record computed from its document
+/// (the `reduction_identity` wrapper the regen uses to re-pin fixtures after
+/// a schema change): every field the identity commits is read from the
+/// document's own recorded values, and the minimizer binding is the store's
+/// `minimizer_binding` mirror.
 #[allow(clippy::too_many_arguments)]
 pub fn reduction_identity(
     residual_id: &str,
@@ -712,17 +747,17 @@ pub fn reduction_identity(
     // The domain-aware predicate fields enter the identity ONLY when the
     // record carries them, exactly as they serialize (absent == the record
     // shape written before the generalization; an explicit coordinate is a
-    // different preimage).
-    for key in [
-        "granularity",
-        "domain",
-        "ordering",
-        "passing_point",
-        "adjacent_nonpassing_point",
-    ] {
-        if let Some(v) = derivation["minimality"].get(key) {
-            minimality[key] = v.clone();
-        }
+    // different preimage). v5 types the domain: the nested `reduction_domain`
+    // (kind + semantic) and the two-point `boundary` (predecessor + value,
+    // each with its observed preservation) replace the flat coordinates.
+    if let Some(v) = derivation["minimality"].get("granularity") {
+        minimality["granularity"] = v.clone();
+    }
+    if let Some(v) = derivation["minimality"].get("reduction_domain") {
+        minimality["reduction_domain"] = v.clone();
+    }
+    if let Some(v) = derivation["minimality"].get("boundary") {
+        minimality["boundary"] = v.clone();
     }
     // The minimizer's claim enters the identity ONLY when the record carries
     // one (absent == None == the record shape written before the field

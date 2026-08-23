@@ -873,11 +873,13 @@ func reductionIdentity(r *jcs.Object) (string, error) {
 	// The domain-aware predicate fields enter the identity ONLY when the
 	// record carries them, exactly as they serialize (absent == the record
 	// shape written before the generalization; an explicit coordinate is a
-	// different preimage). The minimizer's claim likewise enters only when
-	// present.
+	// different preimage). v5 types the domain: the nested `reduction_domain`
+	// (kind + semantic) and the two-point `boundary` (predecessor + value,
+	// each with its observed preservation) replace the flat coordinates. The
+	// minimizer's claim likewise enters only when present.
 	minimalityKeys := []string{"kind", "proven"}
 	minimalityValues := []jcs.Value{str(minimality, "kind"), recVal(minimality, "proven")}
-	for _, key := range []string{"granularity", "domain", "ordering", "passing_point", "adjacent_nonpassing_point", "proposal_minimality_claimed"} {
+	for _, key := range []string{"granularity", "reduction_domain", "boundary", "proposal_minimality_claimed"} {
 		if v, ok := minimality.Get(key); ok && v != nil {
 			minimalityKeys = append(minimalityKeys, key)
 			minimalityValues = append(minimalityValues, v)

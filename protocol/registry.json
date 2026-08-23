@@ -160,7 +160,7 @@
     {
       "id": "reduction",
       "meaning": "Minimization attempt: fixture reduction + preservation predicate",
-      "schema": "frf-reduction-v4",
+      "schema": "frf-reduction-v5",
       "identity": "FRF/REDUCTION/v3",
       "status": "active"
     },
@@ -711,7 +711,7 @@
     },
     {
       "id": "frf-minimizer-response-v1",
-      "status": "active"
+      "status": "superseded"
     },
     {
       "id": "frf-minimizer-result-v1",
@@ -791,7 +791,7 @@
     },
     {
       "id": "frf-reduction-v4",
-      "status": "active"
+      "status": "superseded"
     },
     {
       "id": "frf-v3-build-manifest-v1",
@@ -855,6 +855,14 @@
     },
     {
       "id": "frf-receipt-v20",
+      "status": "active"
+    },
+    {
+      "id": "frf-reduction-v5",
+      "status": "active"
+    },
+    {
+      "id": "frf-minimizer-response-v2",
       "status": "active"
     }
   ],

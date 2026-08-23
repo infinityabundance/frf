@@ -825,17 +825,23 @@ proposal_bytes = proposal.encode("utf-8")
 # will execute it and observe the lineage SURVIVES -> the boundary is
 # refuted. This is the adversarial declaration.
 response = {
-    "schema_version": "frf-minimizer-response-v1",
+    "schema_version": "frf-minimizer-response-v2",
     "request_id": request_id,
     "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
     "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
     "minimal": True,
     "minimality": {
-        "kind": "boundary",
-        "domain": "falsify.example_parameter",
-        "ordering": "integer-ascending",
-        "passing_point": "2",
-        "adjacent_nonpassing_point": "1",
+        "kind": "adjacent-boundary",
+        "reduction_domain": {
+            "kind": "ordered-integer",
+            "semantic": "falsify.example_parameter",
+        },
+        "boundary": {
+            "predecessor": "1",
+            "predecessor_preserves": False,  # claimed: the original is NOT preserved
+            "value": "2",
+            "value_preserves": True,
+        },
         "adjacent_fixture_sha256": hashlib.sha256(original).hexdigest(),
         "adjacent_fixture_base64": base64.b64encode(original).decode("ascii"),
     },
@@ -867,17 +873,23 @@ proposal_bytes = proposal.encode("utf-8")
 # lineage is LOST at the adjacent point.
 adjacent = b"server 192.168.1.1\n"
 response = {
-    "schema_version": "frf-minimizer-response-v1",
+    "schema_version": "frf-minimizer-response-v2",
     "request_id": request_id,
     "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
     "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
     "minimal": True,
     "minimality": {
-        "kind": "boundary",
-        "domain": "falsify.example_parameter",
-        "ordering": "integer-ascending",
-        "passing_point": "2",
-        "adjacent_nonpassing_point": "1",
+        "kind": "adjacent-boundary",
+        "reduction_domain": {
+            "kind": "ordered-integer",
+            "semantic": "falsify.example_parameter",
+        },
+        "boundary": {
+            "predecessor": "1",
+            "predecessor_preserves": False,  # claimed: the clean config is NOT preserved
+            "value": "2",
+            "value_preserves": True,
+        },
         "adjacent_fixture_sha256": hashlib.sha256(adjacent).hexdigest(),
         "adjacent_fixture_base64": base64.b64encode(adjacent).decode("ascii"),
     },
@@ -939,14 +951,27 @@ fn refuted_boundary_declaration_is_never_proven() {
     )
     .unwrap();
     let minimality = &record["derivation"]["minimality"];
-    // The boundary declaration IS recorded — coordinates and all — so a
-    // reader can see exactly what was claimed and refuted.
-    assert_eq!(minimality["kind"], "boundary");
-    assert_eq!(minimality["domain"], "falsify.example_parameter");
-    assert_eq!(minimality["ordering"], "integer-ascending");
-    assert_eq!(minimality["passing_point"], "2");
-    assert_eq!(minimality["adjacent_nonpassing_point"], "1");
+    // The boundary declaration IS recorded — typed domain and the two-point
+    // boundary with its claimed preservation — so a reader can see exactly
+    // what was claimed and refuted.
+    assert_eq!(minimality["kind"], "adjacent-boundary");
+    assert_eq!(minimality["reduction_domain"]["kind"], "ordered-integer");
+    assert_eq!(
+        minimality["reduction_domain"]["semantic"],
+        "falsify.example_parameter"
+    );
+    assert_eq!(minimality["boundary"]["predecessor"], "1");
+    assert_eq!(minimality["boundary"]["value"], "2");
     assert_eq!(minimality["proposal_minimality_claimed"], true);
+    // The boundary's in-band preservation flags are the CORE'S OWN
+    // observations, never the minimizer's claims: the adjacent point
+    // SURVIVED the core's execution, so the refutation is recorded IN BAND
+    // (predecessor_preserves=true) — never only as proven=false.
+    assert_eq!(
+        minimality["boundary"]["predecessor_preserves"], true,
+        "the refuting observation is recorded in band"
+    );
+    assert_eq!(minimality["boundary"]["value_preserves"], true);
     // ...but the core observed the adjacent point SURVIVE: the boundary is
     // refuted and `proven` must be false. This is the assertion the relay
     // made impossible.
@@ -978,12 +1003,20 @@ fn refuted_boundary_declaration_is_never_proven() {
         Some(true)
     );
     assert_eq!(
-        r.derivation.minimality.domain.as_deref(),
+        r.derivation
+            .minimality
+            .reduction_domain
+            .as_ref()
+            .map(|d| d.semantic.as_str()),
         Some("falsify.example_parameter")
     );
     assert_eq!(
-        r.derivation.minimality.domain.as_deref(),
-        Some("falsify.example_parameter")
+        r.derivation
+            .minimality
+            .boundary
+            .as_ref()
+            .map(|b| b.value.as_str()),
+        Some("2")
     );
 }
 
@@ -1008,8 +1041,13 @@ fn honest_boundary_can_be_established_by_the_core() {
     )
     .unwrap();
     let minimality = &record["derivation"]["minimality"];
-    assert_eq!(minimality["kind"], "boundary");
+    assert_eq!(minimality["kind"], "adjacent-boundary");
     assert_eq!(minimality["proposal_minimality_claimed"], true);
+    // The boundary's in-band preservation flags match the core's own two
+    // observations: the control was LOST (predecessor_preserves=false) and
+    // the final verification preserved (value_preserves=true).
+    assert_eq!(minimality["boundary"]["predecessor_preserves"], false);
+    assert_eq!(minimality["boundary"]["value_preserves"], true);
     // The core observed both sides of the boundary itself: the control was
     // LOST and the final verification preserved, so `proven` is the core's
     // own statement — not a relayed claim.

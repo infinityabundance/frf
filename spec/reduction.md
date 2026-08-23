@@ -26,7 +26,7 @@ in the recorded argv.
 ## The record
 
 Every minimization is a content-addressed protocol object
-(`reductions/<id>.json`, `frf-reduction-v4`):
+(`reductions/<id>.json`, `frf-reduction-v5`):
 
 ```text
 ReductionRecord {
@@ -80,16 +80,22 @@ exist:
   preserving the lineage (not global cardinality minimality). `proven` is
   true only when the deterministic search completed within the attempt
   budget; a budget-cut search says so honestly.
-- `{kind: boundary, domain: heartbeat.claimed_payload_length, ordering:
-  integer-ascending, passing_point: "4073", adjacent_nonpassing_point:
-  "4072", proven, proposal_minimality_claimed?}` — the proposal sits at an
-  OBSERVATION BOUNDARY of a numeric parameter: at `passing_point` the
-  lineage survives, at the adjacent `adjacent_nonpassing_point` it does
-  not. The coordinates are the minimizer's domain interpretation; the CORE
-  establishes the pair by executing BOTH points itself (the recorded
-  `boundary_control` attempt must be LOST and the final verification
-  preserved) before `proven` can be true. All points are decimal STRINGS
-  (the canonical JSON value domain has no numbers).
+- `{kind: adjacent-boundary, reduction_domain: {kind: ordered-integer,
+  semantic: tls.heartbeat.claimed_payload_length}, boundary:
+  {predecessor: "4072", predecessor_preserves: false, value: "4073",
+  value_preserves: true}, proven, proposal_minimality_claimed?}` — the
+  proposal sits at an OBSERVATION BOUNDARY of a TYPED numeric parameter:
+  at `boundary.value` the lineage survives, at its `boundary.predecessor`
+  (one step below in the domain ordering) it does not. The two points carry
+  their OBSERVED preservation (a refuted boundary records the refuting
+  observation in band — `predecessor_preserves=true` — never only as
+  `proven=false`); the CORE establishes the pair by executing BOTH points
+  itself (the recorded `boundary_control` attempt must be LOST and the
+  final verification preserved) before `proven` can be true, and the
+  recorded flags must match those attempts. All points are decimal STRINGS
+  (the canonical JSON value domain has no numbers); the domain KIND is a
+  closed vocabulary (`ordered-integer` in this version) with the semantic
+  identifier naming the parameter.
 
 `proven` is the CORE's own statement — a completed search, or the two
 boundary observations above — never a relayed claim. An EXTERNAL minimizer

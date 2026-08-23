@@ -1,6 +1,6 @@
 # The minimizer extension protocol
 
-*Version: `frf-minimizer-request-v1` / `frf-minimizer-response-v1`
+*Version: `frf-minimizer-request-v1` / `frf-minimizer-response-v2`
 (`frf-minimizer-invocation-v1` / `frf-minimizer-result-v1` for the preserved
 invocation evidence).*
 
@@ -88,17 +88,23 @@ carries the exact reducer.
 
 ```json
 {
-  "schema_version": "frf-minimizer-response-v1",
+  "schema_version": "frf-minimizer-response-v2",
   "request_id": "<SHA-256 of the exact request bytes received>",
   "fixture_sha256": "<SHA-256 of the proposed bytes>",
   "fixture_base64": "<the proposed reduced fixture, base64>",
   "minimal": true,
   "minimality": {
-    "kind": "boundary",
-    "domain": "heartbeat.claimed_payload_length",
-    "ordering": "integer-ascending",
-    "passing_point": "4073",
-    "adjacent_nonpassing_point": "4072",
+    "kind": "adjacent-boundary",
+    "reduction_domain": {
+      "kind": "ordered-integer",
+      "semantic": "tls.heartbeat.claimed_payload_length"
+    },
+    "boundary": {
+      "predecessor": "4072",
+      "predecessor_preserves": false,
+      "value": "4073",
+      "value_preserves": true
+    },
     "adjacent_fixture_sha256": "<SHA-256 of the adjacent non-passing fixture>",
     "adjacent_fixture_base64": "<the adjacent non-passing fixture, base64>"
   },
@@ -118,7 +124,7 @@ strings/arrays/booleans/null, so a response cannot carry a JSON number
 (RFC 8785 number serialization is out of scope for the protocol value
 domain). `minimal` is the minimizer's own claim, recorded as claimed — the
 final proposal's survival is independently court-verified. In the reduction
-record (`frf-reduction-v4`) the claim lands in
+record (`frf-reduction-v5`) the claim lands in
 `derivation.minimality.proposal_minimality_claimed` and is NEVER relayed
 into `derivation.minimality.proven`: `proven` is the core's own statement
 (a completed search or a core-executed boundary), and an external proposal
@@ -126,17 +132,26 @@ alone never proves anything — the record says `proven: false` and carries
 the claim.
 
 `minimality` is an optional DOMAIN-AWARE boundary DECLARATION: the proposal
-claims to sit at an observation boundary of a numeric parameter. The
-coordinates (`domain`, `ordering`, `passing_point`,
-`adjacent_nonpassing_point` — all strings) are the minimizer's domain
-interpretation, and `adjacent_fixture_*` names the EXACT bytes of the
-adjacent non-passing point. The declaration is a claim, never proof: the
-core validates the adjacent fixture hashes to its declared sha256 and
-differs from the proposal, then EXECUTES it as a `boundary_control` attempt
-recorded in the reduction. The boundary is proven ONLY when the core itself
-observed both sides — the adjacent control LOST and the final verification
-preserved. A preserved control is a REFUTATION: the record keeps it as
-evidence and `proven` stays false. An unsupported `kind` is refused.
+claims to sit at an observation boundary of a numeric parameter. v2 TYPES
+the domain: `reduction_domain` is `{kind, semantic}` (`ordered-integer` is
+the one kind in this version, over e.g.
+`tls.heartbeat.claimed_payload_length`), and `boundary` is the two-point
+pair `{predecessor, predecessor_preserves, value, value_preserves}` — the
+predecessor is one step below the value in the domain ordering, and each
+point carries its CLAIMED preservation (a boundary declaration claims
+`predecessor_preserves=false`, `value_preserves=true`; anything else is
+refused as not a boundary claim). All coordinates are STRINGS (the
+canonical JSON value domain has no numbers), and `adjacent_fixture_*`
+names the EXACT bytes of the adjacent (predecessor) point. The declaration
+is a claim, never proof: the core validates the adjacent fixture hashes to
+its declared sha256 and differs from the proposal, then EXECUTES it as a
+`boundary_control` attempt recorded in the reduction. The boundary is
+proven ONLY when the core itself observed both sides — the adjacent control
+LOST and the final verification preserved — and the record's in-band
+`predecessor_preserves`/`value_preserves` must match those observations. A
+preserved control is a REFUTATION: the record keeps it as evidence, the
+refuting observation is recorded in band, and `proven` stays false. An
+unsupported `kind` (either vocabulary) is refused.
 
 ## 4. Fail-closed interpretation and court verification
 
@@ -156,7 +171,7 @@ evidence and `proven` stays false. An unsupported `kind` is refused.
 
 A successful reduction preserves four files under
 `reductions/<id>/minimizer/` (request, response, content-addressed
-invocation + result) and the reduction record (`frf-reduction-v4`) binds the
+invocation + result) and the reduction record (`frf-reduction-v5`) binds the
 minimizer's semantic id, specification hash, implementation hash, exact
 artifact identity, and the invocation/result ids — the record proves WHO
 reduced, not merely that a reduction happened. A REFUSED proposal preserves
