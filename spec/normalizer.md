@@ -143,6 +143,32 @@ hashes MUST be the next request's carried streams; the LAST result's hashes
 MUST be the capture's compared hashes. A broken link or a hand-edited
 document refuses, never silently consumes.
 
+### 5.1 The raw-vs-compared model is semantic, not a filename convention
+
+A capture's `{side}.stdout` / `{side}.stderr` files are the COMPARED
+observation, and an external tool MUST NOT read them as raw process output
+when normalizers applied:
+
+```text
+process output (raw bytes)
+        |
+        v  normalizer request evidence — the RAW stream survives here,
+        |  byte-for-byte, content-addressed (request.json + invocation +
+        |  result: the normalizer chain is a verified hash chain)
+        v
+compared observation — captures/{run}/{side}.stdout / .stderr, what the
+        comparators mean, and what `capture.json` hashes
+```
+
+- the RAW stream is preserved as the normalizer request evidence (the first
+  request carries the raw record; every link is verified on read);
+- the COMPARED stream is what the capture's `{side}.stdout` / `{side}.stderr`
+  files and the `capture.json` hashes bind, and what replay/semantic
+  reproduction must reproduce;
+- verification consistency is preserved by construction (the last result's
+  hashes MUST be the capture's compared hashes), so nothing is lost — but
+  the two are different objects and must be read as such.
+
 ## 6. Replay and minimization
 
 Replay re-invokes the EXACT snapshotted implementations in application

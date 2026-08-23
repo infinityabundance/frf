@@ -111,7 +111,7 @@ not these tables.
 | execution-identity | Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract | FRF/EXECUTION/v1 | active |
 | observation | Raw captured result (side capture + produced-artifact tree) | frf-produced-v1 | active |
 | residual | Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified — no shared sequence counter anywhere in the residual namespace | frf-residual-v1 · FRF/RESIDUAL/v1 | active |
-| residual-lineage | Stable comparison question/surface/feature across revisions and environments | FRF/RESIDUAL-LINEAGE/v1 | active |
+| residual-lineage | Stable comparison surface / QUESTION CLASS (FRF/RESIDUAL-LINEAGE/v1): one lineage spans candidate revisions, authority versions, environments, and time — many fingerprints, one trajectory. Lineage is the trajectory subject and scope key, never exact divergence identity | FRF/RESIDUAL-LINEAGE/v1 | active |
 | disposition-event | Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims | frf-disposition-v3 · FRF/DISPOSITION-EVENT/v1 | active |
 | resolution | Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation) | — | active |
 | series | Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled | frf-series-v4 · FRF/SERIES/v3 | active |
@@ -158,8 +158,8 @@ not these tables.
 | FRF/WITNESS-SPEC/v2 | Witness semantic specification | active |
 | FRF/MUTATION-SPEC/v1 | Mutation semantic specification | active |
 | FRF/RESIDUAL/v1 | Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) — collision-free under concurrent courts and idempotent under re-observation | active |
-| FRF/RESIDUAL-FINGERPRINT/v1 | Exact residual observation fingerprint | active |
-| FRF/RESIDUAL-LINEAGE/v1 | Stable residual lineage across revisions/environments | active |
+| FRF/RESIDUAL-FINGERPRINT/v1 | The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point | active |
+| FRF/RESIDUAL-LINEAGE/v1 | Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME — deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity | active |
 | FRF/KIND/v1 | Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary | active |
 | FRF/SERIES/v3 | ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points — each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run | active |
 | FRF/SERIES/v2 | Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities) | superseded |
@@ -278,9 +278,7 @@ not these tables.
 |---|---|---|---|
 | comparator | eq | Equality over the extractor's projection | active |
 | dispositions | open | Unexplained, blocks claims whose scope intersects | active |
-| dispositions | fixed | Closed by a verified resolution run under a CHANGED candidate artifact (the ONLY state that unblocks a claim) | active |
-| dispositions | nonreproduced | ONE later pass on the SAME candidate — nondeterminism, not remediation; still blocks claims | active |
-| dispositions | stabilized | REPEATED later passes on the SAME candidate, trajectory-backed; still blocks claims | active |
+| dispositions | fixed | Closed by a verified resolution run | active |
 | dispositions | intentional | Documented intentional divergence | active |
 | dispositions | environmental | Environment-dependent | active |
 | dispositions | oracle_version | The reference version changed | active |

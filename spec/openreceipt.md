@@ -421,8 +421,6 @@ reproduces only when that environment is actually present.
 
 ## 7. Residual trajectories — the generalized protocol
 
-## 7. Residual trajectories — the generalized protocol
-
 A trajectory is an ordered series of observations of one residual LINEAGE
 over a declared coordinate system, with a deterministic classification. The
 subject is the lineage identity (`FRF/RESIDUAL-LINEAGE/v1` — kind, axis,
@@ -431,6 +429,39 @@ exact observed bytes: the lineage is stable across candidate revisions,
 authority versions, environments, and time, so a trajectory records the
 MOVEMENT of a divergence (the same lineage at three commits has three
 different exact fingerprints but one trajectory).
+
+### 7.1 Lineage vs fingerprint — two different questions
+
+The residual vocabulary keeps TWO identities on purpose, and they must not
+be confused:
+
+```text
+lineage     FRF/RESIDUAL-LINEAGE/v1 — the STABLE COMPARISON SURFACE /
+            question class: kind + axis + surface + fixture + fixture
+            family + authority NAME. Deliberately excludes the exact raw
+            projections, so the SAME divergence can be tracked across
+            candidate revisions, authority versions, environments, and
+            time. One lineage, many observations.
+
+fingerprint  FRF/RESIDUAL-FINGERPRINT/v1 — the EXACT observed divergence:
+            a hash over the run + the residual's own raw projections
+            (surface + raw_reference + raw_candidate). Two observations
+            with the same fingerprint are the same bytes diverging the
+            same way; two different fingerprints on the same lineage are
+            DIFFERENT divergences of the same surface.
+```
+
+- Lineage answers "which comparison surface is moving?" — it is the
+  trajectory's subject and the blocker scan's scope key.
+- Fingerprint answers "exactly which divergence was observed at this
+  point?" — it is what a replayed observation must reproduce byte-for-byte.
+
+A consumer must never read lineage as exact divergence identity: the same
+lineage at two points with different fingerprints is NOT "the same
+residual moving" — it is the same QUESTION showing different answers, and
+only the per-point fingerprint says how. The receipt's trajectory sign
+pins both: the lineage as the subject, the exact fingerprint per observed
+point.
 
 Five coordinate systems are executable:
 

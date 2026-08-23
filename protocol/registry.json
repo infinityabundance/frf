@@ -126,7 +126,7 @@
     },
     {
       "id": "residual-lineage",
-      "meaning": "Stable comparison question/surface/feature across revisions and environments",
+      "meaning": "Stable comparison surface / QUESTION CLASS (FRF/RESIDUAL-LINEAGE/v1): one lineage spans candidate revisions, authority versions, environments, and time — many fingerprints, one trajectory. Lineage is the trajectory subject and scope key, never exact divergence identity",
       "schema": null,
       "identity": "FRF/RESIDUAL-LINEAGE/v1",
       "status": "active"
@@ -384,12 +384,12 @@
     },
     {
       "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
-      "meaning": "Exact residual observation fingerprint",
+      "meaning": "The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point",
       "status": "active"
     },
     {
       "domain": "FRF/RESIDUAL-LINEAGE/v1",
-      "meaning": "Stable residual lineage across revisions/environments",
+      "meaning": "Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME — deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity",
       "status": "active"
     },
     {

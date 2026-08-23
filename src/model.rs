@@ -1660,6 +1660,11 @@ pub const CLOSURE_PREDICATE_FIX_COURT: &str = "fix-court: same court, authority,
 /// fewer than this many passes cannot establish persistent disappearance.
 pub const STABILIZATION_MIN_CONSECUTIVE_PASSES: u32 = 2;
 
+/// The bounded retries of a CAS disposition append: the caller re-reads the
+/// chain after a conflict; this many attempts are enough for a few concurrent
+/// writers, and a persistent conflict is a refusal, never a silent fork.
+pub const DISPOSITION_APPEND_MAX_RETRIES: u32 = 4;
+
 /// Residual disposition with the invariants enforced by construction:
 /// - `Open` carries no reason.
 /// - every `Closed` carries a non-empty one-line reason;
@@ -3170,6 +3175,13 @@ pub struct SideCapture {
     /// content identity is the recorded `stdout_sha256`.
     #[serde(skip_serializing, default)]
     pub stdout_bytes: Vec<u8>,
+    /// The raw stderr bytes, retained IN MEMORY ONLY (never serialized — the
+    /// raw stream already lives as a capture file; a future domain comparator
+    /// that parses stderr needs the bytes, not just the hash). Excluded from
+    /// equality like `stdout_bytes`; the content identity is the recorded
+    /// `stderr_sha256`.
+    #[serde(skip_serializing, default)]
+    pub stderr_bytes: Vec<u8>,
 }
 
 impl PartialEq for SideCapture {

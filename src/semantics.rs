@@ -640,9 +640,14 @@ pub fn run_identity(p: &RunPreimage) -> Result<String> {
     hash_preimage("FRF/RUN/v2", &doc)
 }
 
-/// The residual fingerprint: stable across repeated executions and (with the
-/// same raw projections) across stores, because it is built from the
-/// residual's hashed projections, not the raw values.
+/// The residual fingerprint: the EXACT observed divergence — stable across
+/// repeated executions and (with the same raw projections) across stores,
+/// because it is built from the residual's hashed projections, not the raw
+/// values. This is the fingerprint side of the lineage-vs-fingerprint
+/// dichotomy ([`residual_lineage`]): the lineage names the comparison
+/// surface/question class; the fingerprint names the exact bytes diverging
+/// the same way. A replayed observation must reproduce the fingerprint
+/// byte-for-byte; a trajectory pins one fingerprint per observed point.
 pub fn residual_fingerprint(r: &ResidualRecord) -> Result<String> {
     fingerprint_from_projections(
         &r.kind,
@@ -720,6 +725,18 @@ pub fn fingerprint_from_projections(
 /// absent), so a trajectory over those axes records the MOVEMENT of a
 /// divergence: the same lineage at commit 1, commit 2, and commit 3 has
 /// different fingerprints but one trajectory.
+///
+/// LINEAGE vs FINGERPRINT (do not conflate the two):
+///
+/// - lineage = the STABLE SURFACE / QUESTION CLASS (this function): which
+///   comparison surface is moving. Deliberately coarse — one lineage, many
+///   observations. It is the trajectory subject and the blocker-scan scope
+///   key, never a claim about exact divergence identity.
+/// - fingerprint = the EXACT observed divergence
+///   ([`residual_fingerprint`] / [`fingerprint_from_projections`]): the run
+///   + the exact raw projections. Two observations with the same fingerprint
+///   are the same bytes diverging the same way; two fingerprints on one
+///   lineage are DIFFERENT answers to the same question.
 ///
 /// Contents: kind, axis, surface, fixture, fixture family, authority NAME.
 /// (The authority name, not the versioned id — the lineage must span
@@ -1833,6 +1850,8 @@ mod tests {
             produced: None,
             adapted: None,
             stdout_bytes: vec![],
+
+            stderr_bytes: vec![],
         };
         let bounds = |timeout: &str, cgroup: Option<&str>| CaptureBounds {
             timeout_ms: timeout.into(),
@@ -2009,6 +2028,8 @@ mod tests {
                 produced: None,
                 adapted: None,
                 stdout_bytes: vec![],
+
+                stderr_bytes: vec![],
             },
             candidate: SideCapture {
                 exit: "0".into(),
@@ -2022,6 +2043,8 @@ mod tests {
                 produced: None,
                 adapted: None,
                 stdout_bytes: vec![],
+
+                stderr_bytes: vec![],
             },
             residuals: vec![],
             harness_events: vec![],

@@ -29,6 +29,13 @@
 //!   consecutive non-reproductions (N ≥ the protocol floor of 2), all under
 //!   the SAME candidate. The trajectory is RE-DERIVED from its series and
 //!   byte-compared before the disposition is recorded.
+//!
+//! The append itself is a COMPARE-AND-SWAP against the chain's last event:
+//! the caller re-reads the chain, and a concurrent writer that appended first
+//! is a conflict, not a silent overwrite. `Store::append_disposition_event_cas`
+//! retries a bounded number of times; the event CONTENT never depends on the
+//! chain (the parent link is filled by the append), so a retry rebuilds
+//! nothing.
 
 use crate::cli::ClosureArg;
 use crate::error::{FrfError, Result};
@@ -162,7 +169,11 @@ pub fn run(
         )?,
     };
 
-    let event = store.append_disposition_event(&event)?;
+    // The append is a compare-and-swap against the chain's last event (the
+    // multi-writer-safe append): a concurrent dispose that won first is a
+    // conflict, and the bounded retry re-reads the chain. The event's CONTENT
+    // never depends on the chain, so nothing is rebuilt.
+    let event = store.append_disposition_event_cas(id, &event)?;
     // The derived token follows the projected disposition.
     store.write_token(record, &event.disposition)?;
 

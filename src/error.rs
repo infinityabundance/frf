@@ -11,6 +11,14 @@ impl FrfError {
     pub fn new(msg: impl Into<String>) -> Self {
         FrfError(msg.into())
     }
+
+    /// Is this a disposition-append CONFLICT (a concurrent writer appended to
+    /// the same residual's hash chain between our read and our write)? The
+    /// CAS loop uses this to re-read the chain and retry instead of surfacing
+    /// an opaque refusal.
+    pub fn is_append_conflict(&self) -> bool {
+        self.0.starts_with("disposition append conflict")
+    }
 }
 
 impl fmt::Display for FrfError {

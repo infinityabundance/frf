@@ -3780,6 +3780,7 @@ impl SideCapture {
             produced: None,
             adapted: None,
             stdout_bytes: outcome.stdout.clone(),
+            stderr_bytes: outcome.stderr.clone(),
         }
     }
 }

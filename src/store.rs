@@ -2133,9 +2133,35 @@ impl Store {
     /// `event_id` (or `None` for the first), and the new `event_id` is the
     /// SHA-256 of the event's own content. Returns the complete event (with
     /// its identity), which the caller may print or bind into receipts.
-    pub fn append_disposition_event(&self, partial: &DispositionEvent) -> Result<DispositionEvent> {
+    ///
+    /// The append is a COMPARE-AND-SWAP against the caller's `expected_parent`
+    /// (the last event id it observed when reading the chain, or `None` for an
+    /// empty chain): if another writer appended first, the chain's real last
+    /// event differs and the append is REFUSED as a conflict (`is_append_conflict`)
+    /// — the caller re-reads the chain and retries. The hash chain is the
+    /// compare: a stale writer can never splice a fork into the history, and
+    /// `write_once` on the dense slot file remains the second fence (identical
+    /// bytes are a no-op; different bytes refuse).
+    pub fn append_disposition_event(
+        &self,
+        partial: &DispositionEvent,
+        expected_parent: Option<&str>,
+    ) -> Result<DispositionEvent> {
         let events = self.disposition_events(&partial.residual_id)?;
         let parent_event_id = events.last().map(|e| e.event_id.clone());
+        if parent_event_id.as_deref() != expected_parent {
+            return Err(FrfError::new(format!(
+                "disposition append conflict on residual {}: the chain's last event is {} but the caller expected {} — another writer appended first; re-read the chain and retry",
+                partial.residual_id,
+                parent_event_id
+                    .as_deref()
+                    .map(|id| &id[..16.min(id.len())])
+                    .unwrap_or("<none>"),
+                expected_parent
+                    .map(|id| &id[..16.min(id.len())])
+                    .unwrap_or("<none>"),
+            )));
+        }
         // The only evidence a v0.1.15 disposition could reference was the
         // resolution run that closed it; the v3 vocabulary adds the
         // observation run (nonreproduced) and the trajectory document
@@ -2174,6 +2200,37 @@ impl Store {
         let json = self.to_evidence(&event)?;
         self.write_once(&path, &json)?;
         Ok(event)
+    }
+
+    /// The multi-writer-safe append for CLI/operator use: a bounded
+    /// compare-and-swap loop around [`Store::append_disposition_event`]. The
+    /// caller builds the event once (its content never depends on the chain —
+    /// the parent link is filled by the append), then each attempt re-reads
+    /// the chain, passes the last event as the expected parent, and retries a
+    /// CONFLICT (a concurrent writer appended first) up to the bound. The
+    /// events are hash-chained, so the parent link IS the compare: a stale
+    /// writer can never splice a fork into the history.
+    pub fn append_disposition_event_cas(
+        &self,
+        residual_id: &str,
+        partial: &DispositionEvent,
+    ) -> Result<DispositionEvent> {
+        for attempt in 0..DISPOSITION_APPEND_MAX_RETRIES {
+            let events = self.disposition_events(residual_id)?;
+            let expected = events.last().map(|e| e.event_id.clone());
+            match self.append_disposition_event(partial, expected.as_deref()) {
+                Ok(event) => return Ok(event),
+                Err(e)
+                    if e.is_append_conflict() && attempt + 1 < DISPOSITION_APPEND_MAX_RETRIES =>
+                {
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(FrfError::new(format!(
+            "disposition append on residual {residual_id} kept conflicting after {DISPOSITION_APPEND_MAX_RETRIES} attempts — concurrent writers are appending to the same residual; re-run the dispose"
+        )))
     }
 
     // -- reads ---------------------------------------------------------------
@@ -2338,14 +2395,15 @@ impl Store {
         } else {
             // A built-in axis is evaluated IN-PROCESS through the ONE
             // evaluation operation — the same implementation that observed
-            // the resolution run, applied to its verified captures. The raw
-            // stdout bytes are rebuilt from the run's captured files (the
-            // domain comparators parse them; the serialized SideCapture
-            // carries only the hash).
-            let reference = self.side_capture_with_raw_stdout(resolution_run, &resolution, true)?;
-            let candidate =
-                self.side_capture_with_raw_stdout(resolution_run, &resolution, false)?;
+            // the resolution run, applied to its verified captures. The sides
+            // are hydrated exactly what the plan declares (the domain
+            // comparators parse the raw stdout bytes, which the serialized
+            // SideCapture carries only as a hash); a requirement the run
+            // cannot satisfy is a refusal, never a silent empty value.
             let plan = crate::comparators::EvaluationPlan::from_capture(&resolution, axis)?;
+            let reference = self.side_capture_for_plan(resolution_run, &resolution, &plan, true)?;
+            let candidate =
+                self.side_capture_for_plan(resolution_run, &resolution, &plan, false)?;
             let context = crate::comparators::EvaluationContext {
                 fixture_sha256: &resolution.fixture_sha256,
                 arguments: &resolution.arguments,
@@ -2377,10 +2435,19 @@ impl Store {
     /// captured `{side}.stdout` file (the serialized capture carries only the
     /// hash; the domain comparators parse the bytes). The bytes are verified
     /// against the recorded hash — a drifted side file is refused.
-    fn side_capture_with_raw_stdout(
+    /// Hydrate a side capture with EXACTLY what the plan's evaluation
+    /// declares (see [`crate::comparators::CaptureRequirement`] and
+    /// [`crate::comparators::EvaluationPlan::capture_requirements`]): the
+    /// serialized projections (exit, first lines, produced-tree manifests)
+    /// are verified on capture load and need nothing more; the RAW STREAM
+    /// BYTES live as capture files and are rehashed here against the recorded
+    /// hashes — a drifted side file is refused, and a requirement the run
+    /// cannot satisfy is a refusal, never a silent empty value.
+    pub fn side_capture_for_plan(
         &self,
         run: &str,
         capture: &CaptureManifest,
+        plan: &crate::comparators::EvaluationPlan,
         reference: bool,
     ) -> Result<SideCapture> {
         let mut side = if reference {
@@ -2390,15 +2457,35 @@ impl Store {
         };
         let dir = self.run_dir(run)?;
         let name = if reference { "reference" } else { "candidate" };
-        let bytes = fs::read(dir.join(format!("{name}.stdout")))
-            .map_err(|e| FrfError::new(format!("cannot read {name}.stdout: {e}")))?;
-        let actual = crate::host::sha256_bytes(&bytes);
-        if actual != side.stdout_sha256 {
-            return Err(FrfError::new(format!(
-                "{name}.stdout of run {run} does not hash to the recorded value; refusing to evaluate a drifted capture"
-            )));
+        for requirement in plan.capture_requirements() {
+            let Some(stream) = requirement.stream_file() else {
+                // Serialized projection (exit / first lines / produced tree):
+                // verified on capture load; nothing to hydrate.
+                continue;
+            };
+            let recorded = if stream == "stdout" {
+                &side.stdout_sha256
+            } else {
+                &side.stderr_sha256
+            };
+            let bytes = fs::read(dir.join(format!("{name}.{stream}"))).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read {name}.{stream} of run {run} (the {} axis requires it): {e}",
+                    plan.axis.as_str()
+                ))
+            })?;
+            let actual = crate::host::sha256_bytes(&bytes);
+            if &actual != recorded {
+                return Err(FrfError::new(format!(
+                    "{name}.{stream} of run {run} does not hash to the recorded value; refusing to evaluate a drifted capture"
+                )));
+            }
+            if stream == "stdout" {
+                side.stdout_bytes = bytes;
+            } else {
+                side.stderr_bytes = bytes;
+            }
         }
-        side.stdout_bytes = bytes;
         Ok(side)
     }
 
@@ -2701,10 +2788,14 @@ mod tests {
         let e1 =
             DispositionEvent::closed("cli-exit-0001", ClosureKind::Intentional, "wording".into())
                 .unwrap();
-        store.append_disposition_event(&e1).unwrap();
+        store.append_disposition_event(&e1, None).unwrap();
         let e2 = DispositionEvent::closed("cli-exit-0001", ClosureKind::Harness, "runner".into())
             .unwrap();
-        store.append_disposition_event(&e2).unwrap();
+        // The second append CASes against the first event's id.
+        let chain = store.disposition_events("cli-exit-0001").unwrap();
+        store
+            .append_disposition_event(&e2, chain.last().map(|e| e.event_id.as_str()))
+            .unwrap();
         // Projection is the last event; both events survive in order.
         assert_eq!(
             store.current_disposition("cli-exit-0001").unwrap().as_str(),
@@ -2721,7 +2812,10 @@ mod tests {
         let e3 =
             DispositionEvent::closed("cli-exit-0001", ClosureKind::Unknown, "reclassified".into())
                 .unwrap();
-        store.append_disposition_event(&e3).unwrap();
+        let chain = store.disposition_events("cli-exit-0001").unwrap();
+        store
+            .append_disposition_event(&e3, chain.last().map(|e| e.event_id.as_str()))
+            .unwrap();
         assert_eq!(
             std::fs::read_to_string(store.events_dir("cli-exit-0001").unwrap().join("0001.json"))
                 .unwrap(),
@@ -2764,5 +2858,52 @@ mod tests {
             "tampered event must be refused: {}",
             err.0
         );
+    }
+
+    #[test]
+    fn disposition_append_is_a_compare_and_swap_against_the_parent() {
+        // Two writers read the chain, then both append: the SECOND must be
+        // refused as a CONFLICT (its expected parent is stale) — the hash
+        // chain is the compare, and a stale writer can never splice a fork
+        // into the history. Re-reading the chain and retrying with the new
+        // parent succeeds.
+        let store = temp_store();
+        store.ensure_tree().unwrap();
+        let e1 =
+            DispositionEvent::closed("cli-exit-0001", ClosureKind::Intentional, "wording".into())
+                .unwrap();
+        // Both writers observed an EMPTY chain.
+        let stale_parent: Option<&str> = None;
+        // Writer A appends first.
+        store.append_disposition_event(&e1, stale_parent).unwrap();
+        // Writer B still holds the stale read: its append must CONFLICT.
+        let e2 = DispositionEvent::closed("cli-exit-0001", ClosureKind::Harness, "runner".into())
+            .unwrap();
+        let err = store
+            .append_disposition_event(&e2, stale_parent)
+            .unwrap_err();
+        assert!(
+            err.is_append_conflict(),
+            "a stale parent must be a conflict, not a silent overwrite: {}",
+            err.0
+        );
+        // B re-reads the chain and retries with the real parent: succeeds,
+        // and the chain is dense (0001, 0002).
+        let chain = store.disposition_events("cli-exit-0001").unwrap();
+        assert_eq!(chain.len(), 1);
+        store
+            .append_disposition_event(&e2, chain.last().map(|e| e.event_id.as_str()))
+            .unwrap();
+        assert_eq!(store.disposition_events("cli-exit-0001").unwrap().len(), 2);
+        // The CAS loop surfaces the conflict type to its caller: a
+        // same-residual append through the loop succeeds after the re-read.
+        let e3 =
+            DispositionEvent::closed("cli-exit-0001", ClosureKind::Unknown, "reclassified".into())
+                .unwrap();
+        let appended = store
+            .append_disposition_event_cas("cli-exit-0001", &e3)
+            .unwrap();
+        assert_eq!(appended.disposition.as_str(), "unknown");
+        assert_eq!(store.disposition_events("cli-exit-0001").unwrap().len(), 3);
     }
 }

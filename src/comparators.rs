@@ -368,6 +368,56 @@ pub fn interpret(
 // The built-in extractors (strongly typed helpers for the three built-ins)
 // ---------------------------------------------------------------------------
 
+/// What a built-in evaluation needs hydrated from the run's captured files
+/// BEYOND the serialized projections. The capture document serializes the
+/// projections (exit, the first lines) and the produced-tree manifests — all
+/// verified on capture load — but the RAW STREAM BYTES are capture files, and
+/// the comparators that parse them (bytes.wire, structured.state, and any
+/// future domain comparator) need them materialized and re-verified against
+/// the recorded hashes. An evaluation path hydrates EXACTLY what its plan
+/// declares: never less (a missing requirement is a refusal, never a silent
+/// empty value) and never more (nothing is loaded that the evaluation cannot
+/// touch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureRequirement {
+    /// The exit-code projection (serialized; verified on capture load).
+    Exit,
+    /// The first stdout line (serialized; verified on capture load).
+    StdoutFirstLine,
+    /// The first stderr line (serialized; verified on capture load).
+    StderrFirstLine,
+    /// The FULL stdout bytes: the `{side}.stdout` capture file, rehashed
+    /// against the recorded `stdout_sha256` (bytes.wire, structured.state).
+    StdoutBytes,
+    /// The FULL stderr bytes: the `{side}.stderr` capture file, rehashed
+    /// against the recorded `stderr_sha256`.
+    StderrBytes,
+    /// The produced-artifact tree (serialized manifests; the raw files are
+    /// rehashed by capture verification — the filesystem.tree surface).
+    ProducedTree,
+}
+
+impl CaptureRequirement {
+    pub const ALL: [CaptureRequirement; 6] = [
+        CaptureRequirement::Exit,
+        CaptureRequirement::StdoutFirstLine,
+        CaptureRequirement::StderrFirstLine,
+        CaptureRequirement::StdoutBytes,
+        CaptureRequirement::StderrBytes,
+        CaptureRequirement::ProducedTree,
+    ];
+
+    /// The capture file this requirement re-hydrates, when it is a raw stream
+    /// (`StdoutBytes`/`StderrBytes`); `None` for the serialized projections.
+    pub fn stream_file(self) -> Option<&'static str> {
+        match self {
+            CaptureRequirement::StdoutBytes => Some("stdout"),
+            CaptureRequirement::StderrBytes => Some("stderr"),
+            _ => None,
+        }
+    }
+}
+
 /// The in-binary comparator implementations, as strongly typed helpers.
 /// The evidence core never matches on these directly — the registry keys the
 /// comparison on the observable id — but the built-in extractors live here,
@@ -426,6 +476,22 @@ impl BuiltinKind {
             BuiltinKind::Stderr => Some("first-diagnostic-line"),
             BuiltinKind::Stdout => Some("first-stdout-line"),
             BuiltinKind::Tree | BuiltinKind::Bytes | BuiltinKind::Json => None,
+        }
+    }
+
+    /// The CAPTURE REQUIREMENTS this built-in's evaluation declares: what
+    /// must be hydrated (and verified) from the run's captured files before
+    /// `compare` may run. The serialized projections need nothing beyond
+    /// capture verification; the stream-parsing domain comparators need the
+    /// raw bytes.
+    pub fn capture_requirements(self) -> Vec<CaptureRequirement> {
+        match self {
+            BuiltinKind::Exit => vec![CaptureRequirement::Exit],
+            BuiltinKind::Stderr => vec![CaptureRequirement::StderrFirstLine],
+            BuiltinKind::Stdout => vec![CaptureRequirement::StdoutFirstLine],
+            BuiltinKind::Tree => vec![CaptureRequirement::ProducedTree],
+            BuiltinKind::Bytes => vec![CaptureRequirement::StdoutBytes],
+            BuiltinKind::Json => vec![CaptureRequirement::StdoutBytes],
         }
     }
 
@@ -876,6 +942,30 @@ impl EvaluationPlan {
             implementation,
         })
     }
+
+    /// The CAPTURE REQUIREMENTS this plan's evaluation declares: what an
+    /// evaluation path must hydrate (and verify) from the run's captured
+    /// files before `evaluate` may run.
+    ///
+    /// - an in-binary built-in needs exactly its built-in's requirements
+    ///   (the serialized projections, or the raw stdout bytes the domain
+    ///   comparators parse);
+    /// - an externally served axis needs BOTH raw streams (its request
+    ///   carries the side outcomes, normalized when normalizers applied);
+    ///   the produced trees travel serialized in the capture (verified on
+    ///   load) and are delivered via the evaluation context.
+    pub fn capture_requirements(&self) -> Vec<CaptureRequirement> {
+        if self.implementation.artifact.is_some() {
+            vec![
+                CaptureRequirement::StdoutBytes,
+                CaptureRequirement::StderrBytes,
+            ]
+        } else {
+            BuiltinKind::from_id(self.axis.as_str())
+                .map(|b| b.capture_requirements())
+                .unwrap_or_else(|| vec![CaptureRequirement::Exit])
+        }
+    }
 }
 
 /// The observation context a comparison is made under: everything outside
@@ -1075,6 +1165,52 @@ mod tests {
     use crate::model::{ComparatorDeclaration, ComparatorResidual, ProducedFile};
 
     #[test]
+    fn each_builtin_declares_exactly_its_capture_requirements() {
+        // Every built-in's evaluation needs its surface hydrated and verified:
+        // the serialized projections for the single-surface built-ins, the
+        // raw stdout BYTES for the stream-parsing domain comparators, the
+        // produced trees for filesystem.tree. A requirement is never
+        // silently empty — hydration either satisfies it or refuses.
+        assert_eq!(
+            BuiltinKind::Exit.capture_requirements(),
+            vec![CaptureRequirement::Exit]
+        );
+        assert_eq!(
+            BuiltinKind::Stderr.capture_requirements(),
+            vec![CaptureRequirement::StderrFirstLine]
+        );
+        assert_eq!(
+            BuiltinKind::Stdout.capture_requirements(),
+            vec![CaptureRequirement::StdoutFirstLine]
+        );
+        assert_eq!(
+            BuiltinKind::Tree.capture_requirements(),
+            vec![CaptureRequirement::ProducedTree]
+        );
+        assert_eq!(
+            BuiltinKind::Bytes.capture_requirements(),
+            vec![CaptureRequirement::StdoutBytes]
+        );
+        assert_eq!(
+            BuiltinKind::Json.capture_requirements(),
+            vec![CaptureRequirement::StdoutBytes]
+        );
+        // Every requirement maps to a stream file exactly when it is a raw
+        // stream requirement.
+        for req in CaptureRequirement::ALL {
+            match req {
+                CaptureRequirement::StdoutBytes => {
+                    assert_eq!(req.stream_file(), Some("stdout"))
+                }
+                CaptureRequirement::StderrBytes => {
+                    assert_eq!(req.stream_file(), Some("stderr"))
+                }
+                _ => assert_eq!(req.stream_file(), None),
+            }
+        }
+    }
+
+    #[test]
     fn semantics_are_stable_and_distinct() {
         let a = semantic("exit").unwrap();
         assert_eq!(a, semantic("exit").unwrap());
@@ -1235,6 +1371,8 @@ mod tests {
             produced: None,
             adapted: None,
             stdout_bytes: vec![],
+
+            stderr_bytes: vec![],
         };
         let candidate = SideCapture {
             exit: "1".into(),
@@ -1248,6 +1386,8 @@ mod tests {
             produced: None,
             adapted: None,
             stdout_bytes: vec![],
+
+            stderr_bytes: vec![],
         };
         let divergences = BuiltinKind::Exit.compare(&reference, &candidate).unwrap();
         assert_eq!(
@@ -1293,6 +1433,8 @@ mod tests {
             }),
             adapted: None,
             stdout_bytes: vec![],
+
+            stderr_bytes: vec![],
         };
         let reference = side(true);
         let candidate = side(false);
@@ -1332,6 +1474,7 @@ mod tests {
             produced: None,
             adapted: None,
             stdout_bytes: stdout.as_bytes().to_vec(),
+            stderr_bytes: vec![],
         };
         // Both sides invalid: indeterminate — the two broken documents do
         // not license equivalence.
