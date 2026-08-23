@@ -198,7 +198,11 @@ pub fn status(store: &Store) -> Result<()> {
 ///   - the output must NOT already exist (the publication is written fresh,
 ///     never overwritten);
 ///   - after the transform the OUTPUT must verify at the graph level with
-///     the closure incomplete-by-policy exactly as declared.
+///     the closure incomplete-by-policy exactly as declared;
+///   - the EXACT-CLOSURE rule: `set(policy CIDs) == set(required-but-detached
+///     graph CIDs)` — a policy entry the graph does not reference is a dead
+///     hand-wave (it names no evidence), and a graph-referenced payload the
+///     policy does not name would be PUBLISHED. No more, no less.
 pub fn publish_detached(source: &Store, policy: &Path, output: &Path) -> Result<PathBuf> {
     // 1. The policy: a frf-detached-objects-v1 declaration naming the cids
     //    (and optional record paths) to withhold.
@@ -330,6 +334,45 @@ pub fn publish_detached(source: &Store, policy: &Path, output: &Path) -> Result<
                 &d.cid[..16]
             )));
         }
+    }
+    // The EXACT-CLOSURE rule — the commit language "exactly the declared
+    // closure" is enforced as SET EQUALITY, both directions:
+    //
+    //   set(policy CIDs) == set(required-but-detached graph CIDs)
+    //
+    // - a policy entry the graph traversal does NOT reference is a dead
+    //   hand-wave: it names no evidence, so it can never be required, and it
+    //   must not ride along as an unfulfilled declaration;
+    // - a graph-referenced payload the policy does NOT name would be
+    //   PUBLISHED — the exact leak the transform exists to prevent.
+    let mut policy_cids: Vec<&str> = policy_doc.objects.iter().map(|o| o.cid.as_str()).collect();
+    policy_cids.sort_unstable();
+    let mut observed_cids: Vec<&str> = out_status.detached.iter().map(|d| d.cid.as_str()).collect();
+    observed_cids.sort_unstable();
+    if policy_cids != observed_cids {
+        let policy_only: Vec<&str> = policy_cids
+            .iter()
+            .filter(|c| !observed_cids.contains(c))
+            .copied()
+            .collect();
+        let graph_only: Vec<&str> = observed_cids
+            .iter()
+            .filter(|c| !policy_cids.contains(c))
+            .copied()
+            .collect();
+        return Err(FrfError::new(format!(
+            "publish-detached: set(policy) != set(required-but-detached graph) — policy-only cids: [{}]; graph-only cids: [{}]; the declaration must name EXACTLY the payloads the graph requires detached",
+            policy_only
+                .iter()
+                .map(|c| &c[..16])
+                .collect::<Vec<_>>()
+                .join(", "),
+            graph_only
+                .iter()
+                .map(|c| &c[..16])
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
     }
 
     Ok(output.to_path_buf())
