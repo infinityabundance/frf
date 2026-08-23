@@ -154,9 +154,9 @@ pub fn divergence_magnitude(
             Some((a - b).abs().to_string())
         }
         "stderr" | "stdout" | "structured.state" => Some(
-            edit_distance(
-                &truncate(raw_reference, MAGNITUDE_BOUND),
-                &truncate(raw_candidate, MAGNITUDE_BOUND),
+            edit_distance_bytes(
+                &raw_reference.as_bytes()[..raw_reference.len().min(MAGNITUDE_BOUND)],
+                &raw_candidate.as_bytes()[..raw_candidate.len().min(MAGNITUDE_BOUND)],
             )
             .to_string(),
         ),
@@ -164,23 +164,19 @@ pub fn divergence_magnitude(
     }
 }
 
-fn truncate(s: &str, bound: usize) -> String {
-    if s.len() <= bound {
-        s.to_string()
-    } else {
-        s[..bound].to_string()
-    }
-}
-
-/// The Levenshtein (byte edit) distance between two strings — deterministic,
-/// declared as the line/value distance measure of the text-family
-/// comparators. The inputs are already bounded by the caller.
-pub fn edit_distance(a: &str, b: &str) -> usize {
+/// The Levenshtein (byte edit) distance between two byte sequences —
+/// deterministic, declared as the line/value distance measure of the
+/// text-family comparators. The inputs are already bounded by the caller.
+///
+/// 0.1.63: the measure consumes BOUNDED BYTES directly — a projection longer
+/// than `MAGNITUDE_BOUND` is truncated at the byte bound (a multibyte
+/// character straddling the bound is counted by the bytes present, exactly as
+/// the declared byte measure says). There is no UTF-8 boundary question: a
+/// hostile projection can never panic the derivation.
+pub fn edit_distance_bytes(a: &[u8], b: &[u8]) -> usize {
     if a == b {
         return 0;
     }
-    let a: Vec<u8> = a.as_bytes().to_vec();
-    let b: Vec<u8> = b.as_bytes().to_vec();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     let mut curr: Vec<usize> = vec![0; b.len() + 1];
     for i in 1..=a.len() {
@@ -1368,6 +1364,98 @@ mod tests {
                 assert_eq!(v[0].0.as_deref(), Some("$.config.timeout"));
             }
             _ => panic!("expected a field divergence"),
+        }
+    }
+
+    /// 0.1.63 — the byte-bound fix: the magnitude measure truncates at the
+    /// DECLARED BYTE bound (2048). A multibyte character straddling byte 2048
+    /// must not panic, and the distance is computed over exactly the first
+    /// 2048 BYTES (a split character counts by the bytes present) — identical
+    /// to the Go verifier's byte semantics.
+    #[test]
+    fn magnitude_truncates_at_the_byte_bound_without_panicking() {
+        use crate::comparators::{divergence_magnitude, edit_distance_bytes, MAGNITUDE_BOUND};
+        // 2047 ASCII bytes + a 3-byte UTF-8 char: byte 2048 falls INSIDE the
+        // char (bytes 2047..=2049). The old `s[..2048]` panicked here; the
+        // byte-bound implementation counts the first byte of the char and
+        // moves on.
+        let mut a = "a".repeat(MAGNITUDE_BOUND - 1);
+        a.push('\u{03bb}'); // λ — 3 bytes, straddling the 2048 bound
+        let b = "b".repeat(MAGNITUDE_BOUND);
+        let mag =
+            divergence_magnitude("stderr", &a, &b).expect("the measure must compute, never panic");
+        let expected = edit_distance_bytes(
+            &a.as_bytes()[..MAGNITUDE_BOUND],
+            &b.as_bytes()[..MAGNITUDE_BOUND],
+        );
+        assert_eq!(mag, expected.to_string());
+        // The distance is over the first 2048 BYTES exactly: a is 2048 bytes
+        // after the truncation (2047 ASCII + the first byte of λ).
+        assert_eq!(
+            a.as_bytes()[..MAGNITUDE_BOUND].len(),
+            MAGNITUDE_BOUND,
+            "the bound is bytes, not characters"
+        );
+        assert_eq!(
+            expected, MAGNITUDE_BOUND,
+            "every byte of the two 2048-byte strings differs — 2048 substitutions"
+        );
+
+        // The truncated reference is NOT valid UTF-8 (the split char), and
+        // that must be irrelevant: the measure is declared over bytes.
+        assert!(std::str::from_utf8(&a.as_bytes()[..MAGNITUDE_BOUND]).is_err());
+    }
+
+    /// 0.1.63 — the weaponized category: ANY hostile observation bytes must
+    /// produce bounded evidence or a bounded refusal, never a panic. Sweep
+    /// arbitrary byte sequences (including invalid UTF-8 and a char straddling
+    /// the bound on BOTH sides) through the magnitude measure.
+    #[test]
+    fn hostile_observation_bytes_never_panic_the_magnitude_measure() {
+        use crate::comparators::divergence_magnitude;
+        // Byte sequences, valid and invalid UTF-8, at and around the bound.
+        let cases: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0u8],
+            vec![0xff, 0xfe, 0xfd], // invalid UTF-8
+            vec![0x80, 0x80, 0x80], // continuation bytes alone
+            b"hello".to_vec(),
+            b"a".repeat(2047), // exactly the bound
+            b"a".repeat(2048), // the bound
+            b"a".repeat(2049), // one past
+            {
+                let mut s = b"a".repeat(2047);
+                s.extend_from_slice(&[0xce, 0xbb, 0x20]); // λ split across the bound
+                s
+            },
+            {
+                let mut s = b"a".repeat(2046);
+                s.extend_from_slice(&[0xf0, 0x9f, 0x98, 0x80]); // emoji crossing the bound
+                s
+            },
+            (0u8..=255).collect(),                    // every byte value
+            (0u8..=255).cycle().take(5000).collect(), // long hostile stream
+        ];
+        for (i, ra) in cases.iter().enumerate() {
+            for (j, rb) in cases.iter().enumerate() {
+                let ra = String::from_utf8_lossy(ra);
+                let rb = String::from_utf8_lossy(rb);
+                // Must compute (never panic) for every text axis, and the
+                // result must be a non-negative decimal string.
+                for axis in ["stderr", "stdout", "structured.state"] {
+                    let mag = divergence_magnitude(axis, &ra, &rb)
+                        .expect("hostile bytes must compute, never panic");
+                    assert!(
+                        mag.parse::<u64>().is_ok(),
+                        "{i}/{j} {axis}: magnitude {mag:?} is not a decimal string"
+                    );
+                }
+                // The exit axis: hostile non-numeric input is a bounded
+                // refusal (None), never a panic.
+                if let Some(mag) = divergence_magnitude("exit", &ra, &rb) {
+                    assert!(mag.parse::<u64>().is_ok());
+                }
+            }
         }
     }
 }

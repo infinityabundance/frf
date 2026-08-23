@@ -822,7 +822,36 @@ pub fn produced_max_file_bytes() -> u64 {
         .unwrap_or(EXEC_PRODUCED_MAX_FILE_BYTES)
 }
 
-/// Effective address-space limit (MiB), `FRF_EXEC_RLIMIT_AS_MB` override.
+/// The SELF CPU of this process (getrusage(RUSAGE_SELF) user+sys, ms) — the
+/// harness process's OWN CPU, excluding any children it spawned. 0.1.63: the
+/// benchmark protocol reads this from the frf process itself
+/// (FRF_PRINT_SELF_CPU=1) so harness-attributable CPU is separated from the
+/// sides' CPU (which is accounted independently), never conflated.
+pub fn self_cpu_ms() -> f64 {
+    #[cfg(unix)]
+    {
+        let mut ru = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage writes the struct on success; the pointer is
+        // valid for the lifetime of the call.
+        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, ru.as_mut_ptr()) };
+        if rc != 0 {
+            return 0.0;
+        }
+        // SAFETY: rc == 0 means the struct was initialized.
+        let ru = unsafe { ru.assume_init() };
+        (ru.ru_utime.tv_sec as f64
+            + ru.ru_utime.tv_usec as f64 / 1e6
+            + ru.ru_stime.tv_sec as f64
+            + ru.ru_stime.tv_usec as f64 / 1e6)
+            * 1e3
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
+}
+
+/// The effective address-space limit (MiB), `FRF_EXEC_RLIMIT_AS_MB` override.
 pub fn rlimit_as_mb() -> u64 {
     std::env::var("FRF_EXEC_RLIMIT_AS_MB")
         .ok()

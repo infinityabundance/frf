@@ -12,6 +12,7 @@ pub mod witness;
 
 use crate::cli::*;
 use crate::error::Result;
+use crate::host;
 use crate::store::Store;
 
 pub fn dispatch(store: &Store, command: Command) -> Result<()> {
@@ -62,6 +63,18 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 };
                 let run = court::run(store, &manifest, &opts)?;
                 println!("{run}");
+                // 0.1.63: the benchmark protocol needs the HARNESS PROCESS's
+                // own CPU (RUSAGE_SELF — user+sys of the frf executable
+                // itself, excluding the sides it spawned) separated from the
+                // sides' CPU. Printed only when explicitly requested
+                // (FRF_PRINT_SELF_CPU=1, set by the v5 benchmark); a hostile
+                // or benchmark-free invocation is unaffected.
+                if std::env::var("FRF_PRINT_SELF_CPU")
+                    .map(|v| v == "1")
+                    .unwrap_or(false)
+                {
+                    println!("frf-self-cpu-ms: {:.3}", host::self_cpu_ms());
+                }
                 Ok(())
             }
             CourtCmd::Minimize { residual } => {

@@ -1,0 +1,393 @@
+{
+  "benchmark": {
+    "aggregate_court_cpu": "proxy: harness RUSAGE_SELF + bare_pair side CPU (the sides are not re-measured inside the court)",
+    "counterbalance": "deterministic cyclic rotation of the three measurements per sample index; no measurement always runs first or last",
+    "env_overrides": "FRF_BENCH_WARMUPS / FRF_BENCH_SAMPLES",
+    "explicit_sample_override": true,
+    "harness_cpu_source": "the frf process reports getrusage(RUSAGE_SELF) under FRF_PRINT_SELF_CPU=1",
+    "measurements": [
+      "bare_candidate",
+      "bare_pair",
+      "frf_court"
+    ],
+    "prepared_store": "the reference authority is pre-admitted; admission is a one-time setup, deliberately excluded from the observation timing",
+    "quantile_convention": "nearest-index empirical quantile round(p·(n−1))",
+    "samples": "5",
+    "warmups": "1"
+  },
+  "cases": [
+    {
+      "cve": "CVE-2014-6271",
+      "hermeticity": {
+        "distinct_execution_identities": "1",
+        "distinct_observation_identities": "1",
+        "distinct_run_ids_across_samples": "1",
+        "execution_identities": [
+          {
+            "execution_identity": "4aa95758473b39ebf0aa86f291485ec6017b1a0b336de0d93ca0b3e60ecfa4de",
+            "samples": "5"
+          }
+        ],
+        "observation_identities": [
+          {
+            "observation_identity": "25a131204ffbb96311efa80f04817ef21cfad79775348635339db24b0f418224",
+            "samples": "5"
+          }
+        ],
+        "run_ids": [
+          {
+            "run": "run-env-import-check-886817419cc69c3c27c7cab8aae75630b2d7f6d3f753525c45fbff90099fad63",
+            "samples": "5"
+          }
+        ],
+        "sample_orders": [
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate",
+          "FrfCourt + BareCandidate + BarePair",
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate"
+        ]
+      },
+      "id": "shellshock",
+      "measurements": {
+        "bare_candidate": {
+          "cpu_ms_median": "0.3",
+          "side": "builds/bash-4.3.0",
+          "wall": {
+            "max_ms": "0.57",
+            "mean_ms": "0.42",
+            "min_ms": "0.32",
+            "p50_ms": "0.38",
+            "p90_ms": "0.57",
+            "p99_ms": "0.57",
+            "samples": "5",
+            "stddev_ms": "0.09"
+          }
+        },
+        "bare_pair": {
+          "candidate_side": "builds/bash-4.3.0",
+          "cpu_ms_median": "0.7",
+          "reference_side": "builds/bash-4.3.30",
+          "wall": {
+            "max_ms": "0.93",
+            "mean_ms": "0.78",
+            "min_ms": "0.63",
+            "p50_ms": "0.74",
+            "p90_ms": "0.93",
+            "p99_ms": "0.93",
+            "samples": "5",
+            "stddev_ms": "0.12"
+          }
+        },
+        "frf_court": {
+          "harness_cpu_ms_median": "12.4",
+          "manifest": "courts/shellshock/manifest-defect.yaml",
+          "wall": {
+            "max_ms": "98.24",
+            "mean_ms": "97.85",
+            "min_ms": "97.41",
+            "p50_ms": "97.72",
+            "p90_ms": "98.24",
+            "p99_ms": "98.24",
+            "samples": "5",
+            "stddev_ms": "0.32"
+          }
+        }
+      },
+      "overhead": {
+        "aggregate_court_cpu_proxy_ms_median": "13.1",
+        "framework_overhead_ms": {
+          "max_ms": "97.46",
+          "mean_ms": "97.07",
+          "min_ms": "96.78",
+          "p50_ms": "97.03",
+          "p90_ms": "97.46",
+          "p99_ms": "97.46",
+          "samples": "5",
+          "stddev_ms": "0.28"
+        },
+        "framework_ratio": {
+          "p50": "132.77",
+          "p90": "105.52"
+        },
+        "harness_cpu_ms_median": "12.4",
+        "user_visible_amplification": {
+          "p50": "256.49",
+          "p90": "171.74"
+        }
+      },
+      "project": "GNU bash",
+      "protocol": {
+        "counterbalance": "the three measurements are cyclically rotated per sample index; no measurement always runs first or last",
+        "cpu": {
+          "aggregate": "proxy: harness RUSAGE_SELF median + bare_pair side-CPU median — the sides are not re-measured inside the court; labeled a proxy",
+          "harness": "the frf process itself reports getrusage(RUSAGE_SELF) user+sys (FRF_PRINT_SELF_CPU=1) — the harness executable's own CPU, excluding the sides it spawned",
+          "sides": "the bare measurements report getrusage(RUSAGE_CHILDREN) deltas — the side(s)' own CPU (the only waited-for children); the court sides are the same binaries the bare rows measured"
+        },
+        "isolation": "a fresh PREPARED store per frf_court sample (a copy of the staged tree); the authority is pre-admitted — admission is a one-time setup, deliberately excluded from the observation timing; the reuse path never short-circuits",
+        "overhead_decomposition": {
+          "framework_overhead": "frf_court − bare_pair (paired per sample) — evidence construction, hashing, sealing, capture, comparison, storage beyond the two executions",
+          "framework_ratio": "frf_court / bare_pair",
+          "ratio_denominator_floor": "0.001 ms (1 µs) — below measurement resolution; prevents division by a measured zero when a side is sub-microsecond",
+          "user_visible_amplification": "frf_court / bare_candidate — what using FRF costs vs just running the program"
+        },
+        "quantiles": "nearest-index empirical quantile round(p·(n−1)) over the sorted samples",
+        "samples": "5",
+        "wall": "process wall time, ms (microsecond precision)",
+        "warmups": "1"
+      }
+    },
+    {
+      "cve": "CVE-2014-0160",
+      "hermeticity": {
+        "distinct_execution_identities": "1",
+        "distinct_observation_identities": "1",
+        "distinct_run_ids_across_samples": "1",
+        "execution_identities": [
+          {
+            "execution_identity": "8d193221c31bec55e1468bca8627029ab6aa882bad1bea02f75d796354fab87f",
+            "samples": "5"
+          }
+        ],
+        "observation_identities": [
+          {
+            "observation_identity": "39d91908c4d8fcd373dfc11544ab10213ca10d2cc9d40c5071b49a50d9156de9",
+            "samples": "5"
+          }
+        ],
+        "run_ids": [
+          {
+            "run": "run-heartbeat-check-b223cc5cc51b0c9e05422d13f4db6cb90159f31c9fa7a08dfad9705586a5f403",
+            "samples": "5"
+          }
+        ],
+        "sample_orders": [
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate",
+          "FrfCourt + BareCandidate + BarePair",
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate"
+        ]
+      },
+      "id": "heartbleed",
+      "measurements": {
+        "bare_candidate": {
+          "cpu_ms_median": "1.2",
+          "side": "builds/hb-1.0.1f",
+          "wall": {
+            "max_ms": "15870.61",
+            "mean_ms": "15862.48",
+            "min_ms": "15858.32",
+            "p50_ms": "15860.10",
+            "p90_ms": "15870.61",
+            "p99_ms": "15870.61",
+            "samples": "5",
+            "stddev_ms": "4.53"
+          }
+        },
+        "bare_pair": {
+          "candidate_side": "builds/hb-1.0.1f",
+          "cpu_ms_median": "2.5",
+          "reference_side": "builds/hb-1.0.1g",
+          "wall": {
+            "max_ms": "31745.02",
+            "mean_ms": "31740.35",
+            "min_ms": "31731.33",
+            "p50_ms": "31744.00",
+            "p90_ms": "31745.02",
+            "p99_ms": "31745.02",
+            "samples": "5",
+            "stddev_ms": "5.26"
+          }
+        },
+        "frf_court": {
+          "harness_cpu_ms_median": "22.0",
+          "manifest": "courts/heartbleed/manifest-defect.yaml",
+          "wall": {
+            "max_ms": "31755.81",
+            "mean_ms": "31753.20",
+            "min_ms": "31749.03",
+            "p50_ms": "31754.12",
+            "p90_ms": "31755.81",
+            "p99_ms": "31755.81",
+            "samples": "5",
+            "stddev_ms": "2.56"
+          }
+        }
+      },
+      "overhead": {
+        "aggregate_court_cpu_proxy_ms_median": "24.5",
+        "framework_overhead_ms": {
+          "max_ms": "24.13",
+          "mean_ms": "12.85",
+          "min_ms": "5.04",
+          "p50_ms": "11.80",
+          "p90_ms": "24.13",
+          "p99_ms": "24.13",
+          "samples": "5",
+          "stddev_ms": "6.41"
+        },
+        "framework_ratio": {
+          "p50": "1.00",
+          "p90": "1.00"
+        },
+        "harness_cpu_ms_median": "22.0",
+        "user_visible_amplification": {
+          "p50": "2.00",
+          "p90": "2.00"
+        }
+      },
+      "project": "OpenSSL",
+      "protocol": {
+        "counterbalance": "the three measurements are cyclically rotated per sample index; no measurement always runs first or last",
+        "cpu": {
+          "aggregate": "proxy: harness RUSAGE_SELF median + bare_pair side-CPU median — the sides are not re-measured inside the court; labeled a proxy",
+          "harness": "the frf process itself reports getrusage(RUSAGE_SELF) user+sys (FRF_PRINT_SELF_CPU=1) — the harness executable's own CPU, excluding the sides it spawned",
+          "sides": "the bare measurements report getrusage(RUSAGE_CHILDREN) deltas — the side(s)' own CPU (the only waited-for children); the court sides are the same binaries the bare rows measured"
+        },
+        "isolation": "a fresh PREPARED store per frf_court sample (a copy of the staged tree); the authority is pre-admitted — admission is a one-time setup, deliberately excluded from the observation timing; the reuse path never short-circuits",
+        "overhead_decomposition": {
+          "framework_overhead": "frf_court − bare_pair (paired per sample) — evidence construction, hashing, sealing, capture, comparison, storage beyond the two executions",
+          "framework_ratio": "frf_court / bare_pair",
+          "ratio_denominator_floor": "0.001 ms (1 µs) — below measurement resolution; prevents division by a measured zero when a side is sub-microsecond",
+          "user_visible_amplification": "frf_court / bare_candidate — what using FRF costs vs just running the program"
+        },
+        "quantiles": "nearest-index empirical quantile round(p·(n−1)) over the sorted samples",
+        "samples": "5",
+        "wall": "process wall time, ms (microsecond precision)",
+        "warmups": "1"
+      }
+    },
+    {
+      "cve": "CVE-2021-44228",
+      "hermeticity": {
+        "distinct_execution_identities": "1",
+        "distinct_observation_identities": "1",
+        "distinct_run_ids_across_samples": "1",
+        "execution_identities": [
+          {
+            "execution_identity": "1f1c60c350b626291151a5fd981fb98f1962b34d62dc4069141a4aa80c4bfafc",
+            "samples": "5"
+          }
+        ],
+        "observation_identities": [
+          {
+            "observation_identity": "d96981cb1608f43838879d9a9390be3d959d4db4261e85801626f718e885f772",
+            "samples": "5"
+          }
+        ],
+        "run_ids": [
+          {
+            "run": "run-jndi-check-8d4683c80cad154fd354d520c6bb0564e9c7f4c14383ac9d2c068f65c4d1c588",
+            "samples": "5"
+          }
+        ],
+        "sample_orders": [
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate",
+          "FrfCourt + BareCandidate + BarePair",
+          "BareCandidate + BarePair + FrfCourt",
+          "BarePair + FrfCourt + BareCandidate"
+        ]
+      },
+      "id": "log4shell",
+      "measurements": {
+        "bare_candidate": {
+          "cpu_ms_median": "384.6",
+          "side": "builds/run-vuln.sh",
+          "wall": {
+            "max_ms": "188.88",
+            "mean_ms": "178.79",
+            "min_ms": "173.43",
+            "p50_ms": "176.76",
+            "p90_ms": "188.88",
+            "p99_ms": "188.88",
+            "samples": "5",
+            "stddev_ms": "5.35"
+          }
+        },
+        "bare_pair": {
+          "candidate_side": "builds/run-vuln.sh",
+          "cpu_ms_median": "755.6",
+          "reference_side": "builds/run-fixed.sh",
+          "wall": {
+            "max_ms": "365.66",
+            "mean_ms": "348.35",
+            "min_ms": "342.00",
+            "p50_ms": "345.44",
+            "p90_ms": "365.66",
+            "p99_ms": "365.66",
+            "samples": "5",
+            "stddev_ms": "8.76"
+          }
+        },
+        "frf_court": {
+          "harness_cpu_ms_median": "5.9",
+          "manifest": "courts/log4shell/manifest-defect.yaml",
+          "wall": {
+            "max_ms": "412.85",
+            "mean_ms": "379.68",
+            "min_ms": "370.81",
+            "p50_ms": "371.08",
+            "p90_ms": "412.85",
+            "p99_ms": "412.85",
+            "samples": "5",
+            "stddev_ms": "16.60"
+          }
+        }
+      },
+      "overhead": {
+        "aggregate_court_cpu_proxy_ms_median": "761.5",
+        "framework_overhead_ms": {
+          "max_ms": "47.19",
+          "mean_ms": "31.33",
+          "min_ms": "25.54",
+          "p50_ms": "28.81",
+          "p90_ms": "47.19",
+          "p99_ms": "47.19",
+          "samples": "5",
+          "stddev_ms": "8.10"
+        },
+        "framework_ratio": {
+          "p50": "1.07",
+          "p90": "1.13"
+        },
+        "harness_cpu_ms_median": "5.9",
+        "user_visible_amplification": {
+          "p50": "2.10",
+          "p90": "2.19"
+        }
+      },
+      "project": "Apache Log4j",
+      "protocol": {
+        "counterbalance": "the three measurements are cyclically rotated per sample index; no measurement always runs first or last",
+        "cpu": {
+          "aggregate": "proxy: harness RUSAGE_SELF median + bare_pair side-CPU median — the sides are not re-measured inside the court; labeled a proxy",
+          "harness": "the frf process itself reports getrusage(RUSAGE_SELF) user+sys (FRF_PRINT_SELF_CPU=1) — the harness executable's own CPU, excluding the sides it spawned",
+          "sides": "the bare measurements report getrusage(RUSAGE_CHILDREN) deltas — the side(s)' own CPU (the only waited-for children); the court sides are the same binaries the bare rows measured"
+        },
+        "isolation": "a fresh PREPARED store per frf_court sample (a copy of the staged tree); the authority is pre-admitted — admission is a one-time setup, deliberately excluded from the observation timing; the reuse path never short-circuits",
+        "overhead_decomposition": {
+          "framework_overhead": "frf_court − bare_pair (paired per sample) — evidence construction, hashing, sealing, capture, comparison, storage beyond the two executions",
+          "framework_ratio": "frf_court / bare_pair",
+          "ratio_denominator_floor": "0.001 ms (1 µs) — below measurement resolution; prevents division by a measured zero when a side is sub-microsecond",
+          "user_visible_amplification": "frf_court / bare_candidate — what using FRF costs vs just running the program"
+        },
+        "quantiles": "nearest-index empirical quantile round(p·(n−1)) over the sorted samples",
+        "samples": "5",
+        "wall": "process wall time, ms (microsecond precision)",
+        "warmups": "1"
+      }
+    }
+  ],
+  "description": "The proper single-host runtime-overhead benchmark: three measurements per sample (bare_candidate, bare_pair, frf_court), deterministically counterbalanced; warmups + isolated samples; wall + separately-attributed CPU (the frf process reports its own RUSAGE_SELF for harness CPU; the sides' CPU comes from the bare measurements); p50/p90/p99; the PAIRED framework-overhead distribution (frf_court − bare_pair); machine description. Measurements only — no timing thresholds; the gates are protocol-correctness gates (execution, hermeticity at both identity layers, monotonic quantiles, machine description).",
+  "machine": {
+    "cpu_count": "16",
+    "cpu_model": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "frf_version": "0.1.63",
+    "mem_total_kb": "131533448",
+    "uname": "Linux 7.1.8-1-cachyos x86_64"
+  },
+  "protocol": "frf-external-experiment-v5",
+  "skipped_cases": []
+}

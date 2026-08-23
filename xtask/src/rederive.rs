@@ -832,9 +832,9 @@ pub fn divergence_magnitude(
             Some((a - b).abs().to_string())
         }
         "stderr" | "stdout" | "structured.state" => Some(
-            edit_distance(
-                &truncate(raw_reference, MAGNITUDE_BOUND),
-                &truncate(raw_candidate, MAGNITUDE_BOUND),
+            edit_distance_bytes(
+                &raw_reference.as_bytes()[..raw_reference.len().min(MAGNITUDE_BOUND)],
+                &raw_candidate.as_bytes()[..raw_candidate.len().min(MAGNITUDE_BOUND)],
             )
             .to_string(),
         ),
@@ -851,22 +851,16 @@ pub fn magnitude_kind(axis: &str) -> String {
     }
 }
 
-fn truncate(s: &str, bound: usize) -> String {
-    if s.len() <= bound {
-        s.to_string()
-    } else {
-        s[..bound].to_string()
-    }
-}
-
 /// The Levenshtein (byte edit) distance — the declared line/value distance
-/// measure of the text-family comparators.
-pub fn edit_distance(a: &str, b: &str) -> usize {
+/// measure of the text-family comparators. 0.1.63: consumes BOUNDED BYTES
+/// (the same fix as the reference engine — a multibyte character straddling
+/// the 2048-byte bound is counted by the bytes present; no UTF-8 boundary
+/// question, no panic, identical semantics to the engine and the Go
+/// verifier).
+pub fn edit_distance_bytes(a: &[u8], b: &[u8]) -> usize {
     if a == b {
         return 0;
     }
-    let a: Vec<u8> = a.as_bytes().to_vec();
-    let b: Vec<u8> = b.as_bytes().to_vec();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
     let mut curr: Vec<usize> = vec![0; b.len() + 1];
     for i in 1..=a.len() {
