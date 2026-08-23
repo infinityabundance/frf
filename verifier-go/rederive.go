@@ -851,6 +851,15 @@ func reductionIdentity(r *jcs.Object) (string, error) {
 			Values: []jcs.Value{str(mo, "semantic_id"), str(mo, "semantic_hash"), str(mo, "implementation_hash"), recVal(mo, "implementation_artifact"), str(mo, "invocation_id"), str(mo, "result_id")},
 		}
 	}
+	// The minimizer's claim enters the identity ONLY when the record carries
+	// one (absent == None == the record shape written before the field
+	// existed; an explicit claim is a different preimage).
+	minimalityKeys := []string{"kind", "granularity", "proven"}
+	minimalityValues := []jcs.Value{str(minimality, "kind"), str(minimality, "granularity"), recVal(minimality, "proven")}
+	if v, ok := minimality.Get("proposal_minimality_claimed"); ok && v != nil {
+		minimalityKeys = append(minimalityKeys, "proposal_minimality_claimed")
+		minimalityValues = append(minimalityValues, v)
+	}
 	doc := &jcs.Object{
 		Keys: []string{"residual_id", "source_run", "axis", "kind", "court_semantic_identity", "authority_artifact_sha256", "candidate_artifact_sha256", "environment_digest", "comparator_semantic_id", "comparator_semantic_hash", "comparator_implementation_hash", "argv_template", "original_fixture_sha256", "final_fixture_sha256", "attempts", "derivation", "transform", "minimizer"},
 		Values: []jcs.Value{
@@ -864,8 +873,8 @@ func reductionIdentity(r *jcs.Object) (string, error) {
 				Keys: []string{"strategy", "original_lines", "final_lines", "minimality"},
 				Values: []jcs.Value{str(derivation, "strategy"), str(derivation, "original_lines"), str(derivation, "final_lines"),
 					&jcs.Object{
-						Keys:   []string{"kind", "granularity", "proven"},
-						Values: []jcs.Value{str(minimality, "kind"), str(minimality, "granularity"), recVal(minimality, "proven")},
+						Keys:   minimalityKeys,
+						Values: minimalityValues,
 					}},
 			},
 			recVal(r, "transform"),

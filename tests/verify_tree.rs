@@ -1391,6 +1391,18 @@ fn reductions_are_self_consistent() {
         // outcome; the budget-cut case must say so honestly.
         assert_eq!(r.derivation.minimality.kind, "one-minimal");
         assert_eq!(r.derivation.minimality.granularity, "line");
+        // The epistemic line that separates a claim from a proof: `proven` is
+        // only ever the CORE's own statement (a completed search, or a
+        // separately verifiable proof). A record that proves minimality can
+        // never be carrying a relayed external-minimizer claim.
+        assert!(
+            !r.derivation.minimality.proven
+                || r.derivation
+                    .minimality
+                    .proposal_minimality_claimed
+                    .is_none(),
+            "reduction {id}: proven=true must never be a relayed external-minimizer claim"
+        );
         if r.derivation.minimality.proven {
             assert!(
                 r.attempts.len() < 256,

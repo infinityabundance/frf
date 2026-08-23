@@ -784,6 +784,9 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
             kind: "one-minimal".to_string(),
             granularity: "line".to_string(),
             proven: minimal_proven,
+            // The built-in reducer IS the search: there is no external
+            // minimizer whose claim could be recorded.
+            proposal_minimality_claimed: None,
         },
     };
     let transform = EvidenceTransform::reduction(residual_id, &plan.semantic.relation_label());
@@ -1243,9 +1246,18 @@ fn minimize_external(
         minimality: ReductionMinimality {
             kind: "one-minimal".to_string(),
             granularity: "line".to_string(),
-            // The minimizer's own claim, recorded as claimed; the final
-            // proposal's survival is independently court-verified above.
-            proven: response.minimal,
+            // The external minimizer has NO oracle and NO search of its
+            // own; it proposes, and the core court-verifies each proposal.
+            // Minimality is NEVER relayed: the minimizer's `minimal` field
+            // is its own claim, recorded as `proposal_minimality_claimed`,
+            // and `proven` stays false unless the core establishes the
+            // predicate itself (a completed search or a separately
+            // verifiable proof — none exists for an external proposal in
+            // this version). The final proposal's SURVIVAL is
+            // independently court-verified above; survival is acceptance,
+            // not minimality.
+            proven: false,
+            proposal_minimality_claimed: Some(response.minimal),
         },
     };
     let transform = EvidenceTransform::reduction(&record.id, &plan.semantic.relation_label());
@@ -1319,13 +1331,15 @@ fn minimize_external(
     store.write_reduction(&reduction)?;
 
     eprintln!(
-        "reduction {}: {} -> {} line(s) (external minimizer {}, {} attempt(s), minimality proven={}, court-verified); reproducer object {}",
+        "reduction {}: {} -> {} line(s) (external minimizer {}, {} attempt(s), minimality proven=false (a proposal is a claim, not a proof; the minimizer claimed {}), court-verified); reproducer object {}",
         &id[..16],
         derivation.original_lines,
         derivation.final_lines,
         semantic.id,
         reduction.attempts.len(),
-        derivation.minimality.proven,
+        derivation.minimality
+            .proposal_minimality_claimed
+            .unwrap_or(false),
         &final_sha[..16]
     );
     Ok(id)

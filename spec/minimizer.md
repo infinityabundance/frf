@@ -108,7 +108,12 @@ index is a STRING: the canonical JSON value domain is
 strings/arrays/booleans/null, so a response cannot carry a JSON number
 (RFC 8785 number serialization is out of scope for the protocol value
 domain). `minimal` is the minimizer's own claim, recorded as claimed — the
-final proposal's survival is independently court-verified.
+final proposal's survival is independently court-verified. In the reduction
+record (`frf-reduction-v4`) the claim lands in
+`derivation.minimality.proposal_minimality_claimed` and is NEVER relayed
+into `derivation.minimality.proven`: `proven` is the core's own statement
+(a completed search or a core-checked proof), and an external proposal is
+ever either — the record says `proven: false` and carries the claim.
 
 ## 4. Fail-closed interpretation and court verification
 

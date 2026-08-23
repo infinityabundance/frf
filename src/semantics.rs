@@ -781,6 +781,19 @@ pub fn reduction_identity(
         })),
         None => None,
     };
+    let mut minimality = json!({
+        "kind": derivation.minimality.kind,
+        "granularity": derivation.minimality.granularity,
+        "proven": derivation.minimality.proven,
+    });
+    // The minimizer's claim enters the identity ONLY when the record carries
+    // one: an absent claim (built-in reducer) and an explicit claim (external
+    // minimizer) are different preimages, while records written before the
+    // field existed rederive identically (absent == None). A claim that
+    // entered the identity but never the record would alias; this cannot.
+    if let Some(claimed) = derivation.minimality.proposal_minimality_claimed {
+        minimality["proposal_minimality_claimed"] = json!(claimed);
+    }
     let doc = json!({
         "residual_id": residual_id,
         "source_run": source_run,
@@ -810,11 +823,7 @@ pub fn reduction_identity(
             "strategy": derivation.strategy,
             "original_lines": derivation.original_lines,
             "final_lines": derivation.final_lines,
-            "minimality": {
-                "kind": derivation.minimality.kind,
-                "granularity": derivation.minimality.granularity,
-                "proven": derivation.minimality.proven,
-            },
+            "minimality": minimality,
         },
         "transform": serde_json::to_value(transform)
             .map_err(|e| FrfError::new(format!("cannot serialize the transform: {e}")))?,

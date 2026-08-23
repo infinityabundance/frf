@@ -3605,9 +3605,21 @@ pub struct ReductionMinimality {
     pub kind: String,
     /// The granularity of removal (`line`).
     pub granularity: String,
-    /// Whether the search completed within the attempt budget (a cut short
-    /// search cannot claim minimality).
+    /// Whether the CORE actually established minimality (a completed search
+    /// at the declared granularity, or a separately verifiable proof the
+    /// core checked). NEVER a relayed claim: an external minimizer's
+    /// `minimal: true` is its own claim and is recorded in
+    /// `proposal_minimality_claimed`, not here.
     pub proven: bool,
+    /// The EXTERNAL minimizer's own minimality claim (its response's
+    /// `minimal` field), recorded as a claim — present (true or false) only
+    /// for external-minimizer reductions, absent for the built-in reducer
+    /// (which has no external claim to record). The core decides `proven`;
+    /// a claim is never proof. `Option` keeps records written before this
+    /// field existed byte-compatible: a missing field parses as None and
+    /// rederives identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_minimality_claimed: Option<bool>,
 }
 
 /// The derivation of a minimization experiment.

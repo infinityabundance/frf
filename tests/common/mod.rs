@@ -19,9 +19,12 @@ pub const CANONICAL_FILES: &[&str] = &[
     "golden/treegen-cand.sh",
     "golden/work/candidate-fixed.sh",
     "golden/comparators/stderr-first-line.py",
+    "golden/minimizers/ddmin-lines.py",
     "frf/courts/cli-malformed-input/manifest.yaml",
     "frf/courts/cli-malformed-input/manifest-candidate-fixed.yaml",
     "frf/courts/cli-malformed-input/fixtures/malformed-path.conf",
+    "frf/courts/cli-external-minimizer/manifest.yaml",
+    "frf/courts/cli-external-minimizer/fixtures/malformed-verbose.conf",
 ];
 
 /// The resolution court declaration: the same court question against the
@@ -64,6 +67,7 @@ impl Workdir {
         set_exec(&self.path("golden/candidate.sh"));
         set_exec(&self.path("golden/treegen-ref.sh"));
         set_exec(&self.path("golden/treegen-cand.sh"));
+        set_exec(&self.path("golden/minimizers/ddmin-lines.py"));
     }
 
     /// Overwrite the candidate with an arbitrary script (still executable).

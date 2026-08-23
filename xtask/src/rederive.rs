@@ -659,6 +659,19 @@ pub fn reduction_identity(
     transform: &Value,
     minimizer: &Value,
 ) -> String {
+    let mut minimality = json!({
+        "kind": s(&derivation["minimality"]["kind"]),
+        "granularity": s(&derivation["minimality"]["granularity"]),
+        "proven": derivation["minimality"]["proven"]
+            .as_bool()
+            .unwrap_or(false),
+    });
+    // The minimizer's claim enters the identity ONLY when the record carries
+    // one (absent == None == the record shape written before the field
+    // existed; an explicit claim is a different preimage).
+    if let Some(v) = derivation["minimality"].get("proposal_minimality_claimed") {
+        minimality["proposal_minimality_claimed"] = v.clone();
+    }
     let doc = json!({
         "residual_id": residual_id,
         "source_run": source_run,
@@ -689,11 +702,7 @@ pub fn reduction_identity(
             "strategy": s(&derivation["strategy"]),
             "original_lines": s(&derivation["original_lines"]),
             "final_lines": s(&derivation["final_lines"]),
-            "minimality": {
-                "kind": s(&derivation["minimality"]["kind"]),
-                "granularity": s(&derivation["minimality"]["granularity"]),
-                "proven": derivation["minimality"]["proven"].as_bool().unwrap_or(false),
-            },
+            "minimality": minimality,
         },
         "transform": transform,
         "minimizer": minimizer.as_object().map(|m| json!({

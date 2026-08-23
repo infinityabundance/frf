@@ -667,3 +667,104 @@ fn adversarial_state_machine_transitions() {
     );
     assert_success(&out, "the RESOLUTION receipt MAY license the claim");
 }
+
+// ---------------------------------------------------------------------------
+// The external-minimizer proof bypass (P0: proposal_minimality_claimed vs
+// minimality_proven)
+// ---------------------------------------------------------------------------
+
+/// An EXTERNAL minimizer has no oracle and no search of its own: it PROPOSES
+/// a reduced fixture, and the core court-verifies each proposal with the one
+/// comparison operation. Its response's `minimal` field is therefore a CLAIM,
+/// never proof. An adversarial minimizer that shouts `"minimal": true` must
+/// not be able to make FRF emit `minimality.proven: true`: the record must
+/// carry the claim as `proposal_minimality_claimed` and state `proven: false`
+/// unless the CORE itself established the predicate (a completed search or a
+/// separately verifiable proof — neither exists for an external proposal).
+/// The fixture used here is `golden/minimizers/ddmin-lines.py`, which does
+/// exactly that: it statically drops comment/blank lines and — like an
+/// adversarial minimizer — claims `minimal: true` in its response.
+#[test]
+fn external_minimizer_minimal_claim_is_never_proof() {
+    let work = Workdir::new("falsify-minimizer-proof");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    // The external-minimizer court: the same reference/candidate pair on a
+    // verbose fixture, with a minimizer declared for the exit residual's
+    // κ route (cli-exit-minimize).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/cli-external-minimizer/manifest.yaml",
+        ],
+    );
+    assert_success(&out, "external-minimizer court run");
+    let run = stdout(&out);
+
+    // The exit residual routes to the declared minimizer.
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    let residual = capture["residuals"]
+        .as_array()
+        .expect("the capture must record residuals")
+        .iter()
+        .find(|r| r.as_str().unwrap().starts_with("cli-exit-"))
+        .expect("the exit residual must exist")
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let out = frf(&work, &["--root", ROOT, "court", "minimize", &residual]);
+    assert_success(&out, "external minimize");
+    let reduction_id = stdout(&out);
+
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/reductions/{reduction_id}.json"))).unwrap(),
+    )
+    .unwrap();
+    let minimality = &record["derivation"]["minimality"];
+    // The record binds the external minimizer, so a reader can see the claim
+    // came from an extension, never from the core.
+    assert_eq!(record["minimizer_semantic_id"], "cli-exit-minimize");
+    // The minimizer DID claim minimality — the record carries the claim.
+    assert_eq!(
+        minimality["proposal_minimality_claimed"], true,
+        "the minimizer's own claim must be recorded as a claim"
+    );
+    // ...but the claim is never proof: the core did not search, so `proven`
+    // must be false. This is the assertion the old relay made impossible.
+    assert_eq!(
+        minimality["proven"], false,
+        "an external minimizer's `minimal: true` must NEVER become `proven: true`"
+    );
+    // And the committed record is identity-consistent: it rederives from its
+    // own fields (proven=false, claim present), and the content address the
+    // command printed matches the filename.
+    let store = store_of(&work);
+    let r = store.load_reduction(&reduction_id).expect(
+        "the reduction record must rederive its own content address (claim enters the identity)",
+    );
+    assert!(!r.derivation.minimality.proven);
+    assert_eq!(
+        r.derivation.minimality.proposal_minimality_claimed,
+        Some(true)
+    );
+    // The invocation evidence (the canonical request the minimizer answered
+    // with `minimal: true`) is preserved under the reduction.
+    for f in [
+        "request.json",
+        "response.json",
+        "invocation.json",
+        "result.json",
+    ] {
+        let p = work.path(&format!("{ROOT}/reductions/{reduction_id}/minimizer/{f}"));
+        assert!(p.is_file(), "missing minimizer evidence {f}");
+    }
+}

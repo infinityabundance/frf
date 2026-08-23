@@ -232,9 +232,12 @@ Per case:
    and nothing else (the seeded-mutant arm of the study).
 7. **minimum reproducer size (FRF + minimization)** — ddmin on the ladder's
    defect residual, with the reduction record's attempts, line/byte counts,
-   ratio, and minimality proof (the corpus fixtures are single-line
+   ratio, and minimality statement (the corpus fixtures are single-line
    markers, so the honest measurement is one-minimal at line granularity
-   with ratio 1.00 — the v1 program measured real multi-line reductions).
+   with ratio 1.00 — the v1 program measured real multi-line reductions;
+   when the residual's κ route is served by an EXTERNAL minimizer, the
+   record carries that minimizer's claim as `proposal_minimality_claimed`
+   and never a core-established `proven`).
 8. **claim inflation prevented** — the claim compiler on the buggy ladder
    run's receipt never covers a defect axis (the premise itself observed
    the divergence; a receipt with no clean axis is refused); the FIXED-side

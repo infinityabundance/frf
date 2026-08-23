@@ -70,11 +70,21 @@ around every executable attempt: neither the outer nor the inner ddmin loop
 can exceed it, and the final verification is executed under the same gate.
 
 `minimality` is stated precisely — `{kind: one-minimal, granularity: line,
-proven}`: classic ddmin establishes that no single line can be removed while
-preserving the lineage, not global cardinality minimality — and `proven` is
-only true when the deterministic search completed within the attempt budget;
-a budget-cut search says so honestly. The reproducer object lives under
-`objects/sha256/` like every other content-addressed artifact.
+proven, proposal_minimality_claimed?}`: classic ddmin establishes that no
+single line can be removed while preserving the lineage, not global
+cardinality minimality. `proven` is the CORE's own statement — true only
+when the deterministic search completed within the attempt budget (a
+budget-cut search says so honestly), or when the core itself checked a
+separately verifiable proof. An EXTERNAL minimizer has no oracle and no
+search of its own: it proposes, and the core court-verifies each proposal.
+Its response's `minimal` field is therefore recorded as the CLAIM
+`proposal_minimality_claimed` (present, true or false, only for
+external-minimizer reductions) and is NEVER relayed into `proven` — a
+claim is not a proof, and `proven` stays false unless the core established
+the predicate itself. The claim enters the record's content address when
+present, so a record carrying an external claim is identity-distinct from
+one that does not. The reproducer object lives under `objects/sha256/`
+like every other content-addressed artifact.
 
 The preservation predicate is decided by the SAME evaluation plan that
 observed the residual (`spec/evaluation.md`): the built-in implementation
