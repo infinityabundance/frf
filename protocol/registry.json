@@ -1060,7 +1060,7 @@
     },
     {
       "id": "high-assurance",
-      "meaning": "Independently witnessed + every premise observed under the reference execution profile and the reference capture bounds",
+      "meaning": "Independently witnessed + every premise observed under a profile providing the REQUIRED CAPABILITY SET (the reference contract: exact_capture_contract, sealed_executable_image, native_runtime_closure_bound) under the reference capture bounds \u2014 protocol constants no FRF_EXEC_* override can redefine. Every admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets) \u2014 assurance is orthogonal capabilities, never a profile-name equality; the claim records required_capabilities",
       "status": "active"
     }
   ],
@@ -1082,7 +1082,7 @@
     },
     {
       "id": "frf-exec-oci",
-      "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest \u2014 a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery \u2014 the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run \u2014 never a silent substitution. Extensions are harness-side instrumentation and run on the host. The reference profile remains frf-exec-linux-v1; high-assurance admission requires it",
+      "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest \u2014 a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery \u2014 the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run \u2014 never a silent substitution. Extensions are harness-side instrumentation and run on the host. An OCI observation is a different execution contract from a v1 one; both qualify for high-assurance when they provide the required capability set (the reference contract \u2014 spec/execution-profile.md \u00a7 assurance capabilities)",
       "status": "active"
     }
   ]

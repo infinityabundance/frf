@@ -907,6 +907,18 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n",
         serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
     assert_eq!(claim["policy"], "high-assurance");
     assert_eq!(claim["replay_profile"], "frf-exec-linux-v1");
+    // The claim records the capability set the policy REQUIRED — the
+    // reference contract — so the requirement rederives from the claim
+    // alone (assurance is orthogonal capabilities, not a profile-name
+    // equality).
+    assert_eq!(
+        claim["required_capabilities"],
+        serde_json::json!([
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "native_runtime_closure_bound"
+        ])
+    );
     assert_eq!(claim["witness_statements"].as_array().unwrap().len(), 1);
     assert_eq!(claim["capability"].as_array().unwrap().len(), 1);
     assert_eq!(

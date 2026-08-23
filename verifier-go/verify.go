@@ -963,11 +963,26 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 	}
 
 	if policy == "high-assurance" {
-		// EVERY premise was observed under the reference execution contract.
+		// High assurance requires a CAPABILITY SET (the reference contract),
+		// never a profile-name equality: every premise must have been
+		// observed under a profile providing every required capability (v1
+		// exactly; v2/v3/OCI provide supersets), under the exact capture
+		// contract, with the claim recording the requirement.
+		required := []string{}
+		for _, c := range arr(recVal(claim, "required_capabilities")) {
+			required = append(required, c.(string))
+		}
+		if len(required) == 0 {
+			fail("claim %s: high-assurance must record its required capability set", receiptID)
+		}
 		for _, premID := range requires {
 			prem := premise(premID)
-			if str(prem, "execution_profile") != "frf-exec-linux-v1" {
-				fail("claim %s: high-assurance requires the reference execution profile for premise %s", receiptID, premID)
+			profile := str(prem, "execution_profile")
+			caps := profileCapabilities(profile)
+			for _, c := range required {
+				if !contains(caps, c) {
+					fail("claim %s: high-assurance requires capability %s, premise %s (profile %s) does not provide it", receiptID, c, premID, profile)
+				}
 			}
 			bounds := obj(recVal(prem, "capture_bounds"))
 			if str(bounds, "timeout_ms") != "60000" ||
@@ -976,13 +991,40 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 				str(bounds, "rlimit_cpu_s") != "30" ||
 				str(bounds, "rlimit_nofile") != "1024" ||
 				str(bounds, "rlimit_nproc") != "4096" {
-				fail("claim %s: high-assurance requires the reference capture bounds (the exact-replay contract) for premise %s", receiptID, premID)
+				fail("claim %s: high-assurance requires the reference capture bounds (the exact capture contract) for premise %s", receiptID, premID)
 			}
 		}
 		if str(claim, "replay_profile") != "frf-exec-linux-v1" {
 			fail("claim %s: the claim's replay_profile does not record the reference profile", receiptID)
 		}
 	}
+}
+
+// profileCapabilities: the capability set of an execution profile (the
+// orthogonal assurance model, mirroring the reference engine): the reference
+// contract for every profile, plus each later profile's mechanism.
+func profileCapabilities(profile string) []string {
+	switch profile {
+	case "frf-exec-linux-v1":
+		return []string{"exact_capture_contract", "sealed_executable_image", "native_runtime_closure_bound"}
+	case "frf-exec-linux-v2":
+		return []string{"exact_capture_contract", "sealed_executable_image", "native_runtime_closure_bound", "descendant_resource_envelope"}
+	case "frf-exec-linux-v3":
+		return []string{"exact_capture_contract", "sealed_executable_image", "native_runtime_closure_bound", "descendant_resource_envelope", "io_world_closed"}
+	case "frf-exec-oci":
+		return []string{"exact_capture_contract", "sealed_executable_image", "native_runtime_closure_bound", "descendant_resource_envelope", "io_world_closed", "rootfs_content_bound"}
+	default:
+		return []string{}
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyCorpus runs the conformance corpus: valid fixtures must canonicalize

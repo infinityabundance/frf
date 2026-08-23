@@ -302,8 +302,7 @@ pub const EXECUTION_PROFILE_LINUX_V2: &str = "frf-exec-linux-v2";
 /// that closes both the path race and the ambient-environment race. Requires
 /// Landlock (kernel >= 5.13, in the boot-time LSM list); without it the
 /// profile REFUSES to run — a declared profile is enforced, never
-/// approximated. The reference profile remains `frf-exec-linux-v1`;
-/// `high-assurance` claim admission requires it.
+/// approximated.
 pub const EXECUTION_PROFILE_LINUX_V3: &str = "frf-exec-linux-v3";
 
 /// The OCI execution profile (`frf-exec-oci`, `spec/execution-profile.md`):
@@ -316,9 +315,115 @@ pub const EXECUTION_PROFILE_LINUX_V3: &str = "frf-exec-linux-v3";
 /// certificates — is bound by the image digest in the execution identity. A
 /// container runtime (`podman` or `docker`) must be present; without one the
 /// profile REFUSES to run — a declared profile is enforced, never
-/// approximated. The reference profile remains `frf-exec-linux-v1`;
-/// `high-assurance` claim admission requires it.
+/// approximated.
 pub const EXECUTION_PROFILE_OCI: &str = "frf-exec-oci";
+
+// ---------------------------------------------------------------------------
+// Execution-assurance CAPABILITIES (the orthogonal capability model, 0.1.69)
+// ---------------------------------------------------------------------------
+//
+// Assurance is NOT a "v1 < v2 < v3 < OCI" ladder: the profiles add
+// materially different mechanisms. What an observation actually guarantees
+// is a set of orthogonal CAPABILITIES, each provided by one or more
+// profiles. A claim policy requires a capability SET; any profile providing
+// it qualifies. The capability vocabulary is closed and documented
+// (spec/execution-profile.md § assurance capabilities).
+
+/// The observation was made under the EXACT capture contract: the reference
+/// capture bounds, byte-exact streams, and the exact-replay semantics — an
+/// `FRF_EXEC_*` override can never redefine the reference bounds.
+pub const CAPABILITY_EXACT_CAPTURE_CONTRACT: &str = "exact_capture_contract";
+/// The side executed the SEALED verified bytes (the memfd sealed
+/// F_SEAL_WRITE|GROW|SHRINK|SEAL) — verify→execute race closed.
+pub const CAPABILITY_SEALED_EXECUTABLE_IMAGE: &str = "sealed_executable_image";
+/// The side's whole descendant tree ran inside a per-side aggregate resource
+/// envelope (the cgroup v2 pids/memory/cpu bounds).
+pub const CAPABILITY_DESCENDANT_RESOURCE_ENVELOPE: &str = "descendant_resource_envelope";
+/// The side's world was closed before it ran a single instruction
+/// (filesystem closure + ambient-channel closure: no network, no Unix
+/// sockets, no shared memory, no ptrace).
+pub const CAPABILITY_IO_WORLD_CLOSED: &str = "io_world_closed";
+/// The side ran inside a complete root filesystem bound by content (the
+/// digest-pinned OCI image).
+pub const CAPABILITY_ROOTFS_CONTENT_BOUND: &str = "rootfs_content_bound";
+/// The side's NATIVE runtime closure was bound at observation time (the
+/// dynamic loader + resolved dependency hashes) — executable hash is not
+/// executable semantics.
+pub const CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND: &str = "native_runtime_closure_bound";
+
+/// The closed capability vocabulary.
+pub const EXECUTION_CAPABILITIES: &[&str] = &[
+    CAPABILITY_EXACT_CAPTURE_CONTRACT,
+    CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+    CAPABILITY_DESCENDANT_RESOURCE_ENVELOPE,
+    CAPABILITY_IO_WORLD_CLOSED,
+    CAPABILITY_ROOTFS_CONTENT_BOUND,
+    CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+];
+
+/// The capabilities each execution profile provides. Every profile provides
+/// the reference contract (exact capture + sealed image + native closure)
+/// and the later profiles ADD mechanisms; the sets are therefore nested, but
+/// the capability model is what a policy reasons over — a future profile
+/// that provides a required set without being "v1-like" qualifies.
+pub const PROFILE_CAPABILITIES: &[(&str, &[&str])] = &[
+    (
+        EXECUTION_PROFILE_LINUX,
+        &[
+            CAPABILITY_EXACT_CAPTURE_CONTRACT,
+            CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+            CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+        ],
+    ),
+    (
+        EXECUTION_PROFILE_LINUX_V2,
+        &[
+            CAPABILITY_EXACT_CAPTURE_CONTRACT,
+            CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+            CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+            CAPABILITY_DESCENDANT_RESOURCE_ENVELOPE,
+        ],
+    ),
+    (
+        EXECUTION_PROFILE_LINUX_V3,
+        &[
+            CAPABILITY_EXACT_CAPTURE_CONTRACT,
+            CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+            CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+            CAPABILITY_DESCENDANT_RESOURCE_ENVELOPE,
+            CAPABILITY_IO_WORLD_CLOSED,
+        ],
+    ),
+    (
+        EXECUTION_PROFILE_OCI,
+        &[
+            CAPABILITY_EXACT_CAPTURE_CONTRACT,
+            CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+            CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+            CAPABILITY_DESCENDANT_RESOURCE_ENVELOPE,
+            CAPABILITY_IO_WORLD_CLOSED,
+            CAPABILITY_ROOTFS_CONTENT_BOUND,
+        ],
+    ),
+];
+
+/// The capabilities of an execution profile (None for an unknown profile).
+pub fn profile_capabilities(profile: &str) -> Option<&'static [&'static str]> {
+    PROFILE_CAPABILITIES
+        .iter()
+        .find(|(p, _)| *p == profile)
+        .map(|(_, caps)| *caps)
+}
+
+/// The capability set the `high-assurance` claim policy REQUIRES: the
+/// reference contract — every profile provides it (v2/v3/OCI provide
+/// supersets), and no override can redefine it. The policy reasons over
+/// capabilities, not over the implementation profile name.
+pub const HIGH_ASSURANCE_CAPABILITIES: &[&str] = &[
+    CAPABILITY_EXACT_CAPTURE_CONTRACT,
+    CAPABILITY_SEALED_EXECUTABLE_IMAGE,
+    CAPABILITY_NATIVE_RUNTIME_CLOSURE_BOUND,
+];
 
 /// The token grammar schema (Section 6 of the paper).
 pub const TOKEN_SCHEMA_VERSION: &str = "frf-token-v1";
@@ -4983,9 +5088,20 @@ pub struct ClaimRecord {
     #[serde(default)]
     pub independence_evidence: Vec<String>,
     /// Claim IR — the replay contract the claim's evidence was observed
-    /// under (the receipt's execution profile; `high-assurance` requires the
-    /// reference profile and the reference capture bounds).
+    /// The least execution profile providing the claim's REQUIRED
+    /// capabilities (the replay contract; for `high-assurance` the least
+    /// profile is the reference one, whose capability set every profile
+    /// provides as a superset). Admission reasons over
+    /// [`ClaimRecord::required_capabilities`], never over a profile-name
+    /// equality.
     pub replay_profile: String,
+    /// The capability set the claim's policy REQUIRED (the orthogonal
+    /// assurance model): non-empty for `high-assurance` (the reference
+    /// capability set), empty otherwise. The compiled claim carries what
+    /// admission demanded, so the requirement re-derives from the claim
+    /// alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_capabilities: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

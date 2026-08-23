@@ -137,8 +137,30 @@ writable cgroup v2 root (`/sys/fs/cgroup` itself, or the deepest writable
 ancestor of the process's own cgroup path) and **REFUSES** the profile when
 none exists — a declared profile is enforced, never approximated, so a
 silent downgrade can never record a contract the harness did not enforce.
-The reference profile remains `frf-exec-linux-v1`; `high-assurance` claim
-admission requires it.
+
+## Assurance capabilities — the orthogonal model
+
+Execution profiles do NOT form a simple "v1 < v2 < v3 < OCI" ladder: each
+adds materially different machinery. What an observation actually
+guarantees is a set of orthogonal CAPABILITIES, and admission policies
+reason over CAPABILITY SETS, never over a profile-name equality:
+
+| Capability | Meaning |
+|---|---|
+| `exact_capture_contract` | The observation was made under the EXACT capture contract (reference capture bounds, byte-exact streams, exact-replay semantics); an `FRF_EXEC_*` override can never redefine the reference bounds |
+| `sealed_executable_image` | The side executed the SEALED verified bytes (memfd sealed F_SEAL_WRITE\|GROW\|SHRINK\|SEAL) — verify→execute race closed |
+| `descendant_resource_envelope` | The side's whole descendant tree ran inside a per-side aggregate resource envelope (cgroup v2 pids/memory/cpu) |
+| `io_world_closed` | The side's world was closed before it ran a single instruction (filesystem closure + ambient-channel closure: no network, no Unix sockets, no shared memory, no ptrace) |
+| `rootfs_content_bound` | The side ran inside a complete root filesystem bound by content (the digest-pinned OCI image) |
+| `native_runtime_closure_bound` | The side's native runtime closure was bound at observation time (dynamic loader + resolved dependency hashes) |
+
+Every profile provides the REFERENCE contract
+(`exact_capture_contract`, `sealed_executable_image`,
+`native_runtime_closure_bound`); the later profiles ADD mechanisms. The
+`high-assurance` claim policy requires exactly the reference set — an
+observation made under v2/v3/OCI (a superset provider) qualifies exactly
+like a v1 one. A claim records its `required_capabilities`, so the
+requirement rederives from the claim alone.
 
 ## `frf-exec-oci` — the containerized side (0.1.62)
 
@@ -182,8 +204,9 @@ the same sides on the host, and exact replay re-runs inside the same image.
 - EXTENSIONS are harness-side instrumentation, not the observed software:
 under the OCI profile they run on the HOST under the reference capture
 discipline (their invocation evidence records the host execution honestly).
-- The reference profile remains `frf-exec-linux-v1`; `high-assurance` claim
-admission requires it — an OCI observation is a different execution contract.
+- An OCI observation is a different execution contract from a v1 one; both
+qualify for `high-assurance` claim admission when they provide the required
+capability set (the reference contract — see § assurance capabilities).
 
 ### Capture bounds (the parameters that actually applied)
 

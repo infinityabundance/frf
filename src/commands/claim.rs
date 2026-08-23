@@ -633,20 +633,34 @@ pub fn run(
         Vec::new()
     };
     let replay_profile = if policy == CLAIM_POLICY_HIGH_ASSURANCE {
-        // High assurance requires the exact-replay contract: every premise's
-        // observation was made under the reference profile with the reference
-        // capture bounds (no permissive overrides). The claim records the
-        // contract.
+        // High assurance REQUIRES A CAPABILITY SET, not a profile name: the
+        // reference contract — exact capture semantics, the sealed
+        // executable image, and the bound native runtime closure. Every
+        // admitted profile provides it (v1 exactly, v2/v3/OCI as supersets),
+        // so an observation made under a stronger harness qualifies exactly
+        // like the reference one — assurance is orthogonal capabilities,
+        // not a "v1 < v2 < v3 < OCI" ladder. The capture-bounds check is the
+        // exact_capture_contract capability's enforcement: an FRF_EXEC_*
+        // override can never redefine the reference bounds.
         for r in &receipts {
-            if r.execution_profile != EXECUTION_PROFILE_LINUX {
-                return Err(FrfError::new(format!(
-                    "claim refused under policy {policy:?}: a premise's run was observed under execution profile {}; high-assurance requires the reference profile {EXECUTION_PROFILE_LINUX}",
+            let caps = crate::model::profile_capabilities(&r.execution_profile).ok_or_else(|| {
+                FrfError::new(format!(
+                    "claim refused under policy {policy:?}: a premise's run was observed under unknown execution profile {:?}",
                     r.execution_profile
-                )));
+                ))
+            })?;
+            for required in crate::model::HIGH_ASSURANCE_CAPABILITIES {
+                if !caps.contains(required) {
+                    return Err(FrfError::new(format!(
+                        "claim refused under policy {policy:?}: a premise's run was observed under execution profile {} which does NOT provide the required capability {required} (the reference contract); high-assurance requires {:?}",
+                        r.execution_profile,
+                        crate::model::HIGH_ASSURANCE_CAPABILITIES
+                    )));
+                }
             }
             if r.capture_bounds != host::reference_capture_bounds() {
                 return Err(FrfError::new(format!(
-                    "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the reference harness contract (the exact-replay profile) — an FRF_EXEC_* override can never redefine the reference bounds",
+                    "claim refused under policy {policy:?}: a premise's run was observed under non-reference capture bounds; high-assurance requires the exact capture contract (the reference harness bounds) — an FRF_EXEC_* override can never redefine the reference bounds",
                 )));
             }
             // Native artifacts must bind their runtime closure: for native
@@ -746,6 +760,17 @@ pub fn run(
         "validated: every premise has a clean axis"
     );
 
+    // The required capability set: what the admission policy demanded. The
+    // claim records it, so the requirement re-derives from the claim alone.
+    let required_capabilities: Vec<String> = if policy == CLAIM_POLICY_HIGH_ASSURANCE {
+        crate::model::HIGH_ASSURANCE_CAPABILITIES
+            .iter()
+            .map(|c| c.to_string())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // The ClaimRecord WITHOUT the id first: the content address is
     // FRF/CLAIM/v1 over the canonical document minus the id — a claim is an
     // immutable protocol object, and the same receipt compiled under a
@@ -777,6 +802,7 @@ pub fn run(
         witness_statements,
         independence_evidence,
         replay_profile,
+        required_capabilities,
     };
     claim.id = crate::semantics::claim_identity(&claim)?;
 

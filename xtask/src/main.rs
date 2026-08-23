@@ -884,19 +884,70 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
             "rlimit_nofile": "1024",
             "rlimit_nproc": "4096",
         });
-        // EVERY premise was observed under the reference execution contract.
+        // High assurance requires a CAPABILITY SET (the reference contract),
+        // never a profile-name equality: every premise must have been
+        // observed under a profile providing every required capability (v1
+        // exactly; v2/v3/OCI provide supersets), under the exact capture
+        // contract, with the claim recording the requirement.
+        let required: Vec<String> = claim["required_capabilities"]
+            .as_array()
+            .map(|a| a.iter().map(|c| as_str(c).to_string()).collect())
+            .unwrap_or_default();
+        if required.is_empty() {
+            panic!("claim {receipt_id}: high-assurance must record its required capability set");
+        }
         for prem_id in &requires {
             let prem = premise(prem_id);
-            if as_str(&prem["execution_profile"]) != "frf-exec-linux-v1" {
-                panic!("claim {receipt_id}: high-assurance requires the reference execution profile for premise {prem_id}");
+            let profile = as_str(&prem["execution_profile"]);
+            let caps = profile_capabilities(profile);
+            for c in &required {
+                if !caps.iter().any(|cap| cap == c) {
+                    panic!("claim {receipt_id}: high-assurance requires capability {c}, premise {prem_id} (profile {profile}) does not provide it");
+                }
             }
             if prem["capture_bounds"] != reference {
-                panic!("claim {receipt_id}: high-assurance requires the reference capture bounds (the exact-replay contract) for premise {prem_id}");
+                panic!("claim {receipt_id}: high-assurance requires the reference capture bounds (the exact capture contract) for premise {prem_id}");
             }
         }
         if as_str(&claim["replay_profile"]) != "frf-exec-linux-v1" {
             panic!("claim {receipt_id}: the claim's replay_profile does not record the reference profile");
         }
+    }
+}
+
+/// The capability set of an execution profile (the orthogonal assurance
+/// model, mirroring the reference engine's `model::profile_capabilities`):
+/// the reference contract for every profile, plus each later profile's
+/// mechanism.
+pub fn profile_capabilities(profile: &str) -> Vec<&'static str> {
+    match profile {
+        "frf-exec-linux-v1" => vec![
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "native_runtime_closure_bound",
+        ],
+        "frf-exec-linux-v2" => vec![
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "native_runtime_closure_bound",
+            "descendant_resource_envelope",
+        ],
+        "frf-exec-linux-v3" => vec![
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "native_runtime_closure_bound",
+            "descendant_resource_envelope",
+            "io_world_closed",
+        ],
+        "frf-exec-oci" => vec![
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "native_runtime_closure_bound",
+            "descendant_resource_envelope",
+            "io_world_closed",
+            "rootfs_content_bound",
+        ],
+        _ => Vec::new(),
     }
 }
 

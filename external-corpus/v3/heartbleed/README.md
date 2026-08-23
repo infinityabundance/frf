@@ -10,7 +10,7 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 | path | what |
 |---|---|
 | `src/hb.c` | the probe: the exact historical exploit message sequence, linked against the OpenSSL under test. RAW-MEMORY PUBLICATION BOUNDARY: on the leak path it never writes the echoed process memory to any observed stream — it plants a deterministic synthetic canary in its heap, hashes the echoed window, and prints a projection (`hb-leak-projection len=… sha256=… canary=… fraction=…`). Reads an optional claimed payload length from the fixture marker (`malformed 0x0FE9`) so a minimizer can reduce the trigger |
-| `builds/hb-1.0.1a..g` | the seven probe binaries (one per release), built hermetically inside the pinned container from the official tarballs (see `../build/build-manifest.json`). Build products are NOT committed: `./reproduce.sh build` materializes them (needs podman/docker + network) |
+| `builds/hb-1.0.1a..g` | the seven probe binaries (one per release), built by the digest- and version-pinned reproducible recipe (pinned container base + pinned NEVRAs + official tarballs) (see `../build/build-manifest.json`). Build products are NOT committed: `./reproduce.sh build` materializes them (needs podman/docker + network) |
 | `manifest.yaml` | the v3 exit/stderr court (the classic byte-level comparison) |
 | `manifest-leak.yaml` | the semantic court: TWO leak observables — `tls.heartbeat.illegal_response` (served by `comparators/heartbeat-verdict.py`) and `memory.leak.seeded_canary` (served by `comparators/heartbeat-canary.py`) — plus minimizer `leak-minimize` and mutation provider `seed-leak` |
 | `comparators/heartbeat-verdict.py` | the illegal-response comparator: did the malformed heartbeat get an ANSWER (RFC 6520 §4 requires discarding it) — the probe's HEARTBLEED verdict, no content interpretation |
@@ -46,7 +46,7 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 ## Reproduce
 
 ```sh
-./reproduce.sh build   # hermetically rebuild the probes (pinned container + official tarballs)
+./reproduce.sh build   # rebuild the probes from the pinned recipe (pinned container + NEVRAs + official tarballs; needs network for the live package repository)
 ./reproduce.sh run     # regenerate evidence/
 ./reproduce.sh verify  # re-derive and compare — evidence is deterministic
 ```

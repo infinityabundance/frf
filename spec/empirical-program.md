@@ -148,7 +148,7 @@ Every classification must rederive from the recorded observations; `--check`
 The v1/v2 corpus is explicit that its cases are "real historical software
 defects, reconstructed as minimal deterministic reproducers". v3 closes the
 remaining credibility gap: the sides ARE the actual upstream releases,
-built from the pinned sources by hermetic recipes
+built from the pinned sources by digest- and version-pinned reproducible recipes (the build is NOT fully hermetic: the container image and NEVRAs are pinned, but the Fedora PACKAGE REPOSITORY is live metadata — a rebuild needs network for dnf exactly as for the source fetch)
 (`external-corpus/v3/build/build-all.sh` — containerized native builds on
 a pinned fedora:41 image with the exact gcc/make/perl toolchain; Maven
 Central jars pinned by SHA-256). The committed `builds/` artifacts make
@@ -225,7 +225,7 @@ Per case:
 4. **environment boundaries found** — the defect at three deterministic
    TZ/LANG coordinates must be `persistent`/`stable` (no boundary).
 5. **nondeterminism exposed** — the repeat probe: the defect court
-   re-observed five times; a corpus declared hermetic must collapse to ONE
+   re-observed five times; a corpus declared deterministic must collapse to ONE
    content-addressed run (the first repeat must REUSE the ladder's run; any
    second distinct run is nondeterminism exposed), and the repeat
    trajectory must observe the lineage at every point.

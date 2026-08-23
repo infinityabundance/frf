@@ -72,7 +72,7 @@ premise it belongs to.
 | `baseline` | observation evidence only (the verified receipts + the absence scan over U) | — |
 | `sensitivity-backed` | EVERY claimed observable axis of EVERY premise has CHALLENGE coverage: a content-addressed challenge record for THAT premise's court semantic identity, wrapping the same reference artifact, targeting exactly that axis, with `saw_defect` and `specificity_clean` RECOMPUTED from the mutant run. The REQUIRED SENSITIVITY MUTATION PROFILE (`--mutation-profile AXIS:FAMILY,…`) may additionally declare WHICH mutation families must be demonstrated on each claimed surface: every required pair must name a CLAIMED axis (a claim cannot require sensitivity on a surface it does not assert — the profile stays bounded, never a correctness claim) whose DEMONSTRATED operators include that family | `capability` (per-premise, per-axis `{ receipt, axis, mutation_profile, challenge_ids }` — the demonstrated operators plus the challenge ids) + `mutation_profile` (the required pairs) |
 | `independently-witnessed` | sensitivity coverage PLUS a verified witness statement attesting EACH premise receipt (`subject kind=receipt`, `outcome: affirm` — the statement's identity, preserved request/response, and request binding all verify on read) PLUS at least one admissible INDEPENDENCE relation per premise: a content-addressed `IndependenceEvidence` record (`frf-independence-v1`) bound to an attestation of THAT premise (identity rederives, the relation is closed, the spec hash rederives). An affirming witness with zero declared independence is WITNESSED, not independently witnessed — the tier's name is its semantics | `witness_statements` (the union across premises) + `independence_evidence` (the records backing them) |
-| `high-assurance` | independently witnessed PLUS EVERY premise's observation was made under the reference execution profile (`frf-exec-linux-v1`) with the reference capture bounds — the protocol CONSTANTS of the profile, which no `FRF_EXEC_*` override can redefine (the exact-replay contract) | `replay_profile` |
+| `high-assurance` | independently witnessed PLUS EVERY premise's observation was made under a profile providing the REQUIRED CAPABILITY SET — the reference contract (`exact_capture_contract`, `sealed_executable_image`, `native_runtime_closure_bound`), the protocol constants no `FRF_EXEC_*` override can redefine (the exact-replay contract). Every admitted profile provides it (v1 exactly; v2/v3/OCI as supersets), so an observation under a stronger harness qualifies exactly like a v1 one — assurance is orthogonal capabilities, never a profile-name equality | `replay_profile` (the least qualifying profile) + `required_capabilities` (the set the policy demanded) |
 
 The tiers are strict supersets: the evidence is named by content address in
 the claim, never reduced to a boolean, so any implementation can re-derive
@@ -128,9 +128,14 @@ ClaimRecord {
                        admissible independence relation bound to an
                        attestation of itself — an attestation alone is
                        witnessed, not independently witnessed
-    replay_profile     the execution contract the evidence was observed under
-                       (high-assurance requires the reference profile for
-                       every premise)
+    replay_profile     the least execution profile providing the claim's
+                       required capabilities (the replay contract;
+                       high-assurance records the reference profile)
+    required_capabilities
+                       the capability set the policy REQUIRED (the
+                       orthogonal assurance model; non-empty for
+                       high-assurance — the reference contract — so the
+                       requirement rederives from the claim alone)
     positive           NOT STORED — derived by the renderers from the
                        verified premises (one sentence per premise cell)
     non_claims         NOT STORED — derived by the renderers from the

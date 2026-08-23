@@ -214,3 +214,126 @@ fn corpus_publication_mode_is_detached() {
         );
     }
 }
+
+/// The execution-assurance capabilities are the orthogonal assurance model
+/// (spec/execution-profile.md § assurance capabilities): the vocabulary is
+/// closed, every registered profile has a capability row (and every row
+/// names a registered profile), every capability is from the vocabulary,
+/// and EVERY profile provides the high-assurance set — a policy reasons
+/// over capabilities, never over a profile-name equality, so v2/v3/OCI
+/// observations qualify for high assurance exactly like the reference one.
+#[test]
+fn execution_assurance_capabilities_are_coherent() {
+    use frf::model::*;
+    assert_eq!(
+        EXECUTION_CAPABILITIES.to_vec(),
+        vec![
+            "exact_capture_contract",
+            "sealed_executable_image",
+            "descendant_resource_envelope",
+            "io_world_closed",
+            "rootfs_content_bound",
+            "native_runtime_closure_bound",
+        ],
+        "the capability vocabulary is closed and documented"
+    );
+    let registered: Vec<String> = registry()["execution_profiles"]
+        .as_array()
+        .expect("the registry must list execution profiles")
+        .iter()
+        .filter(|p| p["status"] == "active")
+        .map(|p| p["id"].as_str().expect("profile id").to_string())
+        .collect();
+    for p in &registered {
+        assert!(
+            PROFILE_CAPABILITIES.iter().any(|(pp, _)| pp == p),
+            "registered profile {p} has no capability row"
+        );
+    }
+    for (p, caps) in PROFILE_CAPABILITIES {
+        assert!(
+            registered.iter().any(|pp| pp == p),
+            "capability row names an unregistered profile {p}"
+        );
+        for c in *caps {
+            assert!(
+                EXECUTION_CAPABILITIES.contains(c),
+                "profile {p} carries an unknown capability {c}"
+            );
+        }
+        for required in HIGH_ASSURANCE_CAPABILITIES {
+            assert!(
+                caps.contains(required),
+                "profile {p} lacks the high-assurance capability {required}"
+            );
+        }
+    }
+    assert_eq!(
+        profile_capabilities(EXECUTION_PROFILE_LINUX)
+            .expect("the reference profile has capabilities")
+            .to_vec(),
+        HIGH_ASSURANCE_CAPABILITIES.to_vec(),
+        "the reference profile's capability set IS the high-assurance set"
+    );
+}
+
+/// The versioning policy (spec/versioning.md): every registry schema id has
+/// exactly one coherent status (active or superseded, never both, never an
+/// invented state), every ACTIVE schema id the code uses is registered
+/// (protocol_registry covers the reverse), and a superseded id documents
+/// history — it must never reappear as active.
+#[test]
+fn the_registry_supersession_rules_are_coherent() {
+    let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for schema in registry()["schemas"]
+        .as_array()
+        .expect("the registry must list schemas")
+    {
+        let id = schema["id"].as_str().expect("schema id").to_string();
+        let status = schema["status"]
+            .as_str()
+            .expect("schema status")
+            .to_string();
+        assert!(
+            status == "active" || status == "superseded" || status == "reserved-invalid",
+            "schema {id} has an undefined status {status:?} — the status vocabulary is closed (active | superseded | reserved-invalid)"
+        );
+        match seen.get(&id) {
+            None => {
+                seen.insert(id.clone(), status);
+            }
+            Some(prev) => {
+                assert_eq!(
+                    prev, &status,
+                    "schema {id} is registered with conflicting statuses {prev} and {status}"
+                );
+            }
+        }
+    }
+    // The active set is non-empty and every family's current schema is
+    // present (the code's schema consts are checked against this list by
+    // tests/protocol_registry.rs).
+    let active: Vec<String> = seen
+        .iter()
+        .filter(|(_, s)| s.as_str() == "active")
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert!(
+        active.len() >= 20,
+        "the active schema set must be substantial (found {})",
+        active.len()
+    );
+    for required in [
+        "frf-receipt-v19",
+        "frf-reduction-v4",
+        "frf-detached-objects-v1",
+        "frf-stream-publication-v1",
+        "frf-publication-manifest-v1",
+        "frf-v3-build-manifest-v1",
+    ] {
+        assert!(
+            active.iter().any(|a| a == required),
+            "the active schema set must include {required}"
+        );
+    }
+}

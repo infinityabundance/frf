@@ -2259,6 +2259,18 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
                 "claim {id}: its replay_profile does not record the reference profile"
             )));
         }
+        // The capability requirement the policy demanded must be recorded
+        // exactly: the claim reasons over orthogonal capabilities, not over
+        // a profile-name equality.
+        let required: Vec<String> = crate::model::HIGH_ASSURANCE_CAPABILITIES
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        if claim.required_capabilities != required {
+            return Err(FrfError::new(format!(
+                "claim {id}: its required_capabilities do not record the high-assurance capability set"
+            )));
+        }
     }
 
     // 7. The derived projections rederive.

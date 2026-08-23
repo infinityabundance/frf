@@ -258,6 +258,7 @@ mod tests {
             witness_statements: Vec::new(),
             independence_evidence: Vec::new(),
             replay_profile: "frf-exec-linux-v1".to_string(),
+            required_capabilities: Vec::new(),
         }
     }
 
