@@ -1498,6 +1498,56 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
         }
     }
 
+    // 6.5 The REFUSED execution attempts the bundle carries (the refusal-
+    //     roots: a failed observation attempt is a first-class portable
+    //     observation). Every `attempts/<id>.json` record must rederive its
+    //     identity (FRF/EXECUTION-ATTEMPT/v1 over the record's own fields),
+    //     be a `refused` attempt, and cite harness events that exist in the
+    //     bundle, rederive THEIR identities (FRF/HARNESS-EVENT/v1), and
+    //     belong to the SAME court — an attempt citing missing, corrupt, or
+    //     foreign enforcement evidence is not self-consistent.
+    let attempts_dir = bundle.join("attempts");
+    if attempts_dir.is_dir() {
+        for name in sorted_names(&attempts_dir) {
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let id = name.trim_end_matches(".json").to_string();
+            let attempt = load_evidence(&safe_rel(bundle, &format!("attempts/{id}.json")));
+            if rederive::execution_attempt_identity(&attempt) != id {
+                panic!("execution attempt {id} is not content-addressed: the recorded fields do not hash to the id");
+            }
+            if as_str(&attempt["kind"]) != "refused" {
+                panic!(
+                    "execution attempt {id}: unexpected kind {:?} (this schema admits only 'refused'; a completed attempt IS a run)",
+                    as_str(&attempt["kind"])
+                );
+            }
+            let mut seen: Vec<String> = Vec::new();
+            for ev in attempt["harness_events"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                let eid = as_str(&ev).to_string();
+                if seen.contains(&eid) {
+                    panic!("execution attempt {id} cites harness event {eid} twice");
+                }
+                seen.push(eid.clone());
+                let event = load_evidence(&safe_rel(bundle, &format!("harness/{eid}.json")));
+                if rederive::harness_event_identity(&event) != eid {
+                    panic!("execution attempt {id}: cited harness event {eid} is not content-addressed");
+                }
+                if as_str(&event["court"]) != as_str(&attempt["court"]) {
+                    panic!(
+                        "execution attempt {id}: cited harness event {eid} belongs to court {}; the attempt is not self-consistent",
+                        as_str(&event["court"])
+                    );
+                }
+            }
+        }
+    }
+
     // 7. The compiled claims bound to the receipt, when the bundle carries
     //    them: resolved through the claims/by-receipt index. Each claim's id
     //    must rederive (FRF/CLAIM/v1 over the canonical document minus the

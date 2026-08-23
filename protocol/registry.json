@@ -84,6 +84,13 @@
       "status": "active"
     },
     {
+      "id": "execution-attempt",
+      "meaning": "Refused observation attempt made first-class: when a court's observation attempt ends in a harness refusal (stream overflow, timeout, produced-tree overflow) there is no successful run to become the durable graph root of that attempt — the refusal itself is the observation about the attempt. A content-addressed immutable record under attempts/<id>.json binding the declared court + its semantic identity, the bound artifacts, the fixture, argv, the environment digest, the execution contract (profile + capture bounds as enforced), the side that refused, the recorded harness-event ids, and the refusal reason. The identity rederives on every read and every cited harness event is itself verified — a refusal is as portable as the observation that would have been captured. The `refused` arm of the conceptual ExecutionAttempt sum (completed attempts ARE runs); the error message is no longer the only surface through which a failed observation attempt is named",
+      "schema": "frf-execution-attempt-v1",
+      "identity": "FRF/EXECUTION-ATTEMPT/v1",
+      "status": "active"
+    },
+    {
       "id": "execution-context",
       "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) — high-assurance means the declared context is bound, not that every file read was captured",
       "schema": "frf-execution-context-v1",
@@ -321,6 +328,11 @@
       "status": "active"
     },
     {
+      "domain": "FRF/EXECUTION-ATTEMPT/v1",
+      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted — a deterministic function of the cited set), and refusal reason — the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
+      "status": "active"
+    },
+    {
       "domain": "FRF/ENVIRONMENT/v2",
       "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input",
       "status": "active"
@@ -538,6 +550,10 @@
     },
     {
       "id": "frf-harness-event-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-execution-attempt-v1",
       "status": "active"
     },
     {

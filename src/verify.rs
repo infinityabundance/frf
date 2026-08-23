@@ -845,6 +845,62 @@ pub fn load_witness_statement_verified(
     })
 }
 
+/// A REFUSED execution-attempt record, verified: the document identity
+/// rederives (the store loader establishes canonical bytes + the content
+/// address), AND every cited harness event exists, is canonical and
+/// self-authenticating, and belongs to the SAME court — an attempt that
+/// cites missing, corrupt, or foreign enforcement evidence is not
+/// self-consistent, exactly like a capture citing a foreign harness event.
+pub struct ExecutionAttemptVerified {
+    id: String,
+    record: crate::model::ExecutionAttemptRecord,
+}
+
+impl ExecutionAttemptVerified {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn record(&self) -> &crate::model::ExecutionAttemptRecord {
+        &self.record
+    }
+}
+
+/// Load + verify a refused execution-attempt record: the store loader
+/// establishes the document identity (canonical bytes, id rederives from the
+/// record's own fields); this loader additionally rederives every cited
+/// harness event (each content-addressed) and proves it belongs to the
+/// attempt's court. The refusal-root is then safe to consume.
+pub fn load_execution_attempt_verified(
+    store: &Store,
+    id: &str,
+) -> Result<ExecutionAttemptVerified> {
+    let record = store.load_execution_attempt(id)?;
+    if record.kind != "refused" {
+        return Err(FrfError::new(format!(
+            "execution attempt {id}: unexpected kind {:?} (this schema admits only 'refused'; a completed attempt IS a run)",
+            record.kind
+        )));
+    }
+    for eid in &record.harness_events {
+        let event = store.load_harness_event(eid).map_err(|e| {
+            FrfError::new(format!(
+                "execution attempt {id}: cited harness event {eid} is missing or corrupt: {e}"
+            ))
+        })?;
+        if event.court != record.court {
+            return Err(FrfError::new(format!(
+                "execution attempt {id}: cited harness event {eid} belongs to court {}; the attempt is not self-consistent",
+                event.court
+            )));
+        }
+    }
+    Ok(ExecutionAttemptVerified {
+        id: id.to_string(),
+        record,
+    })
+}
+
 /// Rebind a witness statement's subject to the actual evidence object: the
 /// content address recorded in the statement must be freshly rederived from
 /// the verified subject — a self-consistent but misbound statement (kind/id

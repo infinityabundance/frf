@@ -211,6 +211,38 @@ func envDigest(os, arch, kernel, locale, timezone, umask string, environment jcs
 	return mustPreimage("FRF/ENVIRONMENT/v2", doc)
 }
 
+// harnessEventIdentity: FRF/HARNESS-EVENT/v1 over the event's own fields
+// (the id is never in the preimage). Mirrors the reference engine's
+// semantics::harness_event_identity and the Rust verifier's rederive.
+func harnessEventIdentity(event *jcs.Object) string {
+	doc := &jcs.Object{
+		Keys:   []string{"event_kind", "side", "court", "execution_profile", "cap", "observed", "target", "detail", "runner"},
+		Values: []jcs.Value{str(event, "event_kind"), str(event, "side"), str(event, "court"), str(event, "execution_profile"), str(event, "cap"), str(event, "observed"), str(event, "target"), str(event, "detail"), str(event, "runner")},
+	}
+	return mustPreimage("FRF/HARNESS-EVENT/v1", doc)
+}
+
+// executionAttemptIdentity: FRF/EXECUTION-ATTEMPT/v1 over the record's own
+// fields minus the id, with the cited harness events sorted (the identity is
+// a deterministic function of the cited SET). Mirrors the reference engine's
+// semantics::execution_attempt_identity and the Rust verifier's rederive.
+func executionAttemptIdentity(attempt *jcs.Object) string {
+	var events []string
+	for _, e := range arr(recVal(attempt, "harness_events")) {
+		events = append(events, e.(string))
+	}
+	sort.Strings(events)
+	var sorted []jcs.Value
+	for _, e := range events {
+		sorted = append(sorted, e)
+	}
+	doc := &jcs.Object{
+		Keys:   []string{"court", "court_semantic_identity", "authority_sha256", "candidate_sha256", "fixture_sha256", "arguments", "environment_digest", "execution_profile", "capture_bounds", "side", "harness_events", "refusal_reason"},
+		Values: []jcs.Value{str(attempt, "court"), str(attempt, "court_semantic_identity"), str(attempt, "authority_sha256"), str(attempt, "candidate_sha256"), str(attempt, "fixture_sha256"), recVal(attempt, "arguments"), str(attempt, "environment_digest"), str(attempt, "execution_profile"), recVal(attempt, "capture_bounds"), str(attempt, "side"), sorted, recVal(attempt, "refusal_reason")},
+	}
+	return mustPreimage("FRF/EXECUTION-ATTEMPT/v1", doc)
+}
+
 // trajectoryClassify — the deterministic ordered-axis classification
 // (mirrors the reference engine's trajectory::classify, frf-trajectory-v4):
 // drift/slew/localization/bands/trend. The stratified axes (authority_version,

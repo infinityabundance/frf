@@ -1036,6 +1036,71 @@ impl Store {
         Ok(event)
     }
 
+    /// `attempts/<id>.json` — the content-addressed refused execution-attempt
+    /// evidence record (the refusal-root: a failed observation attempt is
+    /// itself a first-class portable observation).
+    pub fn attempt_path(&self, id: &str) -> Result<PathBuf> {
+        validate_id("execution attempt", id)?;
+        Ok(self.root.join("attempts").join(format!("{id}.json")))
+    }
+
+    /// The `attempts/` directory (for bundle collection / tree scans).
+    pub fn attempts_dir(&self) -> PathBuf {
+        self.root.join("attempts")
+    }
+
+    /// Write a refused execution-attempt record: content-addressed
+    /// (`FRF/EXECUTION-ATTEMPT/v1` over the record's own fields), canonical
+    /// JSON, write-once — an existing record with the same id must be
+    /// byte-identical (idempotent: re-running the same refused observation
+    /// reproduces the same refusal record).
+    pub fn write_execution_attempt(&self, attempt: &ExecutionAttemptRecord) -> Result<()> {
+        let expected = crate::semantics::execution_attempt_identity(attempt)?;
+        if expected != attempt.id {
+            return Err(FrfError::new(format!(
+                "execution attempt id mismatch: the record claims {} but its fields hash to {expected}",
+                attempt.id
+            )));
+        }
+        let path = self.attempt_path(&attempt.id)?;
+        if path.exists() {
+            self.load_execution_attempt(&attempt.id)?;
+            return Ok(());
+        }
+        let parent = path.parent().ok_or_else(|| {
+            FrfError::new(format!(
+                "execution attempt path {} has no parent",
+                path.display()
+            ))
+        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", parent.display())))?;
+        let json = self.to_evidence(attempt)?;
+        self.write_once(&path, &json)
+    }
+
+    /// Load an execution attempt by its content address — identity rederives,
+    /// the document is canonical (strict JSON, duplicates refused, bytes ==
+    /// JCS). A hand-edited or corrupt record is refused, never read. (The
+    /// VERIFIED loader additionally rederives every cited harness event.)
+    pub fn load_execution_attempt(&self, id: &str) -> Result<ExecutionAttemptRecord> {
+        let path = self.attempt_path(id)?;
+        if !path.exists() {
+            return Err(FrfError::new(format!(
+                "no execution attempt {id} (missing {})",
+                path.display()
+            )));
+        }
+        let attempt: ExecutionAttemptRecord = self.parse_evidence(&path)?;
+        let expected = crate::semantics::execution_attempt_identity(&attempt)?;
+        if expected != attempt.id {
+            return Err(FrfError::new(format!(
+                "execution attempt {id}: the content address does not rederive from its own fields"
+            )));
+        }
+        Ok(attempt)
+    }
+
     /// Write a witness statement: content-addressed (the id rederives from
     /// the record's own fields), canonical JSON, write-once. The preserved
     /// request/response documents are the caller's to write under

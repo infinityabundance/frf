@@ -57,6 +57,62 @@ fn record_harness_event(
     Ok(event.id)
 }
 
+/// Write the content-addressed refused execution-attempt evidence record for
+/// an observation attempt the harness REFUSED (the refusal-root: a failed
+/// observation attempt is itself a first-class portable observation). Binds
+/// the declared court + its semantic identity, the BOUND artifacts, the
+/// fixture, argv, the environment digest, the execution contract (profile +
+/// capture bounds as enforced), the side that refused, the recorded harness
+/// event ids, and the refusal reason. Returns the attempt's content address.
+#[allow(clippy::too_many_arguments)]
+fn record_execution_attempt(
+    store: &crate::store::Store,
+    court: &str,
+    court_semantic_identity: &str,
+    authority_sha256: &str,
+    candidate_sha256: &str,
+    fixture_sha256: &str,
+    arguments: &[String],
+    environment_digest: &str,
+    profile: host::ExecProfile,
+    side: &str,
+    harness_events: &[String],
+    violation: &crate::host::HarnessViolation,
+) -> Result<String> {
+    let mut attempt = ExecutionAttemptRecord {
+        schema_version: crate::model::SCHEMA_EXECUTION_ATTEMPT.to_string(),
+        id: String::new(),
+        kind: "refused".to_string(),
+        court: court.to_string(),
+        court_semantic_identity: court_semantic_identity.to_string(),
+        authority_sha256: authority_sha256.to_string(),
+        candidate_sha256: candidate_sha256.to_string(),
+        fixture_sha256: fixture_sha256.to_string(),
+        arguments: arguments.to_vec(),
+        environment_digest: environment_digest.to_string(),
+        execution_profile: profile.as_str().to_string(),
+        capture_bounds: host::capture_bounds(profile),
+        side: side.to_string(),
+        harness_events: harness_events.to_vec(),
+        refusal_reason: ExecutionAttemptRefusal {
+            kind: violation.event_kind.to_string(),
+            detail: violation.detail.clone(),
+        },
+    };
+    attempt.id = crate::semantics::execution_attempt_identity(&attempt)?;
+    store.write_execution_attempt(&attempt)?;
+    eprintln!(
+        "execution attempt {}: {} side {} refused under {} ({}) — {}",
+        attempt.id,
+        attempt.court,
+        attempt.side,
+        attempt.execution_profile,
+        attempt.refusal_reason.kind,
+        attempt.refusal_reason.detail
+    );
+    Ok(attempt.id)
+}
+
 use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
@@ -2008,13 +2064,32 @@ pub fn run_once(
     ) {
         Ok(out) => out,
         Err(e) => {
+            // The refusal-root: a failed observation attempt is itself
+            // evidence. Record the enforced bound AND the execution-attempt
+            // record that binds it (the court, the bound artifacts, the
+            // contract, and the reason) before propagating the refusal.
+            let mut events: Vec<String> = Vec::new();
             if let Some(v) = &e.violation {
-                record_harness_event(
+                events.push(record_harness_event(
                     store,
                     "reference",
                     &spec.id,
                     profile.as_str(),
                     &runner.frf_executable_hash,
+                    v,
+                )?);
+                record_execution_attempt(
+                    store,
+                    &spec.id,
+                    &court_semantic_identity,
+                    &authority_sha256,
+                    &candidate_sha256,
+                    &fixture_sha256,
+                    &arguments,
+                    &environment.digest,
+                    profile,
+                    "reference",
+                    &events,
                     v,
                 )?;
             }
@@ -2040,13 +2115,28 @@ pub fn run_once(
         ) {
             Ok(files) => files,
             Err(e) => {
+                let mut events: Vec<String> = Vec::new();
                 if let Some(v) = &e.violation {
-                    record_harness_event(
+                    events.push(record_harness_event(
                         store,
                         "reference",
                         &spec.id,
                         profile.as_str(),
                         &runner.frf_executable_hash,
+                        v,
+                    )?);
+                    record_execution_attempt(
+                        store,
+                        &spec.id,
+                        &court_semantic_identity,
+                        &authority_sha256,
+                        &candidate_sha256,
+                        &fixture_sha256,
+                        &arguments,
+                        &environment.digest,
+                        profile,
+                        "reference",
+                        &events,
                         v,
                     )?;
                 }
@@ -2066,13 +2156,28 @@ pub fn run_once(
     ) {
         Ok(out) => out,
         Err(e) => {
+            let mut events: Vec<String> = Vec::new();
             if let Some(v) = &e.violation {
-                record_harness_event(
+                events.push(record_harness_event(
                     store,
                     "candidate",
                     &spec.id,
                     profile.as_str(),
                     &runner.frf_executable_hash,
+                    v,
+                )?);
+                record_execution_attempt(
+                    store,
+                    &spec.id,
+                    &court_semantic_identity,
+                    &authority_sha256,
+                    &candidate_sha256,
+                    &fixture_sha256,
+                    &arguments,
+                    &environment.digest,
+                    profile,
+                    "candidate",
+                    &events,
                     v,
                 )?;
             }
@@ -2098,13 +2203,28 @@ pub fn run_once(
         ) {
             Ok(files) => files,
             Err(e) => {
+                let mut events: Vec<String> = Vec::new();
                 if let Some(v) = &e.violation {
-                    record_harness_event(
+                    events.push(record_harness_event(
                         store,
                         "candidate",
                         &spec.id,
                         profile.as_str(),
                         &runner.frf_executable_hash,
+                        v,
+                    )?);
+                    record_execution_attempt(
+                        store,
+                        &spec.id,
+                        &court_semantic_identity,
+                        &authority_sha256,
+                        &candidate_sha256,
+                        &fixture_sha256,
+                        &arguments,
+                        &environment.digest,
+                        profile,
+                        "candidate",
+                        &events,
                         v,
                     )?;
                 }

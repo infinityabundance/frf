@@ -1031,6 +1031,60 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         }
     }
 
+    // The REFUSED execution attempts recorded for this court (the refusal-
+    // roots): a failed observation attempt is itself a first-class portable
+    // observation, and a bundle of this court's evidence carries its refusal
+    // history alongside the successful runs. Each attempt is VERIFIED (canonical
+    // + identity rederives + every cited harness event verified) before it may
+    // leave the tree, and its content-addressed harness events travel with it.
+    let attempts_dir = store.attempts_dir();
+    if attempts_dir.is_dir() {
+        let mut names: Vec<String> = std::fs::read_dir(&attempts_dir)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read execution-attempt directory {}: {e}",
+                    attempts_dir.display()
+                ))
+            })?
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        names.sort();
+        for name in names {
+            let id = name.trim_end_matches(".json").to_string();
+            let verified = crate::verify::load_execution_attempt_verified(store, &id)?;
+            let attempt = verified.record();
+            if attempt.court != body.court.id {
+                continue;
+            }
+            let bytes = read(&store.attempt_path(&id)?, "execution attempt")?;
+            let rel = format!("attempts/{id}.json");
+            entries.insert(
+                rel.clone(),
+                ClosureEntry {
+                    rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "execution-attempt",
+                },
+            );
+            for eid in &attempt.harness_events {
+                store.load_harness_event(eid)?; // canonical + identity rederives
+                let path = store.harness_path(eid)?;
+                let bytes = read(&path, "harness event")?;
+                let rel = format!("harness/{eid}.json");
+                entries.insert(
+                    rel.clone(),
+                    ClosureEntry {
+                        rel,
+                        sha256: host::sha256_bytes(&bytes),
+                        kind: "harness-event",
+                    },
+                );
+            }
+        }
+    }
+
     // The claim (if any) and its knowledge universe were added up front; the
     // closure is complete.
     Ok(Closure {

@@ -1479,8 +1479,16 @@ fn run_identity_commits_frf_exec_overrides_end_to_end() {
     );
 }
 
+/// A timed-out court writes NO capture and NO residual — but it now writes
+/// REFUSAL EVIDENCE: the content-addressed harness event AND the
+/// execution-attempt record (the refusal-root: a failed observation attempt
+/// is itself a first-class portable observation). The refusal record binds
+/// the declared court, the bound artifacts, the execution contract (the
+/// profile and capture bounds as enforced, including the override that
+/// fired), the side, the harness event, and the reason — and every cited
+/// member rederives on read.
 #[test]
-fn execution_timeout_kills_and_writes_nothing() {
+fn execution_timeout_writes_refusal_evidence_only() {
     let work = Workdir::new("timeout");
     work.copy_canonical_tree();
     work.write_candidate("#!/bin/sh\nsleep 5\n");
@@ -1498,11 +1506,319 @@ fn execution_timeout_kills_and_writes_nothing() {
         stderr(&out)
     );
 
-    // A timed-out court writes no evidence at all.
+    // No capture, no residual — the observation was refused, never truncated.
     let captures = fs::read_dir(work.path("frf/captures")).unwrap().count();
     assert_eq!(captures, 0, "no run dir may exist after a timeout");
     let residuals = fs::read_dir(work.path("frf/residuals")).unwrap().count();
     assert_eq!(residuals, 0, "no residuals may exist after a timeout");
+
+    // The refusal is now evidence: exactly one harness event (the timeout on
+    // the reference side first) and exactly one execution-attempt record.
+    let harness: Vec<String> = fs::read_dir(work.path("frf/harness"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(harness.len(), 1, "one enforced-bound record: {harness:?}");
+    let attempts: Vec<String> = fs::read_dir(work.path("frf/attempts"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(attempts.len(), 1, "one refusal-root record: {attempts:?}");
+    let attempt_id = attempts[0].trim_end_matches(".json").to_string();
+
+    // The attempt is VERIFIED before consumption: canonical, self-
+    // authenticating, and every cited harness event verified + same-court.
+    let store = frf::store::Store::new(work.path("frf").to_path_buf());
+    let verified = frf::verify::load_execution_attempt_verified(&store, &attempt_id)
+        .expect("the refusal-root must verify");
+    let attempt = verified.record();
+    assert_eq!(attempt.kind, "refused");
+    assert_eq!(attempt.side, "candidate");
+    assert_eq!(attempt.court, "cli-malformed-input");
+    assert_eq!(attempt.refusal_reason.kind, "timeout");
+    // The execution contract as enforced: the override that fired is part of
+    // the record, not an ambient fact.
+    assert_eq!(attempt.capture_bounds.timeout_ms, "200");
+    assert_eq!(attempt.harness_events.len(), 1);
+    let event = store
+        .load_harness_event(&attempt.harness_events[0])
+        .expect("the cited harness event must load");
+    assert_eq!(event.event_kind, "timeout");
+    assert_eq!(event.court, attempt.court);
+}
+
+/// The refusal-root is CONTRACT-BOUND: a different enforced execution
+/// contract produces a different attempt — the identity commits the contract
+/// exactly like the run identity does. (A timeout's recorded `observed` value
+/// is the real elapsed time, so two timeouts are two distinct enforcement
+/// records; the deterministic idempotence case is the stream overflow below.)
+#[test]
+fn refusal_attempt_identity_commits_the_execution_contract() {
+    let work = Workdir::new("attempt-contract");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nsleep 5\n");
+    admit_reference(&work);
+
+    let run_once = |timeout: &str| {
+        let out = frf_env(
+            &work,
+            &["--root", ROOT, "court", "run", MANIFEST],
+            &[("FRF_EXEC_TIMEOUT_MS", timeout)],
+        );
+        assert!(!out.status.success());
+        let mut attempts: Vec<String> = fs::read_dir(work.path("frf/attempts"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        attempts.sort();
+        attempts
+            .iter()
+            .map(|n| n.trim_end_matches(".json").to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let a = run_once("200");
+    let ac = run_once("150"); // a different enforced contract
+    assert_eq!(
+        ac.len(),
+        2,
+        "a different enforced timeout must be a different attempt (got {ac:?})"
+    );
+    assert_ne!(ac[0], ac[1]);
+
+    // Both records verify.
+    let store = frf::store::Store::new(work.path("frf").to_path_buf());
+    for id in [&a[0], &ac[0], &ac[1]] {
+        let v = frf::verify::load_execution_attempt_verified(&store, id)
+            .expect("every refusal-root must verify");
+        assert_eq!(v.record().refusal_reason.kind, "timeout");
+    }
+}
+
+/// A deterministic enforcement (stream overflow — the observed value is the
+/// overflowed byte count) is IDEMPOTENT: re-running the same refused
+/// observation reproduces the same attempt record, and a different enforced
+/// cap is a different attempt.
+#[test]
+fn stream_overflow_refusal_is_idempotent_and_contract_bound() {
+    let work = Workdir::new("attempt-overflow-idem");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nhead -c 100000 /dev/zero\n");
+    admit_reference(&work);
+
+    let run_once = |cap: &str| {
+        let out = frf_env(
+            &work,
+            &["--root", ROOT, "court", "run", MANIFEST],
+            &[("FRF_EXEC_MAX_BYTES", cap)],
+        );
+        assert!(!out.status.success());
+        let mut attempts: Vec<String> = fs::read_dir(work.path("frf/attempts"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        attempts.sort();
+        attempts
+            .iter()
+            .map(|n| n.trim_end_matches(".json").to_string())
+            .collect::<Vec<_>>()
+    };
+
+    let ab = run_once("1024");
+    let abc = run_once("2048");
+    assert_eq!(
+        ab.len(),
+        1,
+        "the same deterministic refused observation must reproduce the same attempt (got {ab:?})"
+    );
+    assert_eq!(
+        abc.len(),
+        2,
+        "a different enforced cap must be a different attempt (got {abc:?})"
+    );
+    assert_ne!(
+        abc[0], abc[1],
+        "a different enforced cap must be a different attempt"
+    );
+
+    let store = frf::store::Store::new(work.path("frf").to_path_buf());
+    for id in [&abc[0], &abc[1]] {
+        let v = frf::verify::load_execution_attempt_verified(&store, id)
+            .expect("every refusal-root must verify");
+        assert_eq!(v.record().refusal_reason.kind, "stream-overflow");
+        assert_eq!(v.record().side, "candidate");
+    }
+}
+
+/// A hand-edited refusal-root is refused on read — the identity rederives
+/// from the record's own fields, so a tampered record can never be consumed
+/// as evidence.
+#[test]
+fn tampered_refusal_attempt_is_refused() {
+    let work = Workdir::new("attempt-tamper");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nsleep 5\n");
+    admit_reference(&work);
+
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST],
+        &[("FRF_EXEC_TIMEOUT_MS", "200")],
+    );
+    assert!(!out.status.success());
+    let attempts: Vec<String> = fs::read_dir(work.path("frf/attempts"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let id = attempts[0].trim_end_matches(".json").to_string();
+    let path = work.path(&format!("frf/attempts/{id}.json"));
+    let store = frf::store::Store::new(work.path("frf").to_path_buf());
+    let original = fs::read(&path).unwrap();
+
+    // Tamper 1: flip a field the IDENTITY commits (side candidate ->
+    // reference) without touching the id: the content address must no longer
+    // rederive — the store loader refuses before the record may be consumed.
+    let flipped = String::from_utf8(original.clone())
+        .unwrap()
+        .replace("\"side\":\"candidate\"", "\"side\":\"reference\"");
+    fs::write(&path, flipped).unwrap();
+    let err = match frf::verify::load_execution_attempt_verified(&store, &id) {
+        Err(e) => e,
+        Ok(_) => panic!("a tampered refusal-root (side) must be refused"),
+    };
+    assert!(
+        err.0.contains("does not rederive"),
+        "unexpected error: {}",
+        err.0
+    );
+
+    // Tamper 2: flip the kind (refused -> completed) from the ORIGINAL
+    // record. The identity does not commit `kind` (a completed attempt IS a
+    // run — no such record exists), so the verified loader's kind check is
+    // what refuses it.
+    let flipped = String::from_utf8(original)
+        .unwrap()
+        .replace("\"kind\":\"refused\"", "\"kind\":\"completed\"");
+    fs::write(&path, flipped).unwrap();
+    let err = match frf::verify::load_execution_attempt_verified(&store, &id) {
+        Err(e) => e,
+        Ok(_) => panic!("a tampered refusal-root (kind) must be refused"),
+    };
+    assert!(
+        err.0.contains("unexpected kind"),
+        "unexpected error: {}",
+        err.0
+    );
+}
+
+/// The refusal-root is portable: a receipt-rooted bundle carries the refused
+/// attempts recorded for the root receipt's court, and bundle verification
+/// accepts the refusal history — then refuses a tampered attempt inside the
+/// bundle.
+#[test]
+fn bundle_carries_and_verifies_the_court_refusal_history() {
+    let work = Workdir::new("attempt-bundle");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nsleep 5\n");
+    admit_reference(&work);
+
+    // First a refusal (the sleeping candidate), then a success (the patched
+    // candidate) — same court, same store.
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST],
+        &[("FRF_EXEC_TIMEOUT_MS", "200")],
+    );
+    assert!(!out.status.success());
+    work.write_candidate("#!/bin/sh\nexit 2\n"); // the reference's exit class
+    let run = run_court(&work);
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &run]);
+    assert_success(&out, "receipt emit");
+    let receipt = stdout(&out);
+
+    let bundle = work.path("bundle");
+    let out = frf(
+        &work,
+        &[
+            "--root", ROOT, "bundle", "export", &receipt, "--output", "bundle",
+        ],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = frf(&work, &["--root", ROOT, "bundle", "verify", "bundle"]);
+    assert!(
+        out.status.success(),
+        "the bundle must verify with its refusal history: {}",
+        stderr(&out)
+    );
+    // The attempt + its harness event travel with the bundle.
+    assert!(
+        bundle.join("attempts").is_dir(),
+        "the bundle must carry the refusal-root"
+    );
+    assert_eq!(
+        fs::read_dir(bundle.join("attempts")).unwrap().count(),
+        1,
+        "exactly the one refusal"
+    );
+    assert!(
+        fs::read_dir(bundle.join("harness")).unwrap().count() >= 1,
+        "the attempt's harness event must travel with it"
+    );
+
+    // Tamper the attempt inside the bundle: verification must refuse. Flip
+    // the kind (refused -> completed): the identity does not commit `kind`
+    // (a completed attempt IS a run — no such record exists), so the
+    // verifier's kind check is what refuses it.
+    let attempt_file = fs::read_dir(bundle.join("attempts"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let path = attempt_file.path();
+    // The bundle seals files 0444; a tamperer would chmod first.
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    let flipped = String::from_utf8(bytes.clone())
+        .unwrap()
+        .replace("\"kind\":\"refused\"", "\"kind\":\"completed\"");
+    bytes = flipped.into_bytes();
+    fs::write(&path, &bytes).unwrap();
+    let out = frf(&work, &["--root", ROOT, "bundle", "verify", "bundle"]);
+    assert!(
+        !out.status.success(),
+        "a bundle with a tampered refusal-root must not verify"
+    );
+}
+
+/// A stream overflow is also a refusal-root: the enforced stream cap fires
+/// the harness event, the attempt record binds it, and the record is a
+/// stream-overflow refusal with the enforced cap committed.
+#[test]
+fn stream_overflow_writes_a_verified_refusal_root() {
+    let work = Workdir::new("overflow-attempt");
+    work.copy_canonical_tree();
+    work.write_candidate("#!/bin/sh\nhead -c 100000 /dev/zero\n");
+    admit_reference(&work);
+
+    let out = frf_env(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST],
+        &[("FRF_EXEC_MAX_BYTES", "1024")],
+    );
+    assert!(!out.status.success());
+    let attempts: Vec<String> = fs::read_dir(work.path("frf/attempts"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(attempts.len(), 1);
+    let id = attempts[0].trim_end_matches(".json").to_string();
+    let store = frf::store::Store::new(work.path("frf").to_path_buf());
+    let verified = frf::verify::load_execution_attempt_verified(&store, &id)
+        .expect("the overflow refusal-root must verify");
+    assert_eq!(verified.record().refusal_reason.kind, "stream-overflow");
+    assert_eq!(verified.record().capture_bounds.max_stream_bytes, "1024");
+    assert_eq!(verified.record().harness_events.len(), 1);
 }
 
 #[test]

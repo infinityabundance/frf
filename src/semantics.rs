@@ -94,6 +94,35 @@ pub fn harness_event_identity(
     hash_preimage("FRF/HARNESS-EVENT/v1", &doc)
 }
 
+/// The refused execution-attempt identity: `FRF/EXECUTION-ATTEMPT/v1` over
+/// the attempt's own fields (minus the id) — the court + semantic identity,
+/// the bound artifacts, fixture, argv, environment digest, the execution
+/// contract (profile + capture bounds as enforced), the side, the cited
+/// harness events (SORTED, so the identity is a deterministic function of
+/// the cited SET), and the refusal reason. Two attempts that refused the
+/// same side of the same court under the same contract with the same
+/// recorded bound firings and reason are the SAME attempt; anything else is
+/// a different one.
+pub fn execution_attempt_identity(attempt: &ExecutionAttemptRecord) -> Result<String> {
+    let mut events: Vec<&String> = attempt.harness_events.iter().collect();
+    events.sort();
+    let doc = json!({
+        "court": attempt.court,
+        "court_semantic_identity": attempt.court_semantic_identity,
+        "authority_sha256": attempt.authority_sha256,
+        "candidate_sha256": attempt.candidate_sha256,
+        "fixture_sha256": attempt.fixture_sha256,
+        "arguments": attempt.arguments,
+        "environment_digest": attempt.environment_digest,
+        "execution_profile": attempt.execution_profile,
+        "capture_bounds": attempt.capture_bounds,
+        "side": attempt.side,
+        "harness_events": events,
+        "refusal_reason": attempt.refusal_reason,
+    });
+    hash_preimage("FRF/EXECUTION-ATTEMPT/v1", &doc)
+}
+
 /// The execution-context closure identity: `FRF/EXECUTION-CONTEXT/v1` over
 /// the canonical document minus the cid (the artifacts SORTED BY PATH, so
 /// the closure is a deterministic function of the declared SET).

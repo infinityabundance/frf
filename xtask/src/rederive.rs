@@ -22,6 +22,55 @@ fn s(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
+/// The identity of a harness-enforcement evidence record: `FRF/HARNESS-EVENT/v1`
+/// over the event's own fields (the id is never in the preimage). Mirrors the
+/// reference engine's `semantics::harness_event_identity`.
+pub fn harness_event_identity(event: &Value) -> String {
+    preimage(
+        "FRF/HARNESS-EVENT/v1",
+        &json!({
+            "event_kind": s(&event["event_kind"]),
+            "side": s(&event["side"]),
+            "court": s(&event["court"]),
+            "execution_profile": s(&event["execution_profile"]),
+            "cap": s(&event["cap"]),
+            "observed": s(&event["observed"]),
+            "target": s(&event["target"]),
+            "detail": s(&event["detail"]),
+            "runner": s(&event["runner"]),
+        }),
+    )
+}
+
+/// The identity of a refused execution-attempt record: `FRF/EXECUTION-ATTEMPT/v1`
+/// over the record's own fields minus the id (the cited harness events sorted,
+/// so the identity is a deterministic function of the cited SET). Mirrors the
+/// reference engine's `semantics::execution_attempt_identity`.
+pub fn execution_attempt_identity(attempt: &Value) -> String {
+    let mut events: Vec<&Value> = attempt["harness_events"]
+        .as_array()
+        .map(|es| es.iter().collect())
+        .unwrap_or_default();
+    events.sort_by(|a, b| s(a).cmp(s(b)));
+    preimage(
+        "FRF/EXECUTION-ATTEMPT/v1",
+        &json!({
+            "court": s(&attempt["court"]),
+            "court_semantic_identity": s(&attempt["court_semantic_identity"]),
+            "authority_sha256": s(&attempt["authority_sha256"]),
+            "candidate_sha256": s(&attempt["candidate_sha256"]),
+            "fixture_sha256": s(&attempt["fixture_sha256"]),
+            "arguments": attempt["arguments"],
+            "environment_digest": s(&attempt["environment_digest"]),
+            "execution_profile": s(&attempt["execution_profile"]),
+            "capture_bounds": attempt["capture_bounds"],
+            "side": s(&attempt["side"]),
+            "harness_events": events,
+            "refusal_reason": attempt["refusal_reason"],
+        }),
+    )
+}
+
 /// The identity of a native runtime closure: `FRF/RUNTIME-CLOSURE/v1` over
 /// the canonical document minus the `cid`, with the components sorted by
 /// path — the closure is a deterministic function of the resolved SET.

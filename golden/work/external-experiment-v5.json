@@ -24,7 +24,7 @@
         "distinct_run_ids_across_samples": "1",
         "execution_identities": [
           {
-            "execution_identity": "4aa95758473b39ebf0aa86f291485ec6017b1a0b336de0d93ca0b3e60ecfa4de",
+            "execution_identity": "37a34ea1af605bc127b8c017de690c1bdc1977546d1730e4d026e9772be90e0b",
             "samples": "5"
           }
         ],
@@ -36,7 +36,7 @@
         ],
         "run_ids": [
           {
-            "run": "run-env-import-check-886817419cc69c3c27c7cab8aae75630b2d7f6d3f753525c45fbff90099fad63",
+            "run": "run-env-import-check-e9d5b4cec0cb25231f99f798c91f1836f42034a5660709e17120dd685cc99cc9",
             "samples": "5"
           }
         ],
@@ -54,66 +54,66 @@
           "cpu_ms_median": "0.3",
           "side": "builds/bash-4.3.0",
           "wall": {
-            "max_ms": "0.57",
-            "mean_ms": "0.42",
-            "min_ms": "0.32",
-            "p50_ms": "0.38",
-            "p90_ms": "0.57",
-            "p99_ms": "0.57",
+            "max_ms": "0.44",
+            "mean_ms": "0.39",
+            "min_ms": "0.31",
+            "p50_ms": "0.40",
+            "p90_ms": "0.44",
+            "p99_ms": "0.44",
             "samples": "5",
-            "stddev_ms": "0.09"
+            "stddev_ms": "0.05"
           }
         },
         "bare_pair": {
           "candidate_side": "builds/bash-4.3.0",
-          "cpu_ms_median": "0.7",
+          "cpu_ms_median": "0.6",
           "reference_side": "builds/bash-4.3.30",
           "wall": {
-            "max_ms": "0.93",
-            "mean_ms": "0.78",
-            "min_ms": "0.63",
-            "p50_ms": "0.74",
-            "p90_ms": "0.93",
-            "p99_ms": "0.93",
+            "max_ms": "0.78",
+            "mean_ms": "0.72",
+            "min_ms": "0.61",
+            "p50_ms": "0.73",
+            "p90_ms": "0.78",
+            "p99_ms": "0.78",
             "samples": "5",
-            "stddev_ms": "0.12"
+            "stddev_ms": "0.06"
           }
         },
         "frf_court": {
-          "harness_cpu_ms_median": "12.4",
+          "harness_cpu_ms_median": "11.8",
           "manifest": "courts/shellshock/manifest-defect.yaml",
           "wall": {
-            "max_ms": "98.24",
-            "mean_ms": "97.85",
-            "min_ms": "97.41",
-            "p50_ms": "97.72",
-            "p90_ms": "98.24",
-            "p99_ms": "98.24",
+            "max_ms": "97.85",
+            "mean_ms": "97.21",
+            "min_ms": "96.81",
+            "p50_ms": "97.16",
+            "p90_ms": "97.85",
+            "p99_ms": "97.85",
             "samples": "5",
-            "stddev_ms": "0.32"
+            "stddev_ms": "0.36"
           }
         }
       },
       "overhead": {
-        "aggregate_court_cpu_proxy_ms_median": "13.1",
+        "aggregate_court_cpu_proxy_ms_median": "12.5",
         "framework_overhead_ms": {
-          "max_ms": "97.46",
-          "mean_ms": "97.07",
-          "min_ms": "96.78",
-          "p50_ms": "97.03",
-          "p90_ms": "97.46",
-          "p99_ms": "97.46",
+          "max_ms": "97.24",
+          "mean_ms": "96.49",
+          "min_ms": "96.03",
+          "p50_ms": "96.46",
+          "p90_ms": "97.24",
+          "p99_ms": "97.24",
           "samples": "5",
-          "stddev_ms": "0.28"
+          "stddev_ms": "0.42"
         },
         "framework_ratio": {
-          "p50": "132.77",
-          "p90": "105.52"
+          "p50": "132.55",
+          "p90": "124.97"
         },
-        "harness_cpu_ms_median": "12.4",
+        "harness_cpu_ms_median": "11.8",
         "user_visible_amplification": {
-          "p50": "256.49",
-          "p90": "171.74"
+          "p50": "243.50",
+          "p90": "221.89"
         }
       },
       "project": "GNU bash",
@@ -145,7 +145,7 @@
         "distinct_run_ids_across_samples": "1",
         "execution_identities": [
           {
-            "execution_identity": "8d193221c31bec55e1468bca8627029ab6aa882bad1bea02f75d796354fab87f",
+            "execution_identity": "f1082d71d2ab8a7f7ca70680e3a5837f4e537c2d2232ee2fc33cac79fd31cef8",
             "samples": "5"
           }
         ],
@@ -157,7 +157,7 @@
         ],
         "run_ids": [
           {
-            "run": "run-heartbeat-check-b223cc5cc51b0c9e05422d13f4db6cb90159f31c9fa7a08dfad9705586a5f403",
+            "run": "run-heartbeat-check-0192e2fb6519ed1515cc5396a8501a8196b43b702480532c80333b3ef9da3cb4",
             "samples": "5"
           }
         ],
@@ -175,63 +175,63 @@
           "cpu_ms_median": "1.2",
           "side": "builds/hb-1.0.1f",
           "wall": {
-            "max_ms": "15870.61",
-            "mean_ms": "15862.48",
-            "min_ms": "15858.32",
-            "p50_ms": "15860.10",
-            "p90_ms": "15870.61",
-            "p99_ms": "15870.61",
+            "max_ms": "15870.34",
+            "mean_ms": "15864.96",
+            "min_ms": "15860.29",
+            "p50_ms": "15863.44",
+            "p90_ms": "15870.34",
+            "p99_ms": "15870.34",
             "samples": "5",
-            "stddev_ms": "4.53"
+            "stddev_ms": "3.59"
           }
         },
         "bare_pair": {
           "candidate_side": "builds/hb-1.0.1f",
-          "cpu_ms_median": "2.5",
+          "cpu_ms_median": "2.4",
           "reference_side": "builds/hb-1.0.1g",
           "wall": {
-            "max_ms": "31745.02",
-            "mean_ms": "31740.35",
-            "min_ms": "31731.33",
-            "p50_ms": "31744.00",
-            "p90_ms": "31745.02",
-            "p99_ms": "31745.02",
+            "max_ms": "31744.14",
+            "mean_ms": "31741.20",
+            "min_ms": "31736.34",
+            "p50_ms": "31743.96",
+            "p90_ms": "31744.14",
+            "p99_ms": "31744.14",
             "samples": "5",
-            "stddev_ms": "5.26"
+            "stddev_ms": "3.54"
           }
         },
         "frf_court": {
-          "harness_cpu_ms_median": "22.0",
+          "harness_cpu_ms_median": "20.6",
           "manifest": "courts/heartbleed/manifest-defect.yaml",
           "wall": {
-            "max_ms": "31755.81",
-            "mean_ms": "31753.20",
-            "min_ms": "31749.03",
-            "p50_ms": "31754.12",
-            "p90_ms": "31755.81",
-            "p99_ms": "31755.81",
+            "max_ms": "31754.16",
+            "mean_ms": "31751.65",
+            "min_ms": "31749.10",
+            "p50_ms": "31752.29",
+            "p90_ms": "31754.16",
+            "p99_ms": "31754.16",
             "samples": "5",
-            "stddev_ms": "2.56"
+            "stddev_ms": "1.84"
           }
         }
       },
       "overhead": {
-        "aggregate_court_cpu_proxy_ms_median": "24.5",
+        "aggregate_court_cpu_proxy_ms_median": "23.0",
         "framework_overhead_ms": {
-          "max_ms": "24.13",
-          "mean_ms": "12.85",
-          "min_ms": "5.04",
-          "p50_ms": "11.80",
-          "p90_ms": "24.13",
-          "p99_ms": "24.13",
+          "max_ms": "15.95",
+          "mean_ms": "10.45",
+          "min_ms": "5.15",
+          "p50_ms": "10.01",
+          "p90_ms": "15.95",
+          "p99_ms": "15.95",
           "samples": "5",
-          "stddev_ms": "6.41"
+          "stddev_ms": "4.52"
         },
         "framework_ratio": {
           "p50": "1.00",
           "p90": "1.00"
         },
-        "harness_cpu_ms_median": "22.0",
+        "harness_cpu_ms_median": "20.6",
         "user_visible_amplification": {
           "p50": "2.00",
           "p90": "2.00"
@@ -266,7 +266,7 @@
         "distinct_run_ids_across_samples": "1",
         "execution_identities": [
           {
-            "execution_identity": "1f1c60c350b626291151a5fd981fb98f1962b34d62dc4069141a4aa80c4bfafc",
+            "execution_identity": "7c5083862994b37768949165a266597ffcd545998e9ba23fad9e302a07b93698",
             "samples": "5"
           }
         ],
@@ -278,7 +278,7 @@
         ],
         "run_ids": [
           {
-            "run": "run-jndi-check-8d4683c80cad154fd354d520c6bb0564e9c7f4c14383ac9d2c068f65c4d1c588",
+            "run": "run-jndi-check-a0831a188de696e7a9f6cca8ae7bfbd0a672db700994e445114170591cf66b60",
             "samples": "5"
           }
         ],
@@ -293,69 +293,69 @@
       "id": "log4shell",
       "measurements": {
         "bare_candidate": {
-          "cpu_ms_median": "384.6",
+          "cpu_ms_median": "354.2",
           "side": "builds/run-vuln.sh",
           "wall": {
-            "max_ms": "188.88",
-            "mean_ms": "178.79",
-            "min_ms": "173.43",
-            "p50_ms": "176.76",
-            "p90_ms": "188.88",
-            "p99_ms": "188.88",
+            "max_ms": "164.62",
+            "mean_ms": "159.55",
+            "min_ms": "156.76",
+            "p50_ms": "159.12",
+            "p90_ms": "164.62",
+            "p99_ms": "164.62",
             "samples": "5",
-            "stddev_ms": "5.35"
+            "stddev_ms": "2.68"
           }
         },
         "bare_pair": {
           "candidate_side": "builds/run-vuln.sh",
-          "cpu_ms_median": "755.6",
+          "cpu_ms_median": "697.9",
           "reference_side": "builds/run-fixed.sh",
           "wall": {
-            "max_ms": "365.66",
-            "mean_ms": "348.35",
-            "min_ms": "342.00",
-            "p50_ms": "345.44",
-            "p90_ms": "365.66",
-            "p99_ms": "365.66",
+            "max_ms": "316.44",
+            "mean_ms": "312.77",
+            "min_ms": "310.60",
+            "p50_ms": "311.72",
+            "p90_ms": "316.44",
+            "p99_ms": "316.44",
             "samples": "5",
-            "stddev_ms": "8.76"
+            "stddev_ms": "2.16"
           }
         },
         "frf_court": {
-          "harness_cpu_ms_median": "5.9",
+          "harness_cpu_ms_median": "5.3",
           "manifest": "courts/log4shell/manifest-defect.yaml",
           "wall": {
-            "max_ms": "412.85",
-            "mean_ms": "379.68",
-            "min_ms": "370.81",
-            "p50_ms": "371.08",
-            "p90_ms": "412.85",
-            "p99_ms": "412.85",
+            "max_ms": "330.51",
+            "mean_ms": "330.29",
+            "min_ms": "330.14",
+            "p50_ms": "330.27",
+            "p90_ms": "330.51",
+            "p99_ms": "330.51",
             "samples": "5",
-            "stddev_ms": "16.60"
+            "stddev_ms": "0.14"
           }
         }
       },
       "overhead": {
-        "aggregate_court_cpu_proxy_ms_median": "761.5",
+        "aggregate_court_cpu_proxy_ms_median": "703.2",
         "framework_overhead_ms": {
-          "max_ms": "47.19",
-          "mean_ms": "31.33",
-          "min_ms": "25.54",
-          "p50_ms": "28.81",
-          "p90_ms": "47.19",
-          "p99_ms": "47.19",
+          "max_ms": "19.56",
+          "mean_ms": "17.51",
+          "min_ms": "13.92",
+          "p50_ms": "18.55",
+          "p90_ms": "19.56",
+          "p99_ms": "19.56",
           "samples": "5",
-          "stddev_ms": "8.10"
+          "stddev_ms": "2.06"
         },
         "framework_ratio": {
-          "p50": "1.07",
-          "p90": "1.13"
+          "p50": "1.06",
+          "p90": "1.04"
         },
-        "harness_cpu_ms_median": "5.9",
+        "harness_cpu_ms_median": "5.3",
         "user_visible_amplification": {
-          "p50": "2.10",
-          "p90": "2.19"
+          "p50": "2.08",
+          "p90": "2.01"
         }
       },
       "project": "Apache Log4j",
@@ -384,7 +384,7 @@
   "machine": {
     "cpu_count": "16",
     "cpu_model": "AMD Ryzen 7 9800X3D 8-Core Processor",
-    "frf_version": "0.1.63",
+    "frf_version": "0.1.64",
     "mem_total_kb": "131533448",
     "uname": "Linux 7.1.8-1-cachyos x86_64"
   },

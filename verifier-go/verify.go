@@ -268,6 +268,44 @@ func verifyBundle(bundle string) ClaimIR {
 	//     residuals' compared projections.
 	verifyTrajectoryEvidence(bundle, body, run)
 
+	// 4c. The REFUSED execution attempts the bundle carries (the refusal-
+	//     roots: a failed observation attempt is a first-class portable
+	//     observation). Every `attempts/<id>.json` record must rederive its
+	//     identity (FRF/EXECUTION-ATTEMPT/v1 over the record's own fields),
+	//     be a `refused` attempt, and cite harness events that exist in the
+	//     bundle, rederive THEIR identities (FRF/HARNESS-EVENT/v1), and
+	//     belong to the SAME court.
+	if _, err := os.Stat(safeJoin(bundle, "attempts")); err == nil {
+		for _, name := range sortedNames(safeJoin(bundle, "attempts")) {
+			if !strings.HasSuffix(name, ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".json")
+			attempt := obj(loadEvidence(safeJoin(bundle, "attempts/"+id+".json")))
+			if executionAttemptIdentity(attempt) != id {
+				fail("execution attempt %s is not content-addressed: the recorded fields do not hash to the id", id)
+			}
+			if str(attempt, "kind") != "refused" {
+				fail("execution attempt %s: unexpected kind %q (this schema admits only 'refused'; a completed attempt IS a run)", id, str(attempt, "kind"))
+			}
+			seen := map[string]bool{}
+			for _, ev := range arr(recVal(attempt, "harness_events")) {
+				eid := ev.(string)
+				if seen[eid] {
+					fail("execution attempt %s cites harness event %s twice", id, eid)
+				}
+				seen[eid] = true
+				event := obj(loadEvidence(safeJoin(bundle, "harness/"+eid+".json")))
+				if harnessEventIdentity(event) != eid {
+					fail("execution attempt %s: cited harness event %s is not content-addressed", id, eid)
+				}
+				if str(event, "court") != str(attempt, "court") {
+					fail("execution attempt %s: cited harness event %s belongs to court %s; the attempt is not self-consistent", id, eid, str(event, "court"))
+				}
+			}
+		}
+	}
+
 	// 5. The claims bound to the receipt, when the bundle carries them:
 	//    resolved through the claims/by-receipt index. Each claim's id must
 	//    rederive (FRF/CLAIM/v1 over the canonical document minus the id — a

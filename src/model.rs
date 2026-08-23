@@ -2470,6 +2470,91 @@ pub struct HarnessEvent {
     pub detail: String,
 }
 
+/// The EXECUTION-ATTEMPT schema: a REFUSED observation attempt made first-
+/// class. When a court's observation attempt ends in a harness refusal
+/// (stream overflow, timeout, produced-tree overflow, or a bound the harness
+/// must enforce by refusing) there is no successful run to become the durable
+/// graph root of that attempt — the refusal itself is the observation about
+/// the attempt, and it is now provable evidence: a content-addressed,
+/// immutable record under `attempts/<id>.json` binding the DECLARED court,
+/// the BOUND artifacts, the fixture, argv, the environment digest, the
+/// EXECUTION CONTRACT (profile + capture bounds as enforced), the side that
+/// refused, the harness events recorded during the attempt, and the refusal
+/// reason. The attempt's identity rederives from those fields on every read;
+/// verification also rederives every referenced harness event (each is
+/// itself content-addressed), so the refusal is as portable as the
+/// observation that would have been captured.
+///
+/// This is the `refused` arm of the conceptual `ExecutionAttempt` sum:
+/// `completed → Run | refused { harness events, declared court, bound
+/// artifacts, execution contract, refusal reason }`. A refusal is a first-
+/// class portable observation; the error message is no longer the only
+/// surface through which a failed observation attempt is named.
+///
+/// The `kind` field is always `"refused"` in this version: a completed
+/// attempt IS a run (content-addressed under the capture), so the completed
+/// arm carries no separate record — the attempt record exists exactly where
+/// the run cannot.
+pub const SCHEMA_EXECUTION_ATTEMPT: &str = "frf-execution-attempt-v1";
+
+/// The refusal reason of a refused execution attempt: the enforced-bound kind
+/// and the human detail (the cap and the observed value live in the
+/// content-addressed harness event the attempt cites — never duplicated).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionAttemptRefusal {
+    /// `stream-overflow` | `timeout` | `rlimit` | `produced-overflow`.
+    pub kind: String,
+    /// Free-form detail (the refusing error).
+    pub detail: String,
+}
+
+/// One refused execution-attempt evidence record (FRF/EXECUTION-ATTEMPT/v1).
+/// The id is the content address over the record's own fields; verification
+/// rederives it — and every cited harness event — before the record may be
+/// consumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionAttemptRecord {
+    pub schema_version: String,
+    /// Content address: `FRF/EXECUTION-ATTEMPT/v1` over the document minus
+    /// the id.
+    pub id: String,
+    /// Always `"refused"` in this schema version (a completed attempt is a
+    /// run).
+    pub kind: String,
+    /// The court id (a stable declared identifier; the semantic identity
+    /// below is the identity-bearing member).
+    pub court: String,
+    /// The court's semantic identity — the question, falsifier, authority
+    /// artifact, fixture, envelope, and comparator/normalizer/adapter
+    /// semantics the attempt would have observed under.
+    pub court_semantic_identity: String,
+    /// The exact authority bytes the attempt bound (content address).
+    pub authority_sha256: String,
+    /// The exact candidate bytes the attempt bound (content address).
+    pub candidate_sha256: String,
+    /// The exact fixture bytes the attempt would have observed (content
+    /// address).
+    pub fixture_sha256: String,
+    /// The argv the sides would have been executed with.
+    pub arguments: Vec<String>,
+    /// The environment digest the attempt ran under (FRF/ENVIRONMENT/v2).
+    pub environment_digest: String,
+    /// The execution profile the attempt ran under.
+    pub execution_profile: String,
+    /// The execution contract AS ENFORCED — the effective capture bounds
+    /// (including any overrides in force).
+    pub capture_bounds: CaptureBounds,
+    /// The side whose execution refused: `reference` | `candidate`.
+    pub side: String,
+    /// The content-addressed harness events recorded during the attempt
+    /// (each is itself verified on read; sorted for determinism).
+    pub harness_events: Vec<String>,
+    /// The refusal reason.
+    pub refusal_reason: ExecutionAttemptRefusal,
+}
+
 /// One component of a native runtime closure: a loaded executable or dynamic
 /// library, by the path the system loader resolved and the SHA-256 of its
 /// bytes at observation time.
