@@ -1184,6 +1184,15 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     let path = store.receipt_path(id)?;
     let text = read_bytes(&path, "receipt")?;
 
+    // 0. The protocol representation is CANONICAL JSON: the file bytes MUST
+    //    be their own JCS (RFC 8785). The independent verifiers (xtask, Go)
+    //    enforce exactly this — a receipt reformatted with whitespace is a
+    //    DIFFERENT representation and is refused by them, so the reference
+    //    engine must refuse it too, or the triangle disagrees on identical
+    //    semantics. A non-canonical receipt is refused BEFORE anything may
+    //    consume it.
+    crate::canon::require_canonical_bytes(&text, "receipt")?;
+
     // 1. Content addressing begins with the DOCUMENT, never the typed
     //    projection. Strict parse refuses duplicate property names (RFC 8785
     //    §2 I-JSON — serde_json::Value would silently collapse them), then
@@ -1267,6 +1276,33 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         return Err(FrfError::new(format!(
             "receipt {id}: the candidate artifact does not match the capture"
         )));
+    }
+    // The ADMISSION RECORD the receipt cites is part of the evidence: the
+    // label must resolve to an admitted record whose name/version/artifact
+    // hash match the receipt's authority block exactly. The authority record
+    // is label-addressed (no self-identity), so WITHOUT this binding a
+    // substituted admission record (the label intact, the content swapped)
+    // would flow into consumers silently — the graph-mutation sweep proved
+    // it could: identity and derivation must be established before semantic
+    // consumption, and the cited admission record is part of the derivation.
+    {
+        let authority_id = format!("{}-{}", body.authority.name, body.authority.version);
+        let record = store.load_authority(&authority_id).map_err(|e| {
+            FrfError::new(format!(
+                "receipt {id}: the cited authority {authority_id} is not admitted here: {e}"
+            ))
+        })?;
+        if record.name != body.authority.name
+            || record.version != body.authority.version
+            || record.id != authority_id
+            || record.kind != body.authority.kind
+            || format!("file:{}", record.path) != body.authority.provenance
+            || record.executable_sha256 != body.authority.identity_hash
+        {
+            return Err(FrfError::new(format!(
+                "receipt {id}: the cited admission record {authority_id} does not match the receipt's authority block (the label is a claim until the record rederives)"
+            )));
+        }
     }
     // The closure, when carried, must be self-authenticating; and an artifact
     // is EITHER a script (interpreter chain) OR a native ELF (runtime
