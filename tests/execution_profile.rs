@@ -646,28 +646,31 @@ fn oci_profile_runs_the_side_inside_the_declared_image() {
         return;
     }
     // A container runtime must be present (the profile is enforced).
-    let runtime_ok = ["podman", "docker"].iter().any(|bin| {
-        std::process::Command::new(bin)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    });
-    if !runtime_ok {
+    let runtime: Option<String> = ["podman", "docker"]
+        .iter()
+        .find(|bin| {
+            std::process::Command::new(bin)
+                .arg("--version")
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        })
+        .map(|s| s.to_string());
+    let Some(runtime) = runtime else {
         eprintln!("skipping: no container runtime (podman/docker)");
         return;
-    }
+    };
     // The digest-pinned busybox image the court declares. Pulling by digest
     // is deterministic and content-addressed; the runtime must have it.
     const IMAGE: &str = "docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662";
-    let pulled = std::process::Command::new("podman")
+    let pulled = std::process::Command::new(&runtime)
         .args(["image", "inspect", IMAGE])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !pulled {
         eprintln!(
-            "skipping: the pinned busybox image is not present; load it (podman pull {IMAGE})"
+            "skipping: the pinned busybox image is not present; load it ({runtime} pull {IMAGE})"
         );
         return;
     }
