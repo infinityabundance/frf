@@ -8,8 +8,8 @@ court:
   falsifier: >-
     The candidate's linked library echoes process memory in response to the
     malformed heartbeat: the leak comparator sees the probe's HEARTBLEED
-    verdict, a sensitive marker in the echoed content, or a high-entropy
-    binary dump.
+    verdict or a well-formed leak projection (length + SHA-256 commitment
+    + planted-canary observation).
   authority: ref-hb-1.0.1g
   candidate:
     name: cand-hb
@@ -36,7 +36,7 @@ court:
     fixture_family: heartbeat
     platforms: ["x86_64-linux"]
     observables: [memory.leak.sensitive]
-    normalizers: [strip-heap-noise]
+    normalizers: []
     replay_scope: single-run
 comparators:
   - axis: memory.leak.sensitive
@@ -45,12 +45,6 @@ comparators:
     residual_classifier: text
     relation_version: "v1"
     program: comparators/heartbleed-leak.py
-normalizers:
-  - id: strip-heap-noise
-    relation: mask-address-runs
-    applies_to: stdout
-    relation_version: "v1"
-    program: normalizers/strip-heap-noise.py
 minimizers:
   - id: leak-minimize
     relation: reduce-claimed-payload-length

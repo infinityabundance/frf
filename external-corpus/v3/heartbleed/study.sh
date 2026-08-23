@@ -12,12 +12,11 @@ rm -rf "$WORK"
 mkdir -p "$WORK/builds" "$WORK/fixtures" "$WORK/courts/hb"
 cp "$HB"/builds/hb-1.0.1? "$WORK/builds/"
 cp "$HB/fixtures/defect.conf" "$HB/fixtures/clean.conf" "$WORK/fixtures/"
-mkdir -p "$WORK/comparators" "$WORK/normalizers" "$WORK/minimizers" "$WORK/mutations"
+mkdir -p "$WORK/comparators" "$WORK/minimizers" "$WORK/mutations"
 cp "$HB/comparators/heartbleed-leak.py" "$WORK/comparators/"
-cp "$HB/normalizers/strip-heap-noise.py" "$WORK/normalizers/"
 cp "$HB/minimizers/heartbeat-length.py" "$WORK/minimizers/"
 cp "$HB/mutations/seed-leak.py" "$WORK/mutations/"
-chmod +x "$WORK"/comparators/*.py "$WORK"/normalizers/*.py "$WORK"/minimizers/*.py "$WORK"/mutations/*.py
+chmod +x "$WORK"/comparators/*.py "$WORK"/minimizers/*.py "$WORK"/mutations/*.py
 sed "s|path: {candidate}|path: builds/hb-1.0.1f|" "$HB/manifest-leak.yaml" > "$WORK/courts/hb/manifest-leak.yaml"
 sed "s|path: {candidate}|path: builds/hb-1.0.1g|" "$HB/manifest-leak.yaml" > "$WORK/courts/hb/manifest-leak-g.yaml"
 

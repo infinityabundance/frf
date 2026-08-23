@@ -21,7 +21,8 @@ measured by sweeping the claimed length across the full 1.0.1x series
 
 The CORE decides, never this program: the proposal is court-verified with
 the one comparison operation — both sides re-execute on the proposed
-fixture, the normalizers re-apply, and the residual's lineage must survive.
+fixture, the declared normalizers (none in this court: the projection is
+pure text) re-apply, and the residual's lineage must survive.
 A proposal that does not survive is recorded-but-not-accepted.
 
 Protocol (spec/minimizer.md): reads canonical JSON frf-minimizer-request-v1,

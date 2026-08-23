@@ -13,16 +13,25 @@ process memory in response to the malformed heartbeat?* Three independent
 signals are recognized (any one flags the leak):
 
 1. the probe's verdict — exit 1 + `HEARTBLEED` on stderr;
-2. a known sensitive marker in the echoed content (`-----BEGIN RSA PRIVATE
-   KEY-----`, `SECRET_KEY=`, …);
-3. a binary dump whose Shannon entropy exceeds 0.9 bits/byte (the genuine
-   key-material case).
+2. a well-formed leak projection — `len>0` + a 64-hex SHA-256 commitment
+   (the probe observed the echoed window and committed to it);
+3. a known sensitive marker in the echoed content (`-----BEGIN RSA PRIVATE
+   KEY-----`, `SECRET_KEY=`, …) — the seeded-leak challenge mutant's shape.
 
-The probe (`src/hb.c`) dumps the echoed heartbeat-response bytes to stdout
-on the leak path, so the leaked content is observable evidence, not a byte
-count. A normalizer (`normalizers/strip-heap-noise.py`) masks ASLR-style
-hexadecimal address runs before comparison, so the axis judges leaked
-content, not which heap addresses happened to be adjacent.
+**RAW-MEMORY PUBLICATION BOUNDARY**: the probe (`src/hb.c`) NEVER writes the
+echoed process memory to any observed stream. It plants a deterministic
+synthetic canary in its own heap before the handshake, and on the leak path
+hashes the exact echoed window (SHA-256) and reports ONE projection line:
+
+```text
+hb-leak-projection len=16384 sha256=<hex> canary=present fraction=0.99
+```
+
+The published evidence records "N bytes were returned, SHA-256 X, the
+planted synthetic canary was [not] observed" — never arbitrary process
+memory. The raw bytes exist transiently in the probe for the hash/scan and
+are discarded. (The `strip-heap-noise` normalizer was retired with the raw
+dump: the projection is pure text, so there are no address runs to mask.)
 
 ## The version lifecycle — one lineage, onset to cessation
 
@@ -33,7 +42,7 @@ run as a candidate-revision series against the fixed reference authority
 
 | revision | exit | observable surface on `memory.leak.sensitive` |
 |---|---|---|
-| 1.0.1a | 1 | `HEARTBLEED: the linked libssl echoed 16384 bytes in the heartbeat response` |
+| 1.0.1a | 1 | `hb-leak-projection len=16384 sha256=… canary=present fraction=0.99` + `HEARTBLEED: …` |
 | 1.0.1b | 1 | identical |
 | 1.0.1c | 1 | identical |
 | 1.0.1d | 1 | identical |
@@ -117,12 +126,14 @@ replacement claim.").
 ## The comparative statement
 
 **1.0.1f**: a malformed heartbeat with a claimed 0x4000-byte payload drew a
-16384-byte echo of process memory (the record buffer, including handshake
-data) as a heartbeat response; the leak survived every run of the series.
-**1.0.1g**: the same trigger was silently discarded (RFC 6520 §4) — no
-response, no leak, exit 0. The divergence between the two releases on the
-`memory.leak.sensitive` axis is the patch's effect: 1.0.1g bounds the
-`memcpy` in the heartbeat handler against the record length, so the claimed
-length can no longer reach past the record into adjacent memory. The
-trajectory above maps exactly where that bound appeared in the release
-history.
+16384-byte echo of process memory as a heartbeat response; the leak survived
+every run of the series. The published evidence carries each echo as a
+projection — length, SHA-256 commitment of the exact echoed window, and the
+planted-canary observation (present, 0.99 of the window canary-consistent) —
+never the raw process-memory bytes. **1.0.1g**: the same trigger was silently
+discarded (RFC 6520 §4) — no response, no leak, exit 0. The divergence
+between the two releases on the `memory.leak.sensitive` axis is the patch's
+effect: 1.0.1g bounds the `memcpy` in the heartbeat handler against the
+record length, so the claimed length can no longer reach past the record
+into adjacent memory. The trajectory above maps exactly where that bound
+appeared in the release history.

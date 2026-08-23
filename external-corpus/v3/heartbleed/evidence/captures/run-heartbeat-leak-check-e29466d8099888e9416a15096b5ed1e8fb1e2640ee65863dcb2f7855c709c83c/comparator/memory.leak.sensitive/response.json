@@ -1,1 +1,0 @@
-{"equivalent":false,"failure":null,"indeterminate":false,"request_id":"a752f0ba9c975c6ec76a7a58c884686ba9e7691d23178f0d6a6b161ed312911c","residuals":[{"raw_candidate":"-----BEGIN RSA PRIVATE KEY-----","raw_reference":"hb: no leak (malformed heartbeat silently discarded)","surface":"leak-scan"}],"schema_version":"frf-comparator-response-v2"}

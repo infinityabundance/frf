@@ -10,11 +10,15 @@ leak of process memory in response to the malformed heartbeat" — the actual
 vulnerability, CVE-2014-0160.
 
 The sides are the hb probe (external-corpus/v3/heartbleed/src/hb.c) linked
-against the OpenSSL under test. On the leak path the probe:
+against the OpenSSL under test. RAW-MEMORY PUBLICATION BOUNDARY: the probe
+never writes the echoed process memory to any observed stream. On the leak
+path it:
 
   * exits 1,
-  * writes the leaked heartbeat-response bytes (the echoed process memory)
-    to stdout BEFORE the verdict line,
+  * writes ONE projection line to stdout:
+      hb-leak-projection len=N sha256=<hex> canary=<present|absent> fraction=F
+    (the response length, the SHA-256 commitment of the exact echoed window,
+    and whether the planted synthetic canary appeared in it),
   * writes the verdict to stderr:
     "HEARTBLEED: the linked libssl echoed N bytes in the heartbeat response".
 
@@ -24,14 +28,16 @@ recognizes three independent signals (any one suffices, fail-open only toward
 the leak — a miss is the dangerous direction):
 
   1. the probe's own verdict  — exit 1 + "HEARTBLEED" on stderr;
-  2. a known sensitive marker in the echoed content — PEM private-key /
+  2. a well-formed leak projection — len > 0 and a 64-hex sha256 (the
+     commitment is present, so the content was observed even though the raw
+     bytes are deliberately not published);
+  3. a known sensitive marker in the echoed content — PEM private-key /
      certificate headers, SECRET_KEY= assignments (the seeded-leak challenge
-     mutant prints exactly these);
-  3. a binary dump (non-printable content beyond whitespace) whose Shannon
-     entropy exceeds 0.9 bits/byte — the genuine key-material case the
-     historical leak produced. (The probe's own buffer leak is low-entropy —
-     mostly zeroed memory — which is why signals 1-2 carry the study; signal
-     3 is the general detector for a real key dump.)
+     mutant prints exactly these).
+
+The Shannon-entropy heuristic is GONE: the projection is the semantic
+signal, and the planted canary — not an entropy guess — is the
+memory-disclosure proof.
 
 The projection (raw_reference / raw_candidate) follows the extractor: the
 first line of the side's diagnostic surface — the reference's no-leak line
@@ -45,10 +51,9 @@ frf-comparator-response-v2 on stdout. `request_id` MUST be the SHA-256 of the
 exact request bytes received.
 """
 import base64
-import collections
 import hashlib
 import json
-import math
+import re
 import sys
 
 raw = sys.stdin.buffer.read()
@@ -66,19 +71,10 @@ SENSITIVE_MARKERS = [
     b"BEGIN OPENSSH PRIVATE KEY",
 ]
 
-
-def shannon_entropy(data):
-    if not data:
-        return 0.0
-    n = len(data)
-    freq = collections.Counter(data)
-    return -sum((c / n) * math.log2(c / n) for c in freq.values())
-
-
-def looks_like_binary_dump(data):
-    # Non-printable bytes beyond whitespace: the heartbeat-response dump is
-    # binary process memory; the probe's ASCII verdict lines are not.
-    return any(b < 0x09 or (0x0E <= b <= 0x1F) or b >= 0x7F for b in data)
+PROJECTION_RE = re.compile(
+    rb"hb-leak-projection\s+len=(\d+)\s+sha256=([0-9a-f]{64})"
+    rb"\s+canary=(present|absent)"
+)
 
 
 def classify(exit_code, stdout_bytes, stderr_text):
@@ -88,6 +84,13 @@ def classify(exit_code, stdout_bytes, stderr_text):
     verdict = exit_code == "1" and "HEARTBLEED" in stderr_text
     if verdict:
         signals.append("probe-verdict")
+    m = PROJECTION_RE.search(stdout_bytes)
+    if m:
+        length = int(m.group(1))
+        if length > 0:
+            signals.append("leak-projection")
+            if not projection:
+                projection = stdout_bytes.decode("utf-8", "replace").split("\n", 1)[0]
     for marker in SENSITIVE_MARKERS:
         if marker in stdout_bytes:
             signals.append("marker")
@@ -97,10 +100,6 @@ def classify(exit_code, stdout_bytes, stderr_text):
                     if marker in line:
                         projection = line.decode("utf-8", "replace")
                         break
-    if looks_like_binary_dump(stdout_bytes) and len(stdout_bytes) > 64:
-        ent = shannon_entropy(stdout_bytes)
-        if ent > 0.9:
-            signals.append("high-entropy")
     if not projection:
         # the diagnostic surface: the candidate's first stderr line, else its
         # first stdout line (the no-leak verdicts live on stdout)

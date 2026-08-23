@@ -17,14 +17,23 @@
  *
  * The observable is the exit class and the diagnostic line:
  *   exit 0  stdout "hb: no leak ..."        — the linked library is fixed
- *   exit 1  stderr "HEARTBLEED: leak ..."   — the linked library is vulnerable
+ *   exit 1  stdout projection + stderr "HEARTBLEED: leak ..." — vulnerable
  *   exit 2  stderr "hb: indeterminate ..."  — the probe itself failed; never
  *                                              counted as a pass
  *
- * On the leak path the probe ALSO dumps the echoed heartbeat response — the
- * leaked process memory — to stdout BEFORE the verdict line, so the leaked
- * content itself is observable evidence (the memory.leak.sensitive axis's
- * comparator scans it for private-key markers and high-entropy material).
+ * RAW-MEMORY PUBLICATION BOUNDARY: on the leak path the probe NEVER writes
+ * the echoed process memory to any observed stream. The vulnerable library
+ * answers the malformed heartbeat by echoing up to 16 KiB of process
+ * memory; the probe hashes that exact echoed window (SHA-256), scans it
+ * for the deterministic synthetic canary it planted in its own heap, and
+ * prints ONE projection line to stdout:
+ *
+ *     hb-leak-projection len=N sha256=<hex> canary=<present|absent> fraction=F
+ *
+ * so the published evidence records "N bytes were returned, SHA-256 X, the
+ * planted synthetic canary was [not] observed" — never arbitrary process
+ * memory. The raw bytes exist transiently in the probe's memory for the
+ * hash/scan and are discarded; they never reach a capture.
  *
  * The claimed payload length is read from the fixture marker: "malformed
  * 0x4000" claims 0x4000 bytes (the historical exploit value, and the
@@ -66,6 +75,7 @@
 #include <arpa/inet.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/sha.h>
 
 /* A self-signed certificate for the loopback server role (generated once;
  * embedded so the probe is fully self-contained and deterministic). */
@@ -119,6 +129,23 @@ static const char PEM_KEY[] =
     "kgQT+SScn1z37UQDwQ4FNjk+SAq1B/mTQd9R6rQx4VrupsO9YKM8Ny6eYTKbZGf5\n"
     "NN0DWA7//IMsbqYygH3Gm44=\n"
     "-----END PRIVATE KEY-----\n";
+
+/* THE SYNTHETIC CANARY — deterministic and deliberately synthetic, published
+ * in the probe source (it is NOT secret). The probe plants a live arena of
+ * these bytes in its heap before the handshake and pre-fills the heap size
+ * class OpenSSL's record-read buffer will allocate, so when the vulnerable
+ * library over-reads past the malformed heartbeat the echoed window is
+ * canary bytes, not uninitialized process memory. The leak projection
+ * reports the window's SHA-256 and whether the full seed appeared in it. */
+static const unsigned char CANARY_SEED[64] = {
+    'F', 'R', 'F', '-', 'S', 'Y', 'N', 'T', 'H', 'E', 'T', 'I', 'C', '-',
+    'C', 'A', 'N', 'A', 'R', 'Y', '-', 'V', '1', ':',
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, 0x61,
+    0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69,
+    0xca, 0xfe, 0xba, 0xbe, 0xde, 0xad, 0xbe, 0xef,
+};
 
 /* The ClientHello from the original public Heartbleed exploit (Jared
  * Stafford, CVE-2014-0160): TLS 1.1, the 2014-era CBC cipher list, an empty
@@ -203,6 +230,71 @@ static void die(const char *what) {
 #define RCVTIMEO_SEC 15
 #define MAX_ATTEMPTS 3
 
+/* A live canary arena: kept allocated for the probe's whole life so the
+ * process heap is dense with synthetic bytes; the server child inherits it
+ * via fork. */
+static unsigned char *canary_arena;
+static size_t canary_arena_len;
+
+static void plant_canary_arena(void) {
+    canary_arena_len = 1u << 20; /* 1 MiB of canary */
+    canary_arena = malloc(canary_arena_len);
+    if (!canary_arena) {
+        canary_arena_len = 0;
+        return;
+    }
+    volatile unsigned char *vp = canary_arena;
+    for (size_t i = 0; i < canary_arena_len; i++)
+        vp[i] = CANARY_SEED[i % sizeof CANARY_SEED];
+}
+
+/* Fill + free a canary region in the server child just before the handshake
+ * reads: OpenSSL's accept path allocates init_buf (16 KiB), the record-read
+ * buffer (18 KiB), the write buffer (18 KiB) — a freed canary chunk of the
+ * SAME heap arena is split by those mallocs in turn, so the record-read
+ * buffer (whose tail is the heartbeat over-read window) is carved from
+ * canary bytes, not uninitialized heap. Sized to cover all three while
+ * staying BELOW glibc's mmap threshold (128 KiB): an mmap'd scratch is
+ * returned to the OS on free and the handshake allocations get fresh zero
+ * pages instead. Must run in the server child after the socket is bound and
+ * before the first SSL_read. */
+static void plant_read_buffer_canary(void) {
+    size_t sz = 96 * 1024; /* covers init_buf + rbuf + wbuf, heap-resident */
+    unsigned char *p = malloc(sz);
+    if (!p)
+        return;
+    volatile unsigned char *vp = p;
+    for (size_t i = 0; i < sz; i++)
+        vp[i] = CANARY_SEED[i % sizeof CANARY_SEED];
+    free(p);
+}
+
+/* Did the full 64-byte seed appear contiguously in the echoed window? */
+static int canary_seed_in_window(const unsigned char *data, size_t n) {
+    if (n < sizeof CANARY_SEED)
+        return 0;
+    for (size_t i = 0; i + sizeof CANARY_SEED <= n; i++)
+        if (memcmp(data + i, CANARY_SEED, sizeof CANARY_SEED) == 0)
+            return 1;
+    return 0;
+}
+
+/* The fraction of the echoed window that is canary-consistent under its
+ * BEST 64-byte phase alignment (the over-read starts mid-cycle, so the
+ * phase must be searched): 1.0 means the window was entirely synthetic. */
+static double canary_fraction(const unsigned char *data, size_t n) {
+    size_t best = 0;
+    for (size_t phase = 0; phase < sizeof CANARY_SEED; phase++) {
+        size_t match = 0;
+        for (size_t i = 0; i < n; i++)
+            if (data[i] == CANARY_SEED[(i + phase) % sizeof CANARY_SEED])
+                match++;
+        if (match > best)
+            best = match;
+    }
+    return n ? (double)best / (double)n : 0.0;
+}
+
 int main(int argc, char **argv) {
     /* The fixture selects the probe mode: "handshake" (the clean control)
      * performs the TLS handshake and sends NO heartbeat at all — both
@@ -235,6 +327,7 @@ int main(int argc, char **argv) {
         }
     }
     build_heartbeat(claimed);
+    plant_canary_arena();
     SSL_library_init();
     SSL_load_error_strings();
 
@@ -303,6 +396,13 @@ int main(int argc, char **argv) {
                 _exit(2);
             SSL_set_accept_state(sssl);
             SSL_set_fd(sssl, sfd);
+            /* Plant the read-buffer canary NOW: the record-read buffer
+             * (18432 bytes) is not allocated until the first SSL_read
+             * (ssl3_setup_buffers); a just-freed canary-filled chunk of the
+             * same size class is what that malloc takes, so the
+             * heartbeat over-read window past the record is canary bytes
+             * rather than uninitialized heap. */
+            plant_read_buffer_canary();
             /* SSL_read drives the handshake internally: it reads the
              * ClientHello, writes the ServerHello + Certificate +
              * ServerHelloDone flight, then reads the next record — the
@@ -431,11 +531,23 @@ int main(int argc, char **argv) {
         if (got_type == 24) {
             /* A heartbeat RESPONSE record to the MALFORMED trigger. RFC
              * 6520 §4 requires a peer to DISCARD a malformed heartbeat;
-             * answering it is the vulnerability (CVE-2014-0160) — the
-             * echoed bytes are process memory, whatever the size. Dump the
-             * leaked content to stdout (the memory.leak.sensitive axis's
-             * raw material), then the verdict line on stderr. */
-            fwrite(payload, 1, total, stdout);
+             * answering it is the vulnerability (CVE-2014-0160). The echoed
+             * bytes are process memory. RAW-MEMORY BOUNDARY: the probe
+             * never writes them to an observed stream — it computes the
+             * projection (response length, SHA-256 commitment of the exact
+             * echoed window, whether the planted synthetic canary appeared
+             * in it, and the canary-consistent fraction) and prints only
+             * that. The raw bytes are discarded after the hash/scan. */
+            unsigned char digest[SHA256_DIGEST_LENGTH];
+            SHA256(payload, total, digest);
+            char hex[65];
+            for (int i = 0; i < SHA256_DIGEST_LENGTH; i++)
+                snprintf(&hex[i * 2], 3, "%02x", digest[i]);
+            int seen = canary_seed_in_window(payload, total);
+            double frac = canary_fraction(payload, total);
+            fprintf(stdout,
+                    "hb-leak-projection len=%zu sha256=%s canary=%s fraction=%.2f\n",
+                    total, hex, seen ? "present" : "absent", frac);
             fflush(stdout);
             fprintf(stderr,
                     "HEARTBLEED: the linked libssl echoed %zu bytes in the heartbeat response\n",
