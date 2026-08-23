@@ -8,6 +8,7 @@
 //! | exit    | exit-class         | class-change            | cli-exit-minimize       | `{scope} exit parity`               |
 //! | stderr  | diagnostic-routing  | first-line-token-change | cli-diagnostic-minimize | byte-identical diagnostics          |
 //! | stdout  | stdout-routing      | first-line-token-change | cli-stdout-minimize     | byte-identical stdout               |
+//! | memory.leak.sensitive | leak-scan | observed                | leak-minimize           | `{scope} memory.leak.sensitive parity` |
 //! | (other) | `{axis}-divergence` | observed                | none                    | `{scope} {axis} parity`             |
 //!
 //! The generic row is deterministic and honest: an axis the built-in router
@@ -50,6 +51,14 @@ pub fn token_shape(axis: &ObservableId) -> TokenShape {
             surface: "stdout-routing".to_string(),
             magnitude: "first-line-token-change".to_string(),
             next_court: "cli-stdout-minimize".to_string(),
+        },
+        // The Heartbleed information-leak axis (external-corpus/v3/heartbleed):
+        // a routed row like the built-ins, so a declared minimizer
+        // (`leak-minimize`) can serve its residuals via `frf court minimize`.
+        "memory.leak.sensitive" => TokenShape {
+            surface: "leak-scan".to_string(),
+            magnitude: "observed".to_string(),
+            next_court: "leak-minimize".to_string(),
         },
         other => TokenShape {
             surface: format!("{other}-divergence"),

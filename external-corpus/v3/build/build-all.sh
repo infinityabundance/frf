@@ -5,7 +5,8 @@
 #
 #   shellshock  bash 4.3.0  (vulnerable, CVE-2014-6271)  — pristine upstream
 #               bash 4.3.30 (fixed)                       — the final 4.3 patch
-#   heartbleed  OpenSSL 1.0.1f (vulnerable, CVE-2014-0160)
+#   heartbleed  OpenSSL 1.0.1a..1.0.1f (vulnerable, CVE-2014-0160 — every
+#               release from the heartbeat feature's introduction to the fix)
 #               OpenSSL 1.0.1g (fixed)                    — the fix release
 #   log4shell   log4j 2.14.1 (vulnerable, CVE-2021-44228) — Maven Central jars
 #               log4j 2.17.1 (fixed)                      — pinned by SHA-256
@@ -39,6 +40,16 @@ bash_4_3_0_url="https://snapshot.debian.org/archive/debian/20140304T040604Z/pool
 bash_4_3_0_sha="b2fe79ddf9e7abdb4695e3070afa866d2a94a58d1cc9d731585330c753815491"
 bash_4_3_30_url="https://ftp.gnu.org/gnu/bash/bash-4.3.30.tar.gz"
 bash_4_3_30_sha="317881019bbf2262fb814b7dd8e40632d13c3608d2f237800a8828fbb8a640dd"
+openssl_1_0_1a_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1a.tar.gz"
+openssl_1_0_1a_sha="d3487e09d891c772cf946273a3bb0ca47479e7941be6d822274320e7cfcc361b"
+openssl_1_0_1b_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1b.tar.gz"
+openssl_1_0_1b_sha="1187bf2d5cdf0b286b951bf5c777aa97855cd7db24fdb9604cb557c8b1d7364b"
+openssl_1_0_1c_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1c.tar.gz"
+openssl_1_0_1c_sha="2a9eb3cd4e8b114eb9179c0d3884d61658e7d8e8bf4984798a5f5bd48e325ebe"
+openssl_1_0_1d_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1d.tar.gz"
+openssl_1_0_1d_sha="88a423f9b08a994054583691b968815875580e12df754e881d7cfe9f1bd1f49d"
+openssl_1_0_1e_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1e.tar.gz"
+openssl_1_0_1e_sha="f74f15e8c8ff11aa3d5bb5f276d202ec18d7246e95f961db76054199c69c1ae3"
 openssl_1_0_1f_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1f.tar.gz"
 openssl_1_0_1f_sha="6cc2a80b17d64de6b7bac985745fdaba971d54ffd7d38d3556f998d7c0c9cb5a"
 openssl_1_0_1g_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1g.tar.gz"
@@ -60,8 +71,11 @@ fetch() { # $1=url $2=dest $3=sha256
 
 fetch "$bash_4_3_0_url"   "$WORK_DIR/src/bash_4.3.orig.tar.gz"  "$bash_4_3_0_sha"
 fetch "$bash_4_3_30_url"  "$WORK_DIR/src/bash-4.3.30.tar.gz"   "$bash_4_3_30_sha"
-fetch "$openssl_1_0_1f_url" "$WORK_DIR/src/openssl-1.0.1f.tar.gz" "$openssl_1_0_1f_sha"
-fetch "$openssl_1_0_1g_url" "$WORK_DIR/src/openssl-1.0.1g.tar.gz" "$openssl_1_0_1g_sha"
+for v in a b c d e f g; do
+  eval "u=\$openssl_1_0_1${v}_url"
+  eval "s=\$openssl_1_0_1${v}_sha"
+  fetch "$u" "$WORK_DIR/src/openssl-1.0.1${v}.tar.gz" "$s"
+done
 
 # The log4j jars are prebuilt Maven Central artifacts, pinned by SHA-256.
 for v in 2.14.1 2.17.1; do
@@ -97,6 +111,11 @@ podman run --rm --network=host \
 # Commit the artifacts into the corpus.
 install -m 0755 "$WORK_DIR/out/bash-4.3.0" shellshock/builds/bash-4.3.0
 install -m 0755 "$WORK_DIR/out/bash-4.3.30" shellshock/builds/bash-4.3.30
+install -m 0755 "$WORK_DIR/out/hb-1.0.1a" heartbleed/builds/hb-1.0.1a
+install -m 0755 "$WORK_DIR/out/hb-1.0.1b" heartbleed/builds/hb-1.0.1b
+install -m 0755 "$WORK_DIR/out/hb-1.0.1c" heartbleed/builds/hb-1.0.1c
+install -m 0755 "$WORK_DIR/out/hb-1.0.1d" heartbleed/builds/hb-1.0.1d
+install -m 0755 "$WORK_DIR/out/hb-1.0.1e" heartbleed/builds/hb-1.0.1e
 install -m 0755 "$WORK_DIR/out/hb-1.0.1f" heartbleed/builds/hb-1.0.1f
 install -m 0755 "$WORK_DIR/out/hb-1.0.1g" heartbleed/builds/hb-1.0.1g
 install -m 0644 "$WORK_DIR/out/probe.jar" log4shell/builds/probe.jar

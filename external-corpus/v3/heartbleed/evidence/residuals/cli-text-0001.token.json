@@ -1,0 +1,1 @@
+{"authority":"ref-hb-1.0.1g","blocks_claims":["heartbeat memory.leak.sensitive parity"],"disposition":"open","kind":"text","magnitude":"observed","next_court":"leak-minimize","residual_id":"cli-text-0001","schema_version":"frf-token-v1","scope":"heartbeat","surface":"leak-scan","token":"text/leak-scan/observed/open"}

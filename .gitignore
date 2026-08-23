@@ -40,3 +40,4 @@
 # test must stay green and the tree must stay untracked.
 /tests/frf
 /tests/golden
+/golden/work/heartbleed-leak-study/
