@@ -41,6 +41,8 @@ pub fn status(store: &Store) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
     let mut receipts_verified = 0usize;
     let mut captures_verified = 0usize;
+    let mut surface_declared = 0usize;
+    let mut surface_withheld = 0usize;
 
     // Walk every committed receipt: each must verify at the GRAPH level
     // (identity + derivation + every referenced CID resolving).
@@ -86,6 +88,14 @@ pub fn status(store: &Store) -> Result<()> {
                     for d in cv.detached {
                         push_unique(&mut detached, d);
                     }
+                    if let Some(surface) = &cv.capture.publication_surface {
+                        for p in surface {
+                            surface_declared += 1;
+                            if p.withholds_bytes() {
+                                surface_withheld += 1;
+                            }
+                        }
+                    }
                 }
                 Err(e) => errors.push(format!("capture {run}: {e}")),
             }
@@ -94,6 +104,7 @@ pub fn status(store: &Store) -> Result<()> {
 
     let graph_verified = errors.is_empty();
     let closure_complete = detached.is_empty();
+    let stream_closure_complete = surface_withheld == 0;
 
     println!("evidence status (root {})", store.root.display());
     if let Some(decl) = &declaration {
@@ -103,6 +114,46 @@ pub fn status(store: &Store) -> Result<()> {
         );
     }
     println!("  verified: {receipts_verified} receipt(s), {captures_verified} capture(s)");
+    if surface_declared > 0 {
+        println!(
+            "  capture surface: {surface_declared} stream(s) declared ({surface_withheld} withheld by policy)"
+        );
+    }
+    // The publication manifest (written by `publish-detached`) is part of a
+    // publication's contract: when present it must parse and its withheld
+    // count must match the verified captures' surfaces.
+    let manifest_path = store.root.join("publication-manifest.json");
+    if manifest_path.is_file() {
+        let manifest: crate::model::PublicationManifest =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).map_err(|e| {
+                FrfError::new(format!(
+                    "cannot read the publication manifest {}: {e}",
+                    manifest_path.display()
+                ))
+            })?)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "the publication manifest {} is not a valid publication manifest: {e}",
+                    manifest_path.display()
+                ))
+            })?;
+        if manifest.schema_version != crate::model::SCHEMA_PUBLICATION_MANIFEST {
+            return Err(FrfError::new(format!(
+                "the publication manifest has an unsupported schema {:?}",
+                manifest.schema_version
+            )));
+        }
+        let manifest_withheld = manifest.streams.iter().filter(|s| !s.published).count();
+        if manifest_withheld != surface_withheld {
+            return Err(FrfError::new(format!(
+                "the publication manifest records {manifest_withheld} withheld stream(s) but the verified captures declare {surface_withheld} — the transform is inconsistent"
+            )));
+        }
+        println!(
+            "  publication manifest: {} stream disposition(s) recorded",
+            manifest.streams.len()
+        );
+    }
     if graph_verified {
         println!("  graph_verified: yes");
     } else {
@@ -111,31 +162,43 @@ pub fn status(store: &Store) -> Result<()> {
             println!("    {e}");
         }
     }
-    if closure_complete {
+    if closure_complete && stream_closure_complete {
         println!("  object_closure: complete");
+        println!("  stream_closure: complete");
         println!("  replayable: yes");
     } else {
-        println!(
-            "  object_closure: incomplete-by-policy ({} declared-detached payload(s))",
-            detached.len()
-        );
-        for d in &detached {
+        if closure_complete {
+            println!("  object_closure: complete");
+        } else {
             println!(
-                "    {}  role={}  publication={}  size={}",
-                &d.cid[..16],
-                d.role,
-                d.publication,
-                d.size
+                "  object_closure: incomplete-by-policy ({} declared-detached payload(s))",
+                detached.len()
             );
-            println!("      reconstruction: {}", d.reconstruction.recipe);
-            if let Some(src) = &d.reconstruction.source_path {
-                println!("      source: {src}");
-            }
-            if let Some(p) = &d.path {
-                println!("      path: {p}");
+            for d in &detached {
+                println!(
+                    "    {}  role={}  publication={}  size={}",
+                    &d.cid[..16],
+                    d.role,
+                    d.publication,
+                    d.size
+                );
+                println!("      reconstruction: {}", d.reconstruction.recipe);
+                if let Some(src) = &d.reconstruction.source_path {
+                    println!("      source: {src}");
+                }
+                if let Some(p) = &d.path {
+                    println!("      path: {p}");
+                }
             }
         }
-        println!("  replayable: no — hydrate the detached payloads first (verify each against its declared CID)");
+        if !stream_closure_complete {
+            println!(
+                "  stream_closure: incomplete-by-policy ({surface_withheld} withheld stream(s); identities + dispositions published, bytes local)"
+            );
+        }
+        println!(
+            "  replayable: no — hydrate the detached payloads and withheld streams first (verify each against its declared identity)"
+        );
     }
     if !graph_verified {
         return Err(FrfError::new(format!(
@@ -229,6 +292,25 @@ pub fn publish_detached(source: &Store, policy: &Path, output: &Path) -> Result<
     // 5. Copy the tree verbatim, withholding the declared payloads.
     copy_tree_withholding(&source_root, output, &policy_doc)?;
 
+    // 5b. The capture-surface stream policies: every observed stream the
+    //     source captures declared non-publishable (`hash-only`/`detached`)
+    //     is withheld from the publication, its disposition record written
+    //     where the bytes used to live, and every stream's disposition
+    //     recorded in the publication manifest. The transform is explicit:
+    //     a stream is either published as-is or withheld WITH its identity
+    //     and policy recorded — nothing is silently altered.
+    let publication_manifest = withhold_streams(source, output)?;
+    let manifest_canonical = crate::canon::canonical(
+        &serde_json::to_value(&publication_manifest)
+            .map_err(|e| FrfError::new(format!("publication manifest: {e}")))?,
+    )?;
+    let manifest_path = output.join("publication-manifest.json");
+    let mut mf = std::fs::File::create(&manifest_path)
+        .map_err(|e| FrfError::new(format!("cannot create {}: {e}", manifest_path.display())))?;
+    mf.write_all(manifest_canonical.as_bytes())
+        .map_err(|e| FrfError::new(format!("cannot write {}: {e}", manifest_path.display())))?;
+    mf.sync_all().ok();
+
     // 6. Write the declaration (canonical) into the publication.
     let canonical = crate::canon::canonical(
         &serde_json::to_value(&policy_doc)
@@ -266,9 +348,10 @@ pub fn publish_detached(source: &Store, policy: &Path, output: &Path) -> Result<
             "publish-detached: the produced publication does not verify at the graph level — the transform failed closed",
         ));
     }
-    if out_status.closure_complete {
+    let stream_withheld_any = publication_manifest.streams.iter().any(|s| !s.published);
+    if out_status.closure_complete && !stream_withheld_any {
         return Err(FrfError::new(
-            "publish-detached: the produced publication still has a complete closure — nothing was actually withheld; the policy named no present payloads",
+            "publish-detached: the produced publication withholds NOTHING — no declared payload existed in the source and no capture-surface stream is non-publishable",
         ));
     }
     for d in &out_status.detached {
@@ -420,4 +503,106 @@ fn copy_tree_withholding_from(
         }
     }
     Ok(())
+}
+
+/// The capture-surface pass of the publication transform: walk every source
+/// capture, apply each declared stream policy to the OUTPUT copy, and return
+/// the deterministic publication manifest.
+///
+/// - a stream declared `hash-only` or `detached` is withheld: its copied
+///   bytes are REMOVED from the output and a disposition record
+///   (`<side>.<stream>.pub.json`) naming the withheld bytes' SHA-256 and the
+///   policy is written where the bytes used to live — the observation's
+///   identity travels, its bytes do not;
+/// - every other stream (and every undeclared stream — the default is
+///   `inline`) is published as-is, recorded with `published: true`;
+/// - every stream of every run is recorded in the publication manifest
+///   (sorted, deterministic), so the publication can never silently alter
+///   what an observation means.
+fn withhold_streams(source: &Store, output: &Path) -> Result<crate::model::PublicationManifest> {
+    use crate::model::{StreamDisposition, StreamPublicationRecord};
+    let mut dispositions: Vec<StreamDisposition> = Vec::new();
+    let captures_dir = source.root.join("captures");
+    if !captures_dir.is_dir() {
+        return Ok(crate::model::PublicationManifest {
+            schema_version: crate::model::SCHEMA_PUBLICATION_MANIFEST.to_string(),
+            streams: Vec::new(),
+        });
+    }
+    let mut runs: Vec<String> = std::fs::read_dir(&captures_dir)
+        .map_err(|e| FrfError::new(format!("cannot read {}: {e}", captures_dir.display())))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    runs.sort();
+    for run in runs {
+        let capture = source.load_capture(&run)?.into_inner();
+        let out_dir = output.join("captures").join(&run);
+        for (side, s) in [
+            ("reference", &capture.reference),
+            ("candidate", &capture.candidate),
+        ] {
+            for (stream, sha) in [("stdout", &s.stdout_sha256), ("stderr", &s.stderr_sha256)] {
+                let policy = capture
+                    .publication_surface
+                    .as_ref()
+                    .and_then(|v| {
+                        v.iter()
+                            .find(|p| p.side == side && p.stream == stream)
+                            .map(|p| p.policy.clone())
+                    })
+                    .unwrap_or_else(|| "inline".to_string());
+                let withholds = policy == "hash-only" || policy == "detached";
+                if withholds {
+                    // Remove the copied bytes from the publication.
+                    let stream_path = out_dir.join(format!("{side}.{stream}"));
+                    if stream_path.is_file() {
+                        std::fs::remove_file(&stream_path).map_err(|e| {
+                            FrfError::new(format!("cannot withhold {}: {e}", stream_path.display()))
+                        })?;
+                    }
+                    // Write the disposition record in their place.
+                    let record = StreamPublicationRecord {
+                        schema_version: crate::model::SCHEMA_STREAM_PUBLICATION.to_string(),
+                        side: side.to_string(),
+                        stream: stream.to_string(),
+                        policy: policy.clone(),
+                        sha256: sha.clone(),
+                    };
+                    let canonical = crate::canon::canonical(
+                        &serde_json::to_value(&record)
+                            .map_err(|e| FrfError::new(format!("stream disposition: {e}")))?,
+                    )?;
+                    let disp_path = out_dir.join(format!("{side}.{stream}.pub.json"));
+                    std::fs::create_dir_all(disp_path.parent().unwrap()).map_err(|e| {
+                        FrfError::new(format!(
+                            "cannot create {}: {e}",
+                            disp_path.parent().unwrap().display()
+                        ))
+                    })?;
+                    let mut f = std::fs::File::create(&disp_path).map_err(|e| {
+                        FrfError::new(format!("cannot create {}: {e}", disp_path.display()))
+                    })?;
+                    f.write_all(canonical.as_bytes()).map_err(|e| {
+                        FrfError::new(format!("cannot write {}: {e}", disp_path.display()))
+                    })?;
+                    f.sync_all().ok();
+                }
+                dispositions.push(StreamDisposition {
+                    run: run.clone(),
+                    side: side.to_string(),
+                    stream: stream.to_string(),
+                    policy,
+                    sha256: sha.clone(),
+                    published: !withholds,
+                });
+            }
+        }
+    }
+    dispositions.sort_by(|a, b| (&a.run, &a.side, &a.stream).cmp(&(&b.run, &b.side, &b.stream)));
+    Ok(crate::model::PublicationManifest {
+        schema_version: crate::model::SCHEMA_PUBLICATION_MANIFEST.to_string(),
+        streams: dispositions,
+    })
 }

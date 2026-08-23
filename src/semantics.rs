@@ -464,6 +464,11 @@ pub struct RunPreimage<'a> {
     /// when the court declared `frf-exec-oci`: the complete root filesystem
     /// is execution machinery, bound by digest.
     pub container_image: Option<&'a OciImage>,
+    /// The capture-surface declarations (the publication boundary): HOW each
+    /// observed stream may be published. Part of the OBSERVATION contract —
+    /// entered into the observation identity when present, so a tampered
+    /// surface (e.g. flipping `hash-only` to `inline`) refuses the capture.
+    pub publication_surface: Option<&'a [CaptureSurfacePolicy]>,
 }
 
 /// The side projection shared by the observation and run identities: the
@@ -510,7 +515,7 @@ fn residual_projection(r: &ResidualRecord) -> serde_json::Value {
 /// question, inputs, effective environment, and outputs share this identity
 /// regardless of which harness observed them.
 pub fn observation_identity(p: &RunPreimage) -> Result<String> {
-    let doc = json!({
+    let mut doc = json!({
         "court": p.court,
         "court_semantic_identity": p.court_semantic_identity,
         "authority": p.authority,
@@ -522,6 +527,27 @@ pub fn observation_identity(p: &RunPreimage) -> Result<String> {
         "candidate": side_projection(p.candidate),
         "residuals": p.residuals.iter().map(residual_projection).collect::<Vec<_>>(),
     });
+    // The capture surface is part of the observation contract: how the
+    // observed streams may be published. Entered ONLY when the capture
+    // declares one (absent == every stream inline == the pre-surface record
+    // shape, which rederives identically).
+    if let Some(surface) = p.publication_surface {
+        if !surface.is_empty() {
+            doc["publication_surface"] = serde_json::to_value(
+                surface
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "side": s.side,
+                            "stream": s.stream,
+                            "policy": s.policy,
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or(serde_json::Value::Null);
+        }
+    }
     hash_preimage("FRF/OBSERVATION/v1", &doc)
 }
 
@@ -1794,6 +1820,7 @@ mod tests {
                 adapter_implementations: &[],
                 minimizer_implementations: &[],
                 container_image: None,
+                publication_surface: None,
             };
             (
                 observation_identity(&pre).unwrap(),
@@ -1939,6 +1966,7 @@ mod tests {
             evidence_refs: vec![],
             execution_context: None,
             container_image: None,
+            publication_surface: None,
         };
 
         let a = capture(spec("q"), &"1".repeat(64));

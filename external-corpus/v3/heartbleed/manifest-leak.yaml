@@ -56,3 +56,23 @@ mutations:
     relation_version: "v1"
     target_axes: [memory.leak.sensitive]
     program: mutations/seed-leak.py
+# The capture surface — the PUBLICATION BOUNDARY, declared per observed
+# stream (spec/publication-surface.md). The probe NEVER writes raw process
+# memory to an observed stream: stdout carries a safe synthetic projection
+# (length + SHA-256 commitment + planted-canary observation) and stderr a
+# diagnostic line. The declaration makes that contract part of the
+# OBSERVATION: the published evidence records the leak's identity and the
+# canary observation, never arbitrary leaked bytes.
+capture_surface:
+  - side: candidate
+    stream: stdout
+    policy: synthetic-publication
+  - side: reference
+    stream: stdout
+    policy: inline
+  - side: candidate
+    stream: stderr
+    policy: inline
+  - side: reference
+    stream: stderr
+    policy: inline

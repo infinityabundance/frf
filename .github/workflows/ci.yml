@@ -105,18 +105,6 @@ jobs:
       - name: The external empirical program v2 — version ladders, environment matrices, authority transitions
         run: |
           cargo xtask external-experiment-v2 golden/work/external-experiment-v2.json
-      - name: The external empirical program v3 — real upstream releases
-        run: |
-          cargo xtask external-experiment-v3 golden/work/external-experiment-v3.json
-      - name: The external empirical program v4 — the comparative measurement study
-        run: |
-          cargo xtask external-experiment-v4 golden/work/external-experiment-v4.json
-      - name: The external empirical program v5 — the proper runtime-overhead benchmark
-        env:
-          FRF_BENCH_SAMPLES: "5"
-          FRF_BENCH_WARMUPS: "1"
-        run: |
-          cargo xtask external-experiment-v5 golden/work/external-experiment-v5.json
       - name: The OCI execution profile — the side runs inside the digest-pinned image
         env:
           FRF_TEST_OCI: "1"
@@ -124,6 +112,32 @@ jobs:
           RUNTIME=podman; podman --version >/dev/null 2>&1 || RUNTIME=docker
           $RUNTIME image inspect docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 >/dev/null 2>&1 || $RUNTIME pull docker.io/library/busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
           cargo test --test execution_profile -- oci
+
+  v3-gate:
+    name: V3 publication-integrity gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Hosted CI deliberately does NOT execute the v3–v5 empirical programs
+      # (they construct and run historically vulnerable software). A green
+      # badge instead establishes EXACTLY this checklist — the publication
+      # boundary is intact and the prohibited payloads never entered the
+      # tracked tree in any form:
+      - name: "V3 publication-integrity gate (empirical replay intentionally NOT executed)"
+        run: |
+          echo "What a green badge establishes:"
+          echo "  ✓ prohibited historical build products absent"
+          echo "  ✓ prohibited artifact hashes do not exist as Git blobs/CAS payloads"
+          echo "  ✓ source hashes declared"
+          echo "  ✓ reconstruction recipes present"
+          echo "  ✓ expected artifact hashes declared"
+          echo "  ✓ safe evidence documents canonical/valid"
+          echo "  ✓ detached-object references resolve structurally"
+          echo "  ℹ empirical replay intentionally not executed in hosted CI"
+          cargo test --test v3_publication_integrity -- --nocapture
+          cargo test --test prohibited_payloads
 
   go-verifier:
     name: "Go verifier: the third triangle point"

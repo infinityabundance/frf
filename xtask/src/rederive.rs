@@ -464,7 +464,7 @@ fn implementation_projection(doc: &Value) -> Value {
 /// FRF/OBSERVATION/v1 over the capture's recorded fields: what was observed
 /// — the question, the inputs, the effective environment, and the answer.
 pub fn observation_identity(cap: &Value, residuals: &[Value]) -> String {
-    let doc = json!({
+    let mut doc = json!({
         "court": s(&cap["court"]),
         "court_semantic_identity": s(&cap["court_semantic_identity"]),
         "authority": s(&cap["authority"]),
@@ -476,6 +476,13 @@ pub fn observation_identity(cap: &Value, residuals: &[Value]) -> String {
         "candidate": side(&cap["candidate"]),
         "residuals": residuals.iter().map(residual_projection).collect::<Vec<_>>(),
     });
+    // The capture surface is part of the observation contract; entered only
+    // when the capture declares one (absent == the pre-surface shape).
+    if let Some(surface) = cap.get("publication_surface") {
+        if surface.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            doc["publication_surface"] = surface.clone();
+        }
+    }
     preimage("FRF/OBSERVATION/v1", &doc)
 }
 

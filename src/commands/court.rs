@@ -1684,6 +1684,30 @@ pub fn run_once(
         seen_minimizer.push(&m.id);
     }
 
+    // -- the capture surface (the publication boundary, a general capability
+    // -- spec/publication-surface.md) -----------------------------------------
+    // Every declared stream policy is validated BEFORE the observation: an
+    // unknown side/stream/policy is a refused manifest, never a silently
+    // mislabeled publication. Duplicate (side, stream) declarations refuse.
+    let mut surface_seen: Vec<(&str, &str)> = Vec::new();
+    for s in &manifest.capture_surface {
+        s.validate().map_err(FrfError::new)?;
+        let key = (s.side.as_str(), s.stream.as_str());
+        if surface_seen.contains(&key) {
+            return Err(FrfError::new(format!(
+                "duplicate capture-surface declaration for {}:{} — one policy per stream",
+                key.0, key.1
+            )));
+        }
+        surface_seen.push(key);
+    }
+    let capture_surface_decl: Option<Vec<crate::model::CaptureSurfacePolicy>> =
+        if manifest.capture_surface.is_empty() {
+            None
+        } else {
+            Some(manifest.capture_surface.clone())
+        };
+
     if envelope.replay_scope != "single-run" {
         return Err(FrfError::new(format!(
             "replay_scope '{:?}' is not supported: only 'single-run' execution exists, and a declared scope that is not executed would falsify the evidence",
@@ -2780,6 +2804,7 @@ pub fn run_once(
         adapter_implementations: &provenance.adapter_implementations,
         minimizer_implementations: &provenance.minimizer_implementations,
         container_image: container_image.as_ref(),
+        publication_surface: capture_surface_decl.as_deref(),
     };
     let observation_identity = crate::semantics::observation_identity(&pre)?;
     let execution_identity = crate::semantics::execution_identity(&pre)?;
@@ -3030,6 +3055,7 @@ pub fn run_once(
         normalizer_semantics,
         adapter_semantics,
         minimizer_semantics,
+        publication_surface: capture_surface_decl,
         provenance,
         // Artifact paths are ROOT-relative pointers (stable across machines);
         // the capture's `arguments` are the verbatim argv the side received.

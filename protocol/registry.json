@@ -789,6 +789,18 @@
       "status": "active"
     },
     {
+      "id": "frf-v3-build-manifest-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-stream-publication-v1",
+      "status": "active"
+    },
+    {
+      "id": "frf-publication-manifest-v1",
+      "status": "active"
+    },
+    {
       "id": "frf-residual-v1",
       "status": "active"
     },

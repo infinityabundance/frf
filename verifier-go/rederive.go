@@ -703,21 +703,28 @@ func observationIdentity(cap *jcs.Object, residuals []*jcs.Object) (string, erro
 	for _, r := range residuals {
 		res = append(res, residualProjection(r))
 	}
-	doc := &jcs.Object{
-		Keys: []string{"court", "court_semantic_identity", "authority", "candidate_sha256", "fixture_sha256", "arguments", "environment_digest", "reference", "candidate", "residuals"},
-		Values: []jcs.Value{
-			str(cap, "court"),
-			str(cap, "court_semantic_identity"),
-			str(cap, "authority"),
-			str(obj(recVal(cap, "candidate_artifact")), "sha256"),
-			str(cap, "fixture_sha256"),
-			recVal(cap, "arguments"),
-			str(obj(recVal(cap, "environment")), "digest"),
-			sideProjection(obj(recVal(cap, "reference"))),
-			sideProjection(obj(recVal(cap, "candidate"))),
-			res,
-		},
+	keys := []string{"court", "court_semantic_identity", "authority", "candidate_sha256", "fixture_sha256", "arguments", "environment_digest", "reference", "candidate", "residuals"}
+	values := []jcs.Value{
+		str(cap, "court"),
+		str(cap, "court_semantic_identity"),
+		str(cap, "authority"),
+		str(obj(recVal(cap, "candidate_artifact")), "sha256"),
+		str(cap, "fixture_sha256"),
+		recVal(cap, "arguments"),
+		str(obj(recVal(cap, "environment")), "digest"),
+		sideProjection(obj(recVal(cap, "reference"))),
+		sideProjection(obj(recVal(cap, "candidate"))),
+		res,
 	}
+	// The capture surface is part of the observation contract; entered only
+	// when the capture declares one (absent == the pre-surface shape).
+	if v, ok := cap.Get("publication_surface"); ok && v != nil {
+		if a, ok := v.([]jcs.Value); ok && len(a) > 0 {
+			keys = append(keys, "publication_surface")
+			values = append(values, v)
+		}
+	}
+	doc := &jcs.Object{Keys: keys, Values: values}
 	return hashPreimage("FRF/OBSERVATION/v1", doc)
 }
 

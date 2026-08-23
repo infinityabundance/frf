@@ -1810,6 +1810,144 @@ pub struct CourtManifest {
     /// it seeds defects on; the court decides the verdicts from the run.
     #[serde(default)]
     pub mutations: Vec<MutationDeclaration>,
+    /// Optional CAPTURE-SURFACE declarations (the publication boundary, a
+    /// general capability — spec/publication-surface.md): for each observed
+    /// stream, HOW its bytes may be published. Every policy is part of the
+    /// observation contract and is recorded in the capture; the publication
+    /// transform honors it. Absent = every stream is `inline`.
+    #[serde(default)]
+    pub capture_surface: Vec<CaptureSurfacePolicy>,
+}
+
+/// One capture-surface declaration: HOW an observed stream may be published.
+/// The policy vocabulary is closed and documented (spec/publication-surface.md):
+///
+/// - `inline` — the bytes are publishable as-is (safe text);
+/// - `hash-only` — only the SHA-256 is publishable; the bytes stay local
+///   (the publication transform withholds them and writes the disposition);
+/// - `redacted-with-commitment` — the published bytes are a redacted
+///   representative carrying a commitment (the policy declares the
+///   redaction contract);
+/// - `detached` — the bytes are external, reconstructable from a recipe;
+/// - `synthetic-publication` — the published bytes are a SAFE SYNTHETIC
+///   representative (e.g. a projection line), never the raw observation.
+///
+/// The court records the declarations in the capture (part of the
+/// observation contract, bound into the observation identity); the
+/// publication transform honors them; the verifier reports the stream
+/// closure. A stream with NO declaration is `inline`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureSurfacePolicy {
+    /// `reference` | `candidate`.
+    pub side: String,
+    /// `stdout` | `stderr` (the observed stream files).
+    pub stream: String,
+    /// One of `inline` | `hash-only` | `redacted-with-commitment` |
+    /// `detached` | `synthetic-publication`.
+    pub policy: String,
+}
+
+impl CaptureSurfacePolicy {
+    /// The closed publication-policy vocabulary.
+    pub const POLICIES: &'static [&'static str] = &[
+        "inline",
+        "hash-only",
+        "redacted-with-commitment",
+        "detached",
+        "synthetic-publication",
+    ];
+
+    /// A stream declared `hash-only` or `detached` is NOT publishable: the
+    /// bytes are withheld by the publication transform and only the
+    /// disposition (hash + policy) travels.
+    pub fn withholds_bytes(&self) -> bool {
+        self.policy == "hash-only" || self.policy == "detached"
+    }
+
+    /// Semantic validation of one declaration: known side, known stream,
+    /// known policy.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if !matches!(self.side.as_str(), "reference" | "candidate") {
+            return Err(format!(
+                "capture-surface side {:?} is not reference|candidate",
+                self.side
+            ));
+        }
+        if !matches!(self.stream.as_str(), "stdout" | "stderr") {
+            return Err(format!(
+                "capture-surface stream {:?} is not stdout|stderr",
+                self.stream
+            ));
+        }
+        if !Self::POLICIES.contains(&self.policy.as_str()) {
+            return Err(format!(
+                "capture-surface policy {:?} is not one of {}",
+                self.policy,
+                Self::POLICIES.join(" | ")
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The disposition record of a WITHHELD stream in a publication: written by
+/// the publication transform where the raw stream bytes used to live
+/// (`captures/<run>/<side>.<stream>.pub.json`), naming the withheld bytes'
+/// identity (SHA-256) and the policy that withheld them. A verifier finding
+/// a declared non-publishable stream ABSENT must find exactly this record;
+/// missing or mismatched, the tree is refused (a withheld stream cannot
+/// silently disappear). Canonical JSON evidence, content-addressed by
+/// position (the sha256 names the withheld bytes).
+pub const SCHEMA_STREAM_PUBLICATION: &str = "frf-stream-publication-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamPublicationRecord {
+    pub schema_version: String,
+    /// `reference` | `candidate`.
+    pub side: String,
+    /// `stdout` | `stderr`.
+    pub stream: String,
+    /// The capture-surface policy that withheld the bytes (`hash-only` or
+    /// `detached`).
+    pub policy: String,
+    /// SHA-256 of the WITHHELD bytes (must equal the capture's recorded
+    /// stream hash).
+    pub sha256: String,
+}
+
+/// The publication manifest written by `publish-detached`: the EXPLICIT,
+/// deterministic record of every observed stream's disposition — which
+/// streams were published as-is, and which were withheld and why. The
+/// transform is a pure function of (source tree, policy); the manifest
+/// rederives from the same inputs, so a publication can never silently
+/// alter what an observation means.
+pub const SCHEMA_PUBLICATION_MANIFEST: &str = "frf-publication-manifest-v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicationManifest {
+    pub schema_version: String,
+    /// Every captured stream of every run, sorted by (run, side, stream).
+    pub streams: Vec<StreamDisposition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StreamDisposition {
+    /// The run (capture) the stream belongs to.
+    pub run: String,
+    /// `reference` | `candidate`.
+    pub side: String,
+    /// `stdout` | `stderr`.
+    pub stream: String,
+    /// The effective policy (`inline` when the capture declared none).
+    pub policy: String,
+    /// SHA-256 of the stream bytes (the observation's identity).
+    pub sha256: String,
+    /// Whether the bytes travel with the publication.
+    pub published: bool,
 }
 
 /// One external comparator declaration in a court manifest.
@@ -2111,6 +2249,13 @@ pub struct CaptureManifest {
     /// `frf court minimize` can resolve them without the original manifest.
     #[serde(default)]
     pub minimizer_semantics: Vec<MinimizerSemantic>,
+    /// The capture-surface declarations (the publication boundary): HOW each
+    /// observed stream may be published, bound at observation time. Absent =
+    /// every stream is `inline` (the historical default). The declarations
+    /// are part of the observation contract (they enter the observation
+    /// identity when present), so a tampered surface refuses the capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_surface: Option<Vec<CaptureSurfacePolicy>>,
     /// The runner + comparator implementations that observed the run.
     pub provenance: ObservationProvenance,
     /// The admitted reference artifact, snapshotted and executed.

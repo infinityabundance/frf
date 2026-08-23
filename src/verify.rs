@@ -135,6 +135,7 @@ pub fn capture_digest(capture: &CaptureManifest, residuals: &[ResidualRecord]) -
         adapter_implementations: &capture.provenance.adapter_implementations,
         minimizer_implementations: &capture.provenance.minimizer_implementations,
         container_image: capture.container_image.as_ref(),
+        publication_surface: capture.publication_surface.as_deref(),
     };
     crate::semantics::run_identity(&pre)
 }
@@ -174,6 +175,7 @@ pub fn capture_identities(
         adapter_implementations: &capture.provenance.adapter_implementations,
         minimizer_implementations: &capture.provenance.minimizer_implementations,
         container_image: capture.container_image.as_ref(),
+        publication_surface: capture.publication_surface.as_deref(),
     };
     Ok((
         crate::semantics::observation_identity(&pre)?,
@@ -280,40 +282,117 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         )));
     }
 
-    // 4. The raw side files derive the recorded hashes.
+    // 4. The raw side files derive the recorded hashes. A stream the
+    //    capture's surface declares non-publishable (`hash-only`/`detached`)
+    //    may be ABSENT — withheld by the publication transform; its
+    //    disposition record must then exist, parse, carry the same policy,
+    //    and name the same bytes. A missing stream WITHOUT a declared
+    //    withholding policy is refused, and a withheld stream without its
+    //    disposition record is refused: a withheld stream cannot silently
+    //    disappear.
+    let surface_policy = |side: &str, stream: &str| -> Option<String> {
+        capture.publication_surface.as_ref().and_then(|v| {
+            v.iter()
+                .find(|p| p.side == side && p.stream == stream)
+                .map(|p| p.policy.clone())
+        })
+    };
+    let read_stream = |dir: &Path,
+                       side: &str,
+                       stream: &str,
+                       recorded_sha: &str|
+     -> Result<Option<Vec<u8>>> {
+        let path = dir.join(format!("{side}.{stream}"));
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(_) => {
+                let policy = surface_policy(side, stream);
+                if !matches!(policy.as_deref(), Some("hash-only") | Some("detached")) {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: cannot read {side}.{stream} and no capture-surface policy withholds it"
+                    )));
+                }
+                let disp_path = dir.join(format!("{side}.{stream}.pub.json"));
+                let record: crate::model::StreamPublicationRecord =
+                    serde_json::from_str(&fs::read_to_string(&disp_path).map_err(|_| {
+                        FrfError::new(format!(
+                            "capture {run}: {side}.{stream} is absent and its disposition record {} is missing — a withheld stream cannot silently disappear",
+                            disp_path.display()
+                        ))
+                    })?)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "capture {run}: {side}.{stream}.pub.json is not a canonical stream-publication record: {e}"
+                        ))
+                    })?;
+                if record.schema_version != crate::model::SCHEMA_STREAM_PUBLICATION {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: {side}.{stream}.pub.json has an unsupported schema {:?}",
+                        record.schema_version
+                    )));
+                }
+                if record.side != side || record.stream != stream {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: {side}.{stream}.pub.json names {}:{} — a disposition record cannot move",
+                        record.side, record.stream
+                    )));
+                }
+                if record.policy != policy.as_deref().unwrap_or_default() {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: {side}.{stream}.pub.json policy {:?} does not match the declared surface policy",
+                        record.policy
+                    )));
+                }
+                if record.sha256 != recorded_sha {
+                    return Err(FrfError::new(format!(
+                        "capture {run}: {side}.{stream}.pub.json names bytes {} that do not hash to the recorded {} — the withheld stream's identity is broken",
+                        &record.sha256[..16],
+                        &recorded_sha[..16]
+                    )));
+                }
+                Ok(None)
+            }
+        }
+    };
     let dir = store.run_dir(run)?;
     for (side, s) in [
         ("reference", &mut capture.reference),
         ("candidate", &mut capture.candidate),
     ] {
-        let stdout = read_bytes(&dir.join(format!("{side}.stdout")), "side file")?;
-        let stderr = read_bytes(&dir.join(format!("{side}.stderr")), "side file")?;
+        let stdout = read_stream(&dir, side, "stdout", &s.stdout_sha256)?;
+        let stderr = read_stream(&dir, side, "stderr", &s.stderr_sha256)?;
         // The domain comparators (structured.state) parse the raw COMPARED
         // bytes, which the serialized capture carries only as a hash. The
         // verified loader re-materializes the exact bytes it just rehashed:
         // verification never executes, it makes the ONE comparison relation
         // re-runnable over the verified capture (the residual verifier
-        // re-derives the observed divergences from these bytes).
-        s.stdout_bytes = stdout.clone();
-        if host::sha256_bytes(&stdout) != s.stdout_sha256 {
-            return Err(FrfError::new(format!(
-                "capture {run}: {side}.stdout does not hash to the recorded value"
-            )));
+        // re-derives the observed divergences from these bytes). A withheld
+        // stream's identity is authenticated by its disposition record
+        // above; present bytes must derive the recorded hashes.
+        if let Some(bytes) = &stdout {
+            s.stdout_bytes = bytes.clone();
+            if host::sha256_bytes(bytes) != s.stdout_sha256 {
+                return Err(FrfError::new(format!(
+                    "capture {run}: {side}.stdout does not hash to the recorded value"
+                )));
+            }
+            if first_line(bytes) != s.stdout_first_line {
+                return Err(FrfError::new(format!(
+                    "capture {run}: {side}.stdout first line does not derive to the recorded projection"
+                )));
+            }
         }
-        if host::sha256_bytes(&stderr) != s.stderr_sha256 {
-            return Err(FrfError::new(format!(
-                "capture {run}: {side}.stderr does not hash to the recorded value"
-            )));
-        }
-        if first_line(&stdout) != s.stdout_first_line {
-            return Err(FrfError::new(format!(
-                "capture {run}: {side}.stdout first line does not derive to the recorded projection"
-            )));
-        }
-        if first_line(&stderr) != s.stderr_first_line {
-            return Err(FrfError::new(format!(
-                "capture {run}: {side}.stderr first line does not derive to the recorded projection"
-            )));
+        if let Some(bytes) = &stderr {
+            if host::sha256_bytes(bytes) != s.stderr_sha256 {
+                return Err(FrfError::new(format!(
+                    "capture {run}: {side}.stderr does not hash to the recorded value"
+                )));
+            }
+            if first_line(bytes) != s.stderr_first_line {
+                return Err(FrfError::new(format!(
+                    "capture {run}: {side}.stderr first line does not derive to the recorded projection"
+                )));
+            }
         }
         let exit = read_bytes(&dir.join(format!("{side}.exit.txt")), "side file")?;
         if exit.trim_ascii() != s.exit.as_bytes()
