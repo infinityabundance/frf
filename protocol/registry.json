@@ -71,28 +71,28 @@
     },
     {
       "id": "execution",
-      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 \u2014 what was observed) and the execution identity (FRF/EXECUTION/v1 \u2014 under exactly what machinery/contract it was observed). v15: the capture binds the harness events recorded during the run's observation (the bound-firing records that completed as valid side outcomes)",
+      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed). v15: the capture binds the harness events recorded during the run's observation (the bound-firing records that completed as valid side outcomes)",
       "schema": "frf-capture-v15",
       "identity": "FRF/RUN/v2",
       "status": "active"
     },
     {
       "id": "harness-event",
-      "meaning": "Evidentiary overflow record: a declared bound the harness ENFORCED during an observation attempt (stream-overflow | timeout | rlimit | produced-overflow), content-addressed under harness/<id>.json \u2014 the run is still refused (fail-closed, never truncated), but the refusal is itself provable evidence. A bound that refuses the run (stream/timeout/produced overflow) leaves no capture to bind to: those events are court-scoped refusal evidence, named by the refusal message; a bound that completes as a valid side outcome (the CPU limit's SIGXCPU) is cited by the run's capture (frf-capture-v15) and travels with the run's bundle",
+      "meaning": "Evidentiary overflow record: a declared bound the harness ENFORCED during an observation attempt (stream-overflow | timeout | rlimit | produced-overflow), content-addressed under harness/<id>.json — the run is still refused (fail-closed, never truncated), but the refusal is itself provable evidence. A bound that refuses the run (stream/timeout/produced overflow) leaves no capture to bind to: those events are court-scoped refusal evidence, named by the refusal message; a bound that completes as a valid side outcome (the CPU limit's SIGXCPU) is cited by the run's capture (frf-capture-v15) and travels with the run's bundle",
       "schema": "frf-harness-event-v1",
       "identity": "FRF/HARNESS-EVENT/v1",
       "status": "active"
     },
     {
       "id": "execution-attempt",
-      "meaning": "Refused observation attempt made first-class: when a court's observation attempt ends in a harness refusal (stream overflow, timeout, produced-tree overflow) there is no successful run to become the durable graph root of that attempt \u2014 the refusal itself is the observation about the attempt. A content-addressed immutable record under attempts/<id>.json binding the declared court + its semantic identity, the bound artifacts, the fixture, argv, the environment digest, the execution contract (profile + capture bounds as enforced), the side that refused, the recorded harness-event ids, and the refusal reason. The identity rederives on every read and every cited harness event is itself verified \u2014 a refusal is as portable as the observation that would have been captured. The `refused` arm of the conceptual ExecutionAttempt sum (completed attempts ARE runs); the error message is no longer the only surface through which a failed observation attempt is named",
+      "meaning": "Refused observation attempt made first-class: when a court's observation attempt ends in a harness refusal (stream overflow, timeout, produced-tree overflow) there is no successful run to become the durable graph root of that attempt — the refusal itself is the observation about the attempt. A content-addressed immutable record under attempts/<id>.json binding the declared court + its semantic identity, the bound artifacts, the fixture, argv, the environment digest, the execution contract (profile + capture bounds as enforced), the side that refused, the recorded harness-event ids, and the refusal reason. The identity rederives on every read and every cited harness event is itself verified — a refusal is as portable as the observation that would have been captured. The `refused` arm of the conceptual ExecutionAttempt sum (completed attempts ARE runs); the error message is no longer the only surface through which a failed observation attempt is named",
       "schema": "frf-execution-attempt-v1",
       "identity": "FRF/EXECUTION-ATTEMPT/v1",
       "status": "active"
     },
     {
       "id": "execution-context",
-      "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) \u2014 high-assurance means the declared context is bound, not that every file read was captured",
+      "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) — high-assurance means the declared context is bound, not that every file read was captured",
       "schema": "frf-execution-context-v1",
       "identity": "FRF/EXECUTION-CONTEXT/v1",
       "status": "active"
@@ -133,27 +133,27 @@
     },
     {
       "id": "disposition-event",
-      "meaning": "Interpretation/state transition of a residual (hash-chained append-only events)",
-      "schema": "frf-disposition-v2",
+      "meaning": "Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims",
+      "schema": "frf-disposition-v3",
       "identity": "FRF/DISPOSITION-EVENT/v1",
       "status": "active"
     },
     {
       "id": "resolution",
-      "meaning": "Evidence that a residual closed (a fixed event + its resolution run)",
+      "meaning": "Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation)",
       "schema": null,
       "status": "active"
     },
     {
       "id": "series",
-      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) \u2014 the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled",
+      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled",
       "schema": "frf-series-v4",
       "identity": "FRF/SERIES/v3",
       "status": "active"
     },
     {
       "id": "trajectory",
-      "meaning": "Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point \u2014 a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled",
+      "meaning": "Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled",
       "schema": "frf-trajectory-v5",
       "status": "active"
     },
@@ -179,7 +179,7 @@
     },
     {
       "id": "witness-statement",
-      "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence \u2014 independence is the separate `independence` object",
+      "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence — independence is the separate `independence` object",
       "schema": "frf-witness-statement-v3",
       "identity": "FRF/WITNESS-STATEMENT/v1",
       "status": "active"
@@ -207,13 +207,13 @@
     },
     {
       "id": "receipt",
-      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts \u2014 executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds \u2014 the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds)",
-      "schema": "frf-receipt-v19",
+      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds)",
+      "schema": "frf-receipt-v20",
       "status": "active"
     },
     {
       "id": "runtime-closure",
-      "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component \u2014 resolved by the system loader under the observation environment",
+      "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment",
       "schema": "frf-runtime-closure-v1",
       "identity": "FRF/RUNTIME-CLOSURE/v1",
       "status": "active"
@@ -304,7 +304,7 @@
   "identities": [
     {
       "domain": "FRF/RUN/v2",
-      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity \u2014 the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
+      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
       "status": "active"
     },
     {
@@ -319,27 +319,27 @@
     },
     {
       "domain": "FRF/EXECUTION-CONTEXT/v1",
-      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) \u2014 the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
+      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) — the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
       "status": "active"
     },
     {
       "domain": "FRF/HARNESS-EVENT/v1",
-      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash \u2014 the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
+      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash — the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
       "status": "active"
     },
     {
       "domain": "FRF/EXECUTION-ATTEMPT/v1",
-      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted \u2014 a deterministic function of the cited set), and refusal reason \u2014 the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
+      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted — a deterministic function of the cited set), and refusal reason — the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
       "status": "active"
     },
     {
       "domain": "FRF/ENVIRONMENT/v2",
-      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map \u2014 a declared variable is content-addressed input",
+      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input",
       "status": "active"
     },
     {
       "domain": "FRF/FIXTURE/v1",
-      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments \u2014 claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
+      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments — claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
       "status": "active"
     },
     {
@@ -394,12 +394,12 @@
     },
     {
       "domain": "FRF/KIND/v1",
-      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) \u2014 the registered kind vocabulary",
+      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary",
       "status": "active"
     },
     {
       "domain": "FRF/SERIES/v3",
-      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points \u2014 each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
+      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points — each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
       "status": "active"
     },
     {
@@ -409,7 +409,7 @@
     },
     {
       "domain": "FRF/COORDINATE/v1",
-      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value \u2014 for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
+      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value — for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
       "status": "active"
     },
     {
@@ -629,7 +629,7 @@
       "meaning": "the detached-object declaration (detached-objects.json): deliberately withheld content addresses + reconstruction recipes; verification distinguishes graph_verified (whole-store) / object_closure / replay_ready / replay_verified (not-performed until an actual replay)"
     },
     {
-      "id": "frf-disposition-v2",
+      "id": "frf-disposition-v3",
       "status": "active"
     },
     {
@@ -686,7 +686,7 @@
     {
       "id": "frf-external-experiment-v5",
       "status": "active",
-      "scope": "external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description \u2014 measurements only, no timing thresholds)"
+      "scope": "external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description — measurements only, no timing thresholds)"
     },
     {
       "id": "frf-harness-event-v1",
@@ -779,7 +779,7 @@
     },
     {
       "id": "frf-receipt-v19",
-      "status": "active"
+      "status": "superseded"
     },
     {
       "id": "frf-receipt-v5",
@@ -847,6 +847,14 @@
     },
     {
       "id": "frf-witness-statement-v3",
+      "status": "active"
+    },
+    {
+      "id": "frf-disposition-v2",
+      "status": "superseded"
+    },
+    {
+      "id": "frf-receipt-v20",
       "status": "active"
     }
   ],
@@ -957,12 +965,12 @@
       },
       {
         "id": "harness",
-        "meaning": "Runner contamination \u2014 invalidates the run's evidence",
+        "meaning": "Runner contamination — invalidates the run's evidence",
         "status": "active"
       },
       {
         "id": "unknown",
-        "meaning": "Unclassified \u2014 treated as open",
+        "meaning": "Unclassified — treated as open",
         "status": "active"
       }
     ],
@@ -1065,29 +1073,29 @@
     },
     {
       "id": "high-assurance",
-      "meaning": "Independently witnessed + every premise observed under a profile providing the REQUIRED CAPABILITY SET (the reference contract: exact_capture_contract, sealed_executable_image, native_runtime_closure_bound) under the reference capture bounds \u2014 protocol constants no FRF_EXEC_* override can redefine. Every admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets) \u2014 assurance is orthogonal capabilities, never a profile-name equality; the claim records required_capabilities",
+      "meaning": "Independently witnessed + every premise observed under a profile providing the REQUIRED CAPABILITY SET (the reference contract: exact_capture_contract, sealed_executable_image, native_runtime_closure_bound) under the reference capture bounds — protocol constants no FRF_EXEC_* override can redefine. Every admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets) — assurance is orthogonal capabilities, never a profile-name equality; the claim records required_capabilities",
       "status": "active"
     }
   ],
   "execution_profiles": [
     {
       "id": "frf-exec-linux-v1",
-      "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> \u2014 no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)",
+      "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> — no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)",
       "status": "active"
     },
     {
       "id": "frf-exec-linux-v2",
-      "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer \u2014 the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+      "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run — a declared profile is enforced, never approximated",
       "status": "active"
     },
     {
       "id": "frf-exec-linux-v3",
-      "meaning": "The I/O-CLOSED profile (0.1.65): on top of the reference setrlimit layer, the side's world is CLOSED before it runs a single instruction \u2014 the FILESYSTEM closure (Landlock, Linux >= 5.13): read/execute only the content-addressed objects directory, the execution machinery (the interpreter chain + its own native closure, the artifact's native runtime closure, the declared execution-context artifacts), and the declared randomness channel; the produced-output staging directory is the ONLY writable surface (absent = none at all); and the AMBIENT-CHANNEL closure (seccomp BPF): no network, no Unix sockets, no shared memory, no ptrace, no cross-process memory. A side that violates a closure fails visibly and the court OBSERVES the denial. The side executes its VERIFIED SNAPSHOT PATH (the sealed-memfd mechanism is incompatible with a Landlock closure: the kernel cannot bind access rules to anonymous-inode memfds \u2014 proven empirically); the OCI profile remains the mechanism that closes both the path race and the ambient-environment race. Replay rebuilds the closure from the capture's recorded machinery. Requires Landlock; without it the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+      "meaning": "The I/O-CLOSED profile (0.1.65): on top of the reference setrlimit layer, the side's world is CLOSED before it runs a single instruction — the FILESYSTEM closure (Landlock, Linux >= 5.13): read/execute only the content-addressed objects directory, the execution machinery (the interpreter chain + its own native closure, the artifact's native runtime closure, the declared execution-context artifacts), and the declared randomness channel; the produced-output staging directory is the ONLY writable surface (absent = none at all); and the AMBIENT-CHANNEL closure (seccomp BPF): no network, no Unix sockets, no shared memory, no ptrace, no cross-process memory. A side that violates a closure fails visibly and the court OBSERVES the denial. The side executes its VERIFIED SNAPSHOT PATH (the sealed-memfd mechanism is incompatible with a Landlock closure: the kernel cannot bind access rules to anonymous-inode memfds — proven empirically); the OCI profile remains the mechanism that closes both the path race and the ambient-environment race. Replay rebuilds the closure from the capture's recorded machinery. Requires Landlock; without it the profile REFUSES to run — a declared profile is enforced, never approximated",
       "status": "active"
     },
     {
       "id": "frf-exec-oci",
-      "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest \u2014 a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery \u2014 the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run \u2014 never a silent substitution. Extensions are harness-side instrumentation and run on the host. An OCI observation is a different execution contract from a v1 one; both qualify for high-assurance when they provide the required capability set (the reference contract \u2014 spec/execution-profile.md \u00a7 assurance capabilities)",
+      "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest — a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery — the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run — never a silent substitution. Extensions are harness-side instrumentation and run on the host. An OCI observation is a different execution contract from a v1 one; both qualify for high-assurance when they provide the required capability set (the reference contract — spec/execution-profile.md § assurance capabilities)",
       "status": "active"
     }
   ]

@@ -1044,6 +1044,26 @@ pub fn disposition_event_identity(c: &DispositionEventContent) -> Result<String>
             "resolution_run_id": resolution_run_id,
             "closure_predicate": closure_predicate,
         }),
+        Disposition::Nonreproduced {
+            reason,
+            observation_run_id,
+        } => json!({
+            "kind": "nonreproduced",
+            "reason": reason,
+            "observation_run_id": observation_run_id,
+        }),
+        Disposition::Stabilized {
+            reason,
+            trajectory_id,
+            consecutive_passes,
+            stabilization_bound,
+        } => json!({
+            "kind": "stabilized",
+            "reason": reason,
+            "trajectory_id": trajectory_id,
+            "consecutive_passes": consecutive_passes,
+            "stabilization_bound": stabilization_bound,
+        }),
     };
     let doc = json!({
         "residual_id": c.residual_id,

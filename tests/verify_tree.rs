@@ -518,10 +518,67 @@ fn residuals_and_tokens_are_self_consistent() {
                     r.id
                 );
                 // The resolution run must rerun the same question under a
-                // compatible envelope and actually close the residual.
+                // compatible envelope, actually close the residual, AND
+                // execute a CHANGED candidate artifact (a fix is a change in
+                // the thing being compared — a pass on the same candidate is
+                // a non-reproduction, not a fix).
                 store
                     .resolution_compatibility(&r.run, resolution_run_id, &r.axis)
                     .expect("resolution run must satisfy the comparability predicate");
+                store
+                    .require_fix_candidate_change(&r.run, resolution_run_id)
+                    .expect("a fixed closure must be backed by a changed candidate artifact");
+            }
+            Disposition::Nonreproduced {
+                reason,
+                observation_run_id,
+            } => {
+                assert!(
+                    !reason.trim().is_empty() && !reason.contains('\n'),
+                    "nonreproduced residual {} has an invalid reason",
+                    r.id
+                );
+                assert!(
+                    !observation_run_id.is_empty(),
+                    "nonreproduced residual {} lacks an observation run",
+                    r.id
+                );
+                // A non-reproduction is a pass on the SAME candidate: the
+                // observation run must close the axis under an identical
+                // candidate artifact.
+                store
+                    .resolution_compatibility(&r.run, observation_run_id, &r.axis)
+                    .expect("the observation run must satisfy the comparability predicate");
+                store
+                    .require_same_candidate(&r.run, observation_run_id)
+                    .expect("a nonreproduced closure must keep the candidate identical");
+            }
+            Disposition::Stabilized {
+                reason,
+                trajectory_id,
+                consecutive_passes,
+                stabilization_bound,
+            } => {
+                assert!(
+                    !reason.trim().is_empty() && !reason.contains('\n'),
+                    "stabilized residual {} has an invalid reason",
+                    r.id
+                );
+                assert!(
+                    !trajectory_id.is_empty(),
+                    "stabilized residual {} lacks a trajectory",
+                    r.id
+                );
+                let passes: u32 = consecutive_passes.parse().expect("decimal passes");
+                let bound: u32 = stabilization_bound.parse().expect("decimal bound");
+                assert!(
+                    passes >= bound && bound >= STABILIZATION_MIN_CONSECUTIVE_PASSES,
+                    "stabilized residual {} fails the stabilization floor",
+                    r.id
+                );
+                store
+                    .require_stabilization_trajectory(&r, trajectory_id, consecutive_passes)
+                    .expect("the trajectory must re-derive and establish the declared passes");
             }
         }
         // Event sequence numbers are dense and start at 0001; the events are

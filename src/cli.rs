@@ -168,8 +168,10 @@ pub enum CourtCmd {
 
 #[derive(Subcommand)]
 pub enum ResidualCmd {
-    /// Set a residual's disposition (requires --reason; `fixed` also requires
-    /// --resolution-run — a disposition is not evidence)
+    /// Set a residual's disposition (requires --reason; `fixed` requires
+    /// --resolution-run with a CHANGED candidate, `nonreproduced` requires
+    /// --observation-run with the SAME candidate, `stabilized` requires
+    /// --trajectory + --consecutive-passes — a disposition is not evidence)
     Dispose {
         /// Residual id (a content address: FRF/RESIDUAL/v1 over the run +
         /// divergence)
@@ -180,9 +182,26 @@ pub enum ResidualCmd {
         #[arg(long)]
         reason: String,
         /// Required for `--disposition fixed`: a court run whose captures
-        /// show the residual no longer reproduces
+        /// show the residual no longer reproduces under a CHANGED candidate
+        /// artifact (a pass on the same candidate is a non-reproduction, not
+        /// a fix)
         #[arg(long, value_name = "RUN_ID")]
         resolution_run: Option<String>,
+        /// Required for `--disposition nonreproduced`: a court run whose
+        /// captures show the residual did not reproduce while the candidate
+        /// stayed IDENTICAL (a candidate change is a fix, not a
+        /// non-reproduction)
+        #[arg(long, value_name = "RUN_ID")]
+        observation_run: Option<String>,
+        /// Required for `--disposition stabilized`: the trajectory document
+        /// key (`{lineage}.{coordinate-system}.{series}`) whose tail
+        /// establishes persistent disappearance under the SAME candidate
+        #[arg(long, value_name = "TRAJECTORY_ID")]
+        trajectory: Option<String>,
+        /// The consecutive non-reproductions the trajectory tail established
+        /// (required with `--disposition stabilized`; must be >= 2)
+        #[arg(long, value_name = "N")]
+        consecutive_passes: Option<u32>,
     },
 }
 
@@ -376,12 +395,18 @@ pub enum BundleCmd {
     },
 }
 
-/// The six settable dispositions, in the paper's spelling. `open` is
-/// deliberately absent: it is the initial state, not a choice.
+/// The settable dispositions, in the paper's spelling. `open` is
+/// deliberately absent: it is the initial state, not a choice. `fixed`,
+/// `nonreproduced`, and `stabilized` are evidence-bearing dispositions and
+/// cannot be spelled as bare kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ClosureArg {
     #[value(name = "fixed")]
     Fixed,
+    #[value(name = "nonreproduced")]
+    Nonreproduced,
+    #[value(name = "stabilized")]
+    Stabilized,
     #[value(name = "intentional")]
     Intentional,
     #[value(name = "environmental")]
@@ -395,11 +420,12 @@ pub enum ClosureArg {
 }
 
 impl ClosureArg {
-    /// The [`ClosureKind`] for non-fixed dispositions. `fixed` is not a bare
-    /// kind: it is handled as [`Disposition::Fixed`] with a resolution run.
+    /// The [`ClosureKind`] for non-fixed dispositions. The evidence-bearing
+    /// dispositions (`fixed`, `nonreproduced`, `stabilized`) are not bare
+    /// kinds: they carry their evidence edge.
     pub fn closure_kind(self) -> Option<ClosureKind> {
         match self {
-            ClosureArg::Fixed => None,
+            ClosureArg::Fixed | ClosureArg::Nonreproduced | ClosureArg::Stabilized => None,
             ClosureArg::Intentional => Some(ClosureKind::Intentional),
             ClosureArg::Environmental => Some(ClosureKind::Environmental),
             ClosureArg::OracleVersion => Some(ClosureKind::OracleVersion),

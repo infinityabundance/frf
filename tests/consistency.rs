@@ -324,7 +324,8 @@ fn the_registry_supersession_rules_are_coherent() {
         active.len()
     );
     for required in [
-        "frf-receipt-v19",
+        "frf-receipt-v20",
+        "frf-disposition-v3",
         "frf-reduction-v4",
         "frf-detached-objects-v1",
         "frf-stream-publication-v1",

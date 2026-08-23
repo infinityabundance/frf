@@ -545,18 +545,29 @@ pub fn run_identity(cap: &Value, residuals: &[Value]) -> String {
 
 /// FRF/DISPOSITION-EVENT/v1 over the event's own fields.
 pub fn disposition_event_identity(event: &Value) -> String {
-    let disposition = if s(&event["disposition"]) == "fixed" {
-        json!({
+    let disposition = match s(&event["disposition"]).as_ref() {
+        "fixed" => json!({
             "kind": "fixed",
             "reason": s(&event["reason"]),
             "resolution_run_id": s(&event["resolution_run_id"]),
             "closure_predicate": s(&event["closure_predicate"]),
-        })
-    } else {
-        json!({
-            "kind": s(&event["disposition"]),
+        }),
+        "nonreproduced" => json!({
+            "kind": "nonreproduced",
             "reason": s(&event["reason"]),
-        })
+            "observation_run_id": s(&event["observation_run_id"]),
+        }),
+        "stabilized" => json!({
+            "kind": "stabilized",
+            "reason": s(&event["reason"]),
+            "trajectory_id": s(&event["trajectory_id"]),
+            "consecutive_passes": s(&event["consecutive_passes"]),
+            "stabilization_bound": s(&event["stabilization_bound"]),
+        }),
+        other => json!({
+            "kind": other,
+            "reason": s(&event["reason"]),
+        }),
     };
     let doc = json!({
         "residual_id": s(&event["residual_id"]),

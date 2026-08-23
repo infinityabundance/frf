@@ -45,6 +45,24 @@ fuzz_target!(|data: &[u8]| {
                 assert!(!resolution_run_id.trim().is_empty());
                 assert!(!closure_predicate.trim().is_empty());
             }
+            Disposition::Nonreproduced {
+                reason,
+                observation_run_id,
+            } => {
+                assert!(!reason.trim().is_empty() && !reason.contains('\n'));
+                assert!(!observation_run_id.trim().is_empty());
+            }
+            Disposition::Stabilized {
+                reason,
+                trajectory_id,
+                consecutive_passes,
+                stabilization_bound,
+            } => {
+                assert!(!reason.trim().is_empty() && !reason.contains('\n'));
+                assert!(!trajectory_id.trim().is_empty());
+                assert!(consecutive_passes.parse::<u32>().is_ok());
+                assert!(stabilization_bound.parse::<u32>().is_ok());
+            }
         }
     }
 });

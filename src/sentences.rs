@@ -100,8 +100,10 @@ pub fn non_claims(fixture_family: &str) -> Vec<String> {
 ///
 /// - [`harness_refusal_lines`]: run-level — harness invalidates the evidence
 ///   of the run, blocking every claim from the receipt.
-/// - [`open_refusal_lines`]: axis-level — open/unknown residuals block only
-///   claims whose observable scope intersects their axis.
+/// - [`open_refusal_lines`]: axis-level — open/unknown/nonreproduced/
+///   stabilized residuals block only claims whose observable scope intersects
+///   their axis (the non-fix observations are real evidence of nondeterminism,
+///   never remediation evidence).
 ///
 /// Each line uses the prompt's exact shape "cannot claim X because residual
 /// Y is open". [`refusal_lines_from_residuals`] is the union, used for the
@@ -112,17 +114,21 @@ pub fn harness_refusal_lines(residuals: &[ReceiptResidual], fixture_family: &str
 
 pub fn open_refusal_lines(residuals: &[ReceiptResidual], fixture_family: &str) -> Vec<String> {
     refusal_lines_matching(residuals, fixture_family, |d| {
-        matches!(d, "open" | "unknown")
+        matches!(d, "open" | "unknown" | "nonreproduced" | "stabilized")
     })
 }
 
-/// Union of all refusal lines (harness + open + unknown).
+/// Union of all refusal lines (harness + open/unknown + the non-fix
+/// observations).
 pub fn refusal_lines_from_residuals(
     residuals: &[ReceiptResidual],
     fixture_family: &str,
 ) -> Vec<String> {
     refusal_lines_matching(residuals, fixture_family, |d| {
-        matches!(d, "open" | "unknown" | "harness")
+        matches!(
+            d,
+            "open" | "unknown" | "harness" | "nonreproduced" | "stabilized"
+        )
     })
 }
 
@@ -308,6 +314,10 @@ mod tests {
             reason: None,
             resolution_run_id: None,
             closure_predicate: None,
+            observation_run_id: None,
+            trajectory_id: None,
+            consecutive_passes: None,
+            stabilization_bound: None,
             reproducer: "replay".into(),
             invariant: String::new(),
             residual_fingerprint: "0".repeat(64),

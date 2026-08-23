@@ -2136,12 +2136,18 @@ impl Store {
     pub fn append_disposition_event(&self, partial: &DispositionEvent) -> Result<DispositionEvent> {
         let events = self.disposition_events(&partial.residual_id)?;
         let parent_event_id = events.last().map(|e| e.event_id.clone());
-        // The only evidence a v0.1.15 disposition can reference is the
-        // resolution run that closed it.
+        // The only evidence a v0.1.15 disposition could reference was the
+        // resolution run that closed it; the v3 vocabulary adds the
+        // observation run (nonreproduced) and the trajectory document
+        // (stabilized) as first-class evidence edges.
         let evidence_refs = match &partial.disposition {
             Disposition::Fixed {
                 resolution_run_id, ..
             } => vec![resolution_run_id.clone()],
+            Disposition::Nonreproduced {
+                observation_run_id, ..
+            } => vec![observation_run_id.clone()],
+            Disposition::Stabilized { trajectory_id, .. } => vec![trajectory_id.clone()],
             _ => vec![],
         };
         let event_id = crate::semantics::disposition_event_identity(
@@ -2395,6 +2401,215 @@ impl Store {
         side.stdout_bytes = bytes;
         Ok(side)
     }
+
+    // -- fixed vs non-reproduction: the candidate-identity gates -------------
+
+    /// The FIXED candidate-change gate: a `fixed` disposition is a change in
+    /// the thing being compared, so the resolution run MUST have executed a
+    /// DIFFERENT candidate artifact than the run that observed the residual.
+    /// A later pass on the same candidate is a non-reproduction, never a
+    /// fix — the honest labels are `nonreproduced` / `stabilized`.
+    pub fn require_fix_candidate_change(
+        &self,
+        original_run: &str,
+        resolution_run: &str,
+    ) -> Result<()> {
+        let original = crate::verify::load_capture_verified(self, original_run)?.capture;
+        let resolution = crate::verify::load_capture_verified(self, resolution_run)?.capture;
+        if original.candidate_artifact.sha256 == resolution.candidate_artifact.sha256 {
+            return Err(FrfError::new(format!(
+                "resolution run '{resolution_run}' executed the SAME candidate artifact ({}) as '{original_run}' — a later pass on the same candidate is a non-reproduction, not a fix; record --disposition nonreproduced (or stabilized, with a verified trajectory) instead",
+                &original.candidate_artifact.sha256[..16]
+            )));
+        }
+        Ok(())
+    }
+
+    /// The NONREPRODUCED same-candidate gate: a `nonreproduced` disposition
+    /// is an observation that the residual did not reproduce while the
+    /// candidate stayed IDENTICAL. A candidate change is a fix, not a
+    /// non-reproduction.
+    pub fn require_same_candidate(&self, original_run: &str, observation_run: &str) -> Result<()> {
+        let original = crate::verify::load_capture_verified(self, original_run)?.capture;
+        let observation = crate::verify::load_capture_verified(self, observation_run)?.capture;
+        if original.candidate_artifact.sha256 != observation.candidate_artifact.sha256 {
+            return Err(FrfError::new(format!(
+                "observation run '{observation_run}' executed a DIFFERENT candidate artifact ({} vs {}) than '{original_run}' — a candidate change is a fix, not a non-reproduction; record --disposition fixed (or stabilized) instead",
+                &observation.candidate_artifact.sha256[..16],
+                &original.candidate_artifact.sha256[..16]
+            )));
+        }
+        Ok(())
+    }
+
+    /// The STABILIZED trajectory gate: RE-DERIVES the trajectory for this
+    /// residual's lineage from its verified series and requires
+    ///
+    /// - the stored trajectory document at `trajectory_id` re-derives
+    ///   byte-for-byte from the series (trajectories are derived projections
+    ///   of immutable runs — re-derivation IS the verification);
+    /// - its subject is this residual's LINEAGE and its axis is the
+    ///   residual's axis;
+    /// - the LAST `consecutive_passes` observations (in point order) are all
+    ///   non-observations;
+    /// - `consecutive_passes >= STABILIZATION_MIN_CONSECUTIVE_PASSES` (the
+    ///   protocol floor: a single pass is `nonreproduced`, not `stabilized`);
+    /// - every passing point ran the SAME candidate artifact as the
+    ///   residual's original run (a changed candidate is a fix, not a
+    ///   stabilization).
+    pub fn require_stabilization_trajectory(
+        &self,
+        record: &ResidualRecord,
+        trajectory_id: &str,
+        consecutive_passes: &str,
+    ) -> Result<()> {
+        let passes: u32 = consecutive_passes.parse().map_err(|_| {
+            FrfError::new(format!(
+                "consecutive_passes must be a decimal u32 string, not {consecutive_passes:?}"
+            ))
+        })?;
+        if passes < STABILIZATION_MIN_CONSECUTIVE_PASSES {
+            return Err(FrfError::new(format!(
+                "consecutive_passes {passes} is below the protocol floor of {STABILIZATION_MIN_CONSECUTIVE_PASSES} — a single pass is 'nonreproduced', not 'stabilized'"
+            )));
+        }
+        // The trajectory id is the document key `{lineage}.{coordinate-system}.{series}`.
+        let mut parts = trajectory_id.splitn(3, '.');
+        let (lineage, coordinate_system, series) = (
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+        );
+        if lineage.is_empty() || coordinate_system.is_empty() || series.is_empty() {
+            return Err(FrfError::new(format!(
+                "trajectory_id must be the trajectory document key {{lineage}}.{{coordinate-system}}.{{series}}, not {trajectory_id:?}"
+            )));
+        }
+        let expected_lineage = crate::semantics::residual_lineage_of_record(self, record)?;
+        if lineage != expected_lineage {
+            return Err(FrfError::new(format!(
+                "trajectory {trajectory_id} is not about this residual's lineage ({}) — a stabilized disposition must cite a trajectory of the SAME comparison surface",
+                &expected_lineage[..16]
+            )));
+        }
+        // The stored trajectory document must re-derive from its series
+        // byte-for-byte: load the verified series (content address rederives),
+        // re-derive this lineage's trajectory, and compare.
+        let stored = self.load_trajectory(lineage, coordinate_system, series)?;
+        if stored.axis != record.axis.as_str() {
+            return Err(FrfError::new(format!(
+                "trajectory {trajectory_id} is over axis {} but this residual is on {} — a stabilized disposition must cite a trajectory of the SAME axis",
+                stored.axis,
+                record.axis.as_str()
+            )));
+        }
+        let series_rec = self.load_series(series)?;
+        let rederived = crate::store::derive_lineage_trajectory(self, &series_rec, lineage)?;
+        let stored_canon = crate::canon::canonical(&stored)?;
+        let derived_canon = crate::canon::canonical(&rederived)?;
+        if stored_canon != derived_canon {
+            return Err(FrfError::new(format!(
+                "trajectory {trajectory_id} does not re-derive from its series — a stabilized disposition must cite a VERIFIED trajectory"
+            )));
+        }
+        // The tail: the LAST `passes` observations, in point order, are all
+        // non-observations, and every passing point ran the SAME candidate.
+        let n = stored.observations.len();
+        if (n as u32) < passes {
+            return Err(FrfError::new(format!(
+                "trajectory {trajectory_id} has {n} observation(s), fewer than the declared consecutive_passes {passes}"
+            )));
+        }
+        let original_capture = crate::verify::load_capture_verified(self, &record.run)?;
+        let original_candidate = original_capture.capture.candidate_artifact.sha256;
+        for obs in &stored.observations[n - passes as usize..] {
+            if obs.observed {
+                return Err(FrfError::new(format!(
+                    "trajectory {trajectory_id}: point {} OBSERVED the residual — the tail of a stabilized disposition must be consecutive non-reproductions",
+                    obs.point_index
+                )));
+            }
+            let capture = crate::verify::load_capture_verified(self, &obs.run)?;
+            if capture.capture.candidate_artifact.sha256 != original_candidate {
+                return Err(FrfError::new(format!(
+                    "trajectory {trajectory_id}: point {} ran a DIFFERENT candidate artifact than the residual's original run — a candidate change is a fix, not a stabilization; record --disposition fixed instead",
+                    obs.point_index
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Derive ONE lineage's trajectory from a verified series: the pure
+/// derivation shared by the series writer and the stabilized-disposition
+/// verifier. Every consumed observation is VERIFIED first (a series point's
+/// run is a verified capture, each residual a verified observation of it)
+/// before its fingerprint, lineage, or magnitude may drive the record.
+pub(crate) fn derive_lineage_trajectory(
+    store: &Store,
+    series: &ExecutionSeries,
+    lineage: &str,
+) -> Result<TrajectoryRecord> {
+    // per-point observation of the lineage: (residual id, fingerprint, magnitude)
+    let mut per_point: Vec<Option<(String, String, Option<String>)>> =
+        vec![None; series.points.len()];
+    let mut axis: Option<String> = None;
+    for (i, point) in series.points.iter().enumerate() {
+        let capture = crate::verify::load_capture_verified(store, &point.run)?;
+        for id in &capture.capture.residuals {
+            let record = crate::verify::load_residual_verified(store, id)?;
+            let record = record.record();
+            if crate::semantics::residual_lineage_of_record(store, record)? != lineage {
+                continue;
+            }
+            axis = Some(record.axis.as_str().to_string());
+            let fp = crate::semantics::residual_fingerprint(record)?;
+            let magnitude = crate::comparators::divergence_magnitude(
+                record.axis.as_str(),
+                &record.raw_reference,
+                &record.raw_candidate,
+            );
+            per_point[i] = Some((id.clone(), fp, magnitude));
+        }
+    }
+    let axis = axis.ok_or_else(|| {
+        FrfError::new(format!(
+            "series {} has no verified observation of lineage {}",
+            &series.id[..16],
+            &lineage[..16]
+        ))
+    })?;
+    let observed: Vec<bool> = per_point.iter().map(|o| o.is_some()).collect();
+    let magnitudes: Vec<Option<String>> = per_point
+        .iter()
+        .map(|o| o.as_ref().and_then(|(_, _, m)| m.clone()))
+        .collect();
+    let kind = crate::comparators::magnitude_kind(&axis);
+    let derivation =
+        crate::trajectory::classify(&observed, &series.coordinate_system, &magnitudes, &kind)?;
+    Ok(TrajectoryRecord {
+        schema_version: SCHEMA_TRAJECTORY.to_string(),
+        subject: lineage.to_string(),
+        axis: axis.clone(),
+        coordinate_system: series.coordinate_system.clone(),
+        series: series.id.clone(),
+        observations: per_point
+            .iter()
+            .enumerate()
+            .map(|(i, o)| TrajectoryObservation {
+                point_index: series.points[i].point_index.clone(),
+                coordinate: series.points[i].coordinate.clone(),
+                coordinate_identity: series.points[i].coordinate_identity.clone(),
+                run: series.points[i].run.clone(),
+                observed: o.is_some(),
+                residual: o.as_ref().map(|(r, _, _)| r.clone()),
+                fingerprint: o.as_ref().map(|(_, f, _)| f.clone()),
+                magnitude: o.as_ref().and_then(|(_, _, m)| m.clone()),
+            })
+            .collect(),
+        derivation,
+    })
 }
 
 #[cfg(test)]

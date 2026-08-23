@@ -116,9 +116,13 @@ DispositionEvent {
     residual_id
     parent_event_id  the previous event for the same residual (the hash link),
                      None for the first event
-    disposition      kind + reason (+ resolution_run_id, closure_predicate
-                     for fixed)
-    evidence_refs    for a fixed event, the resolution run that closed it
+    disposition      kind + reason, plus the kind's evidence edges:
+                     fixed      resolution_run_id + closure_predicate
+                     nonreproduced  observation_run_id
+                     stabilized trajectory_id + consecutive_passes +
+                                 stabilization_bound
+    evidence_refs    the kind's evidence edge (the resolution run, the
+                     observation run, or the trajectory document)
 }
 ```
 
@@ -195,13 +199,24 @@ algorithm is `Receipt::validate_semantics` (`src/verify.rs`); the negative
 corpus is `conformance/invalid-semantic/`, one document per violated rule
 (structurally valid, semantically refused). The rules:
 
-1. **Disposition cross-field rules.** `open` carries no `reason`,
-   `resolution_run_id`, `closure_predicate`, or `disposition_event_id`;
-   `fixed` carries all four (with `closure_predicate` equal to the fix-court
-   predicate and `disposition_event_id` naming the exact event that supplied
-   it); every other disposition (`intentional`, `environmental`,
-   `oracle_version`, `harness`, `unknown`) carries a `reason` and a
-   `disposition_event_id`, and nothing else.
+1. **Disposition cross-field rules.** `open` carries no `reason` or evidence
+   edge, and no `disposition_event_id`; `fixed` carries `reason` +
+   `resolution_run_id` + the fix-court `closure_predicate` (which now
+   includes the CANDIDATE ARTIFACT IDENTITY CHANGED clause — a fix is a
+   change in the thing being compared, so a later pass on the same candidate
+   is a non-reproduction, not a fix) and `disposition_event_id` naming the
+   exact event that supplied it; `nonreproduced` carries `reason` +
+   `observation_run_id` (a pass under the SAME candidate); `stabilized`
+   carries `reason` + `trajectory_id` + `consecutive_passes` +
+   `stabilization_bound` (repeated passes under the SAME candidate, with
+   `consecutive_passes >= stabilization_bound >= 2`); every other
+   disposition (`intentional`, `environmental`, `oracle_version`, `harness`,
+   `unknown`) carries a `reason` and a `disposition_event_id`, and nothing
+   else. No kind may borrow another kind's evidence edge: only `fixed` may
+   carry `resolution_run_id`/`closure_predicate`, only `nonreproduced` may
+   carry `observation_run_id`, only `stabilized` may carry trajectory
+   evidence. `nonreproduced` and `stabilized` still block positive claims:
+   nondeterminism must never become remediation evidence.
 2. **Declared axes** are valid protocol identifiers and unique; every
    `observables[]` block is declared, a valid identifier, and unique.
 3. **Comparator semantics** are a bijection with the observable axes, each

@@ -1338,9 +1338,40 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
         "blocked compile must not write a claim"
     );
 
-    // Disposing the residual fixed with a REAL resolution run closes it —
-    // then the same claim compiles (the disposition is evidence-backed, and
-    // the closure edge re-verifies).
+    // Disposing the residual `nonreproduced` with the same-candidate passing
+    // run records the nondeterminism honestly — but a non-reproduction is
+    // NOT remediation evidence: the claim is STILL refused (only a `fixed`
+    // closure, backed by a CHANGED candidate artifact, unblocks a claim).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "residual",
+            "dispose",
+            &exit_id,
+            "--disposition",
+            "nonreproduced",
+            "--observation-run",
+            &run2,
+            "--reason",
+            "nondeterministic first-execution divergence; re-observed passing",
+        ],
+    );
+    assert_success(&out, "dispose nonreproduced (evidence-backed)");
+    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt2]);
+    assert!(
+        !out.status.success(),
+        "a nonreproduced residual is not remediation evidence: the claim must stay blocked"
+    );
+    assert!(
+        stderr(&out).contains("nonreproduced"),
+        "the refusal must name the nonreproduced residual: {}",
+        stderr(&out)
+    );
+
+    // And the same-candidate pass can NEVER become `fixed`: the dispose
+    // command refuses it outright (a fix is a change in the candidate).
     let out = frf(
         &work,
         &[
@@ -1357,9 +1388,15 @@ fn open_residual_on_the_same_surface_blocks_a_later_claim() {
             "nondeterministic first-execution divergence; re-observed passing",
         ],
     );
-    assert_success(&out, "dispose fixed (evidence-backed)");
-    let out = frf(&work, &["--root", ROOT, "claim", "compile", &receipt2]);
-    assert_success(&out, "claim compiles after the closure is evidenced");
+    assert!(
+        !out.status.success(),
+        "a same-candidate pass must never be recorded as fixed"
+    );
+    assert!(
+        stderr(&out).contains("SAME candidate"),
+        "the refusal must name the same-candidate rule: {}",
+        stderr(&out)
+    );
 }
 
 #[test]

@@ -191,6 +191,21 @@ pub fn run(store: &Store, run: &str) -> Result<String> {
                     } => Some(closure_predicate.clone()),
                     _ => None,
                 },
+                observation_run_id: disposition.observation_run_id().map(|s| s.to_string()),
+                trajectory_id: disposition.trajectory_id().map(|s| s.to_string()),
+                consecutive_passes: match &disposition {
+                    Disposition::Stabilized {
+                        consecutive_passes, ..
+                    } => Some(consecutive_passes.clone()),
+                    _ => None,
+                },
+                stabilization_bound: match &disposition {
+                    Disposition::Stabilized {
+                        stabilization_bound,
+                        ..
+                    } => Some(stabilization_bound.clone()),
+                    _ => None,
+                },
                 // A residual reproduces by replaying the run that observed it.
                 reproducer: run.to_string(),
                 invariant: String::new(),

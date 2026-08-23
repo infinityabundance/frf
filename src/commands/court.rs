@@ -118,7 +118,7 @@ use crate::host;
 use crate::model::*;
 use crate::store::Store;
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -572,71 +572,25 @@ pub fn run(store: &Store, manifest_path: &Path, opts: &SeriesOptions) -> Result<
 /// observation consumed here is VERIFIED first: a series point's run is a
 /// verified capture (identity rederives), and each residual is a verified
 /// observation of that run (derivation re-proven) before its fingerprint,
-/// lineage, or magnitude may drive the classification.
+/// lineage, or magnitude may drive the classification. The per-lineage
+/// derivation itself is the shared pure function
+/// [`crate::store::derive_lineage_trajectory`] — the same derivation the
+/// stabilized-disposition verifier re-runs to prove a trajectory re-derives.
 fn derive_trajectories(store: &Store, series: &ExecutionSeries) -> Result<usize> {
-    /// Per-point observation of one lineage: (residual id, fingerprint,
-    /// magnitude).
-    type Observed = Vec<Option<(String, String, Option<String>)>>;
-    // lineage -> (axis, per-point observation)
-    let mut seen: BTreeMap<String, (String, Observed)> = BTreeMap::new();
-    for (i, point) in series.points.iter().enumerate() {
+    let mut lineages: BTreeSet<String> = BTreeSet::new();
+    for point in &series.points {
         let capture = crate::verify::load_capture_verified(store, &point.run)?;
         for id in &capture.capture.residuals {
             let record = crate::verify::load_residual_verified(store, id)?;
-            let record = record.record();
-            let fp = crate::semantics::residual_fingerprint(record)?;
-            let lineage = crate::semantics::residual_lineage_of_record(store, record)?;
-            // The divergence DEGREE at this point (v4): the axis's declared
-            // magnitude measure applied to the compared projections — the
-            // deterministic input to the `gradual` vocabulary.
-            let magnitude = crate::comparators::divergence_magnitude(
-                record.axis.as_str(),
-                &record.raw_reference,
-                &record.raw_candidate,
-            );
-            let entry = seen.entry(lineage).or_insert_with(|| {
-                (
-                    record.axis.as_str().to_string(),
-                    vec![None; series.points.len()],
-                )
-            });
-            entry.1[i] = Some((id.clone(), fp, magnitude));
+            let lineage = crate::semantics::residual_lineage_of_record(store, record.record())?;
+            lineages.insert(lineage);
         }
     }
 
     let mut written = 0usize;
-    for (lineage, (axis, per_point)) in &seen {
-        let observed: Vec<bool> = per_point.iter().map(|o| o.is_some()).collect();
-        let magnitudes: Vec<Option<String>> = per_point
-            .iter()
-            .map(|o| o.as_ref().and_then(|(_, _, m)| m.clone()))
-            .collect();
-        let kind = crate::comparators::magnitude_kind(axis);
-        let derivation =
-            crate::trajectory::classify(&observed, &series.coordinate_system, &magnitudes, &kind)?;
-        let record = TrajectoryRecord {
-            schema_version: SCHEMA_TRAJECTORY.to_string(),
-            subject: lineage.clone(),
-            axis: axis.clone(),
-            coordinate_system: series.coordinate_system.clone(),
-            series: series.id.clone(),
-            observations: per_point
-                .iter()
-                .enumerate()
-                .map(|(i, o)| TrajectoryObservation {
-                    point_index: series.points[i].point_index.clone(),
-                    coordinate: series.points[i].coordinate.clone(),
-                    coordinate_identity: series.points[i].coordinate_identity.clone(),
-                    run: series.points[i].run.clone(),
-                    observed: o.is_some(),
-                    residual: o.as_ref().map(|(r, _, _)| r.clone()),
-                    fingerprint: o.as_ref().map(|(_, f, _)| f.clone()),
-                    magnitude: o.as_ref().and_then(|(_, _, m)| m.clone()),
-                })
-                .collect(),
-            derivation,
-        };
-        let path = store.trajectory_path(lineage, &series.coordinate_system, &series.id)?;
+    for lineage in lineages {
+        let record = crate::store::derive_lineage_trajectory(store, series, &lineage)?;
+        let path = store.trajectory_path(&lineage, &series.coordinate_system, &series.id)?;
         store.write_derived(&path, &store.to_evidence(&record)?)?;
         written += 1;
         eprintln!(

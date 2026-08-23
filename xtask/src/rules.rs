@@ -12,6 +12,8 @@ use std::path::Path;
 const DISPOSITIONS: &[&str] = &[
     "open",
     "fixed",
+    "nonreproduced",
+    "stabilized",
     "intentional",
     "environmental",
     "oracle_version",
@@ -19,7 +21,7 @@ const DISPOSITIONS: &[&str] = &[
     "unknown",
 ];
 const CLOSURE_PREDICATE: &str =
-    "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality";
+    "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; candidate artifact identity changed; axis equality";
 const REQUIRED_RECEIPT_KEYS: &[&str] = &[
     "schema_version",
     "run",
@@ -92,9 +94,9 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v19" {
+    if as_str(&doc["schema_version"]) != "frf-receipt-v20" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v19",
+            "schema_version is {:?}, expected frf-receipt-v20",
             doc["schema_version"]
         ));
     }
@@ -506,6 +508,10 @@ const RESIDUAL_KEYS: &[&str] = &[
     "reason",
     "resolution_run_id",
     "closure_predicate",
+    "observation_run_id",
+    "trajectory_id",
+    "consecutive_passes",
+    "stabilization_bound",
 ];
 const SIGN_KEYS: &[&str] = &["trajectory_evidence"];
 const TRAJECTORY_EVIDENCE_KEYS: &[&str] = &["coordinate_system", "series", "drift", "slew"];
@@ -543,9 +549,9 @@ pub fn kind_identity_parts(
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v19" {
+    if as_str(&rec["schema_version"]) != "frf-receipt-v20" {
         v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v19",
+            "schema_version is {:?}, expected frf-receipt-v20",
             rec["schema_version"]
         ));
     }
@@ -807,6 +813,17 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                 if r.get("closure_predicate").is_some() {
                     v.push(format!("open residual {rid} carries a closure_predicate"));
                 }
+                if r.get("observation_run_id").is_some() {
+                    v.push(format!("open residual {rid} carries an observation_run_id"));
+                }
+                if r.get("trajectory_id").is_some()
+                    || r.get("consecutive_passes").is_some()
+                    || r.get("stabilization_bound").is_some()
+                {
+                    v.push(format!(
+                        "open residual {rid} carries trajectory evidence (trajectory_id/consecutive_passes/stabilization_bound)"
+                    ));
+                }
                 if r.get("disposition_event_id")
                     .and_then(|x| x.as_str())
                     .is_some()
@@ -828,12 +845,81 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                         "fixed residual {rid} must carry the fix-court closure predicate"
                     ));
                 }
+                if r.get("observation_run_id").is_some()
+                    || r.get("trajectory_id").is_some()
+                    || r.get("consecutive_passes").is_some()
+                    || r.get("stabilization_bound").is_some()
+                {
+                    v.push(format!(
+                        "fixed residual {rid} carries non-fix evidence edges (observation_run_id/trajectory_id/consecutive_passes/stabilization_bound)"
+                    ));
+                }
                 if r.get("disposition_event_id")
                     .and_then(|x| x.as_str())
                     .is_none()
                 {
                     v.push(format!(
                         "fixed residual {rid} without a disposition_event_id"
+                    ));
+                }
+            }
+            "nonreproduced" => {
+                if r.get("reason").is_none() {
+                    v.push(format!("nonreproduced residual {rid} without a reason"));
+                }
+                if r.get("observation_run_id").is_none() {
+                    v.push(format!(
+                        "nonreproduced residual {rid} without an observation_run_id"
+                    ));
+                }
+                if r.get("resolution_run_id").is_some() || r.get("closure_predicate").is_some() {
+                    v.push(format!(
+                        "nonreproduced residual {rid} carries resolution_run_id/closure_predicate — only fixed may"
+                    ));
+                }
+                if r.get("trajectory_id").is_some()
+                    || r.get("consecutive_passes").is_some()
+                    || r.get("stabilization_bound").is_some()
+                {
+                    v.push(format!(
+                        "nonreproduced residual {rid} carries trajectory evidence — only stabilized may"
+                    ));
+                }
+                if r.get("disposition_event_id")
+                    .and_then(|x| x.as_str())
+                    .is_none()
+                {
+                    v.push(format!(
+                        "nonreproduced residual {rid} without a disposition_event_id"
+                    ));
+                }
+            }
+            "stabilized" => {
+                if r.get("reason").is_none() {
+                    v.push(format!("stabilized residual {rid} without a reason"));
+                }
+                if r.get("trajectory_id").is_none()
+                    || r.get("consecutive_passes").is_none()
+                    || r.get("stabilization_bound").is_none()
+                {
+                    v.push(format!(
+                        "stabilized residual {rid} requires trajectory_id + consecutive_passes + stabilization_bound"
+                    ));
+                }
+                if r.get("resolution_run_id").is_some()
+                    || r.get("closure_predicate").is_some()
+                    || r.get("observation_run_id").is_some()
+                {
+                    v.push(format!(
+                        "stabilized residual {rid} carries resolution_run_id/closure_predicate/observation_run_id — only fixed/nonreproduced may"
+                    ));
+                }
+                if r.get("disposition_event_id")
+                    .and_then(|x| x.as_str())
+                    .is_none()
+                {
+                    v.push(format!(
+                        "stabilized residual {rid} without a disposition_event_id"
                     ));
                 }
             }
@@ -854,6 +940,19 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
                         "{other} residual {rid} carries a closure_predicate"
                     ));
                 }
+                if r.get("observation_run_id").is_some() {
+                    v.push(format!(
+                        "{other} residual {rid} carries an observation_run_id"
+                    ));
+                }
+                if r.get("trajectory_id").is_some()
+                    || r.get("consecutive_passes").is_some()
+                    || r.get("stabilization_bound").is_some()
+                {
+                    v.push(format!(
+                        "{other} residual {rid} carries trajectory evidence — only stabilized may"
+                    ));
+                }
                 if r.get("disposition_event_id")
                     .and_then(|x| x.as_str())
                     .is_none()
@@ -866,7 +965,7 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
         }
         let grammar = match d.as_str() {
             "open" => "violation",
-            "fixed" => "recovery",
+            "fixed" | "nonreproduced" | "stabilized" => "recovery",
             "intentional" => "intentional_divergence",
             "environmental" | "oracle_version" | "harness" => "boundary",
             _ => "unknown",
@@ -1439,7 +1538,9 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
         for rid in records.keys() {
             if !matches!(
                 projected_disposition(bundle, rid).as_str(),
-                "open" | "unknown"
+                // `fixed` is the ONLY remediation-evidence state: the other
+                // non-reproduction observations still block positive claims.
+                "open" | "unknown" | "nonreproduced" | "stabilized"
             ) {
                 continue;
             }

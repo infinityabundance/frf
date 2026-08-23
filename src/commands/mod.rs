@@ -100,7 +100,19 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 disposition,
                 reason,
                 resolution_run,
-            } => dispose::run(store, &id, disposition, &reason, resolution_run),
+                observation_run,
+                trajectory,
+                consecutive_passes,
+            } => dispose::run(
+                store,
+                &id,
+                disposition,
+                &reason,
+                resolution_run,
+                observation_run,
+                trajectory,
+                consecutive_passes,
+            ),
         },
         Command::Receipt { sub } => match sub {
             ReceiptCmd::Emit { run } => {

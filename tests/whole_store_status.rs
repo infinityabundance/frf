@@ -17,8 +17,11 @@ use std::fs;
 /// resolution run + the disposals that close the residual surfaces, then the
 /// final receipt and its compiled claim. Returns the final receipt id.
 fn golden_to_claim(work: &Workdir) -> String {
-    let _run = run_court(work);
+    let run = run_court(work);
     let resolution_run = run_resolution_court(work);
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let reobserved_text_id = residual_id(work, &resolution_run, "stderr");
     let out = frf(
         work,
         &[
@@ -26,7 +29,7 @@ fn golden_to_claim(work: &Workdir) -> String {
             ROOT,
             "residual",
             "dispose",
-            "cli-exit-0001",
+            &exit_id,
             "--disposition",
             "fixed",
             "--resolution-run",
@@ -38,11 +41,11 @@ fn golden_to_claim(work: &Workdir) -> String {
     assert_success(&out, "dispose exit fixed");
     for (id, reason) in [
         (
-            "cli-text-0001",
+            text_id.as_str(),
             "clearer diagnostic wording; documented divergence",
         ),
         (
-            "cli-text-0002",
+            reobserved_text_id.as_str(),
             "clearer diagnostic wording; documented divergence (re-observed)",
         ),
     ] {

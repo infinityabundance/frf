@@ -112,8 +112,8 @@ not these tables.
 | observation | Raw captured result (side capture + produced-artifact tree) | frf-produced-v1 | active |
 | residual | Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified — no shared sequence counter anywhere in the residual namespace | frf-residual-v1 · FRF/RESIDUAL/v1 | active |
 | residual-lineage | Stable comparison question/surface/feature across revisions and environments | FRF/RESIDUAL-LINEAGE/v1 | active |
-| disposition-event | Interpretation/state transition of a residual (hash-chained append-only events) | frf-disposition-v2 · FRF/DISPOSITION-EVENT/v1 | active |
-| resolution | Evidence that a residual closed (a fixed event + its resolution run) | — | active |
+| disposition-event | Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims | frf-disposition-v3 · FRF/DISPOSITION-EVENT/v1 | active |
+| resolution | Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation) | — | active |
 | series | Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled | frf-series-v4 · FRF/SERIES/v3 | active |
 | trajectory | Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled | frf-trajectory-v5 | active |
 | reduction | Minimization attempt: fixture reduction + preservation predicate | frf-reduction-v4 · FRF/REDUCTION/v3 | active |
@@ -123,7 +123,7 @@ not these tables.
 | independence | Declared independence relation about a witness attestation, with its basis | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
 | knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v9 · FRF/KNOWLEDGE/v2 | active |
 | claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators | frf-claim-v9 · FRF/CLAIM/v1 | active |
-| receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds) | frf-receipt-v19 | active |
+| receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds) | frf-receipt-v20 | active |
 | runtime-closure | The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment | frf-runtime-closure-v1 · FRF/RUNTIME-CLOSURE/v1 | active |
 | bundle | Portable closure of referenced evidence (directory or single tar) | frf-bundle-v3 | active |
 | ci-status | CI gate presentation of a compiled claim | frf-ci-status-v1 | active |
@@ -216,7 +216,7 @@ not these tables.
 | frf-comparator-response-v9 | reserved-invalid |  |
 | frf-comparator-result-v1 | active |  |
 | frf-detached-objects-v1 | active |  |
-| frf-disposition-v2 | active |  |
+| frf-disposition-v3 | active |  |
 | frf-environment-v3 | active |  |
 | frf-execution-attempt-v1 | active |  |
 | frf-execution-context-v1 | active |  |
@@ -251,7 +251,7 @@ not these tables.
 | frf-receipt-v16 | superseded |  |
 | frf-receipt-v17 | superseded |  |
 | frf-receipt-v18 | superseded |  |
-| frf-receipt-v19 | active |  |
+| frf-receipt-v19 | superseded |  |
 | frf-receipt-v5 | superseded |  |
 | frf-receipt-v7 | superseded |  |
 | frf-reduction-v4 | active |  |
@@ -269,6 +269,8 @@ not these tables.
 | frf-witness-request-v1 | active |  |
 | frf-witness-response-v3 | active |  |
 | frf-witness-statement-v3 | active |  |
+| frf-disposition-v2 | superseded |  |
+| frf-receipt-v20 | active |  |
 
 ### Relations
 
@@ -276,7 +278,9 @@ not these tables.
 |---|---|---|---|
 | comparator | eq | Equality over the extractor's projection | active |
 | dispositions | open | Unexplained, blocks claims whose scope intersects | active |
-| dispositions | fixed | Closed by a verified resolution run | active |
+| dispositions | fixed | Closed by a verified resolution run under a CHANGED candidate artifact (the ONLY state that unblocks a claim) | active |
+| dispositions | nonreproduced | ONE later pass on the SAME candidate — nondeterminism, not remediation; still blocks claims | active |
+| dispositions | stabilized | REPEATED later passes on the SAME candidate, trajectory-backed; still blocks claims | active |
 | dispositions | intentional | Documented intentional divergence | active |
 | dispositions | environmental | Environment-dependent | active |
 | dispositions | oracle_version | The reference version changed | active |

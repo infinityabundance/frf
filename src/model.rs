@@ -114,11 +114,18 @@ pub const SCHEMA_EXECUTION_CONTEXT: &str = "frf-execution-context-v1";
 /// assumed.
 pub const SCHEMA_CAPTURE: &str = "frf-capture-v15";
 pub const SCHEMA_RESIDUAL: &str = "frf-residual-v1";
-/// Disposition event schema. v2 makes events content-addressed: every event
+/// Disposition event schema. v2 made events content-addressed: every event
 /// carries its own `event_id` (SHA-256 of its content), its
-/// `parent_event_id` (the hash chain link), and `evidence_refs` (the
-/// resolution run for a `fixed` closure).
-pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
+/// `parent_event_id` (the hash chain link), and `evidence_refs`. v3 adds the
+/// fixed-vs-nonreproduction vocabulary: `fixed` now REQUIRES a changed
+/// candidate artifact (a later pass on the same candidate is not a fix), and
+/// two weaker observations become first-class — `nonreproduced` (candidate
+/// unchanged, ONE later pass; evidence: `observation_run_id`) and
+/// `stabilized` (candidate unchanged, REPEATED later passes; evidence:
+/// `trajectory_id` + `consecutive_passes` against a `stabilization_bound`).
+/// Both weaker states still block positive claims: nondeterminism must not
+/// become remediation evidence.
+pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v3";
 /// The OpenReceipt schema. v6 carried the interpreter CHAIN; v7 added the
 /// fixture's DECLARED arguments (the semantic identity's input); v8 binds
 /// each residual to the exact disposition EVENT that supplied its
@@ -161,7 +168,7 @@ pub const SCHEMA_DISPOSITION: &str = "frf-disposition-v2";
 /// produced_max_file_bytes) — a produced tree that exceeds a cap is refused
 /// like a stream overflow, never truncated, and the enforced caps are part
 /// of the recorded harness contract.
-pub const SCHEMA_RECEIPT: &str = "frf-receipt-v19";
+pub const SCHEMA_RECEIPT: &str = "frf-receipt-v20";
 /// Claim schema. v2 carries the full Claim IR: the structured scope K, the
 /// blocking residuals, the premise receipts (`requires`), the comparison
 /// relation, and the machine proposition — admission is the paper's rule
@@ -1596,7 +1603,10 @@ impl<'de> Deserialize<'de> for ResidualKind {
 /// not settable; `unknown` and `harness` closures still block positive claims
 /// (the claim compiler's refusal rule). `fixed` is deliberately absent here:
 /// it is not a label, it is a [`Disposition::Fixed`] carrying its resolution
-/// run, so it cannot be spelled as a bare kind.
+/// run, so it cannot be spelled as a bare kind. The non-fix vocabulary
+/// (`nonreproduced`, `stabilized`) is also absent: those are evidence-bearing
+/// dispositions (they name the observation run / trajectory that showed the
+/// disappearance) and cannot be spelled as bare kinds either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ClosureKind {
@@ -1638,18 +1648,41 @@ impl ClosureKind {
 }
 
 /// The closure predicate a `fixed` disposition must have verified: the
-/// resolution run reran the same question under the same envelope, holding
-/// everything stable except the candidate, and the axis now agrees.
-pub const CLOSURE_PREDICATE_FIX_COURT: &str = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality";
+/// resolution run reran the same question under the same envelope, the
+/// CANDIDATE ARTIFACT IDENTITY CHANGED (a fix is a change in the thing being
+/// compared — a later pass on the same candidate is a non-reproduction, not
+/// a fix), and the axis now agrees.
+pub const CLOSURE_PREDICATE_FIX_COURT: &str = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; candidate artifact identity changed; axis equality";
+
+/// The protocol floor for `stabilized`: "repeated" means at least this many
+/// CONSECUTIVE later observations in which the residual did not reproduce,
+/// all under the SAME candidate artifact. A single pass is `nonreproduced`;
+/// fewer than this many passes cannot establish persistent disappearance.
+pub const STABILIZATION_MIN_CONSECUTIVE_PASSES: u32 = 2;
 
 /// Residual disposition with the invariants enforced by construction:
 /// - `Open` carries no reason.
 /// - every `Closed` carries a non-empty one-line reason;
 /// - `Fixed` carries a reason, the `resolution_run_id` of the court run whose
-///   captures show the residual no longer reproduces, and the
-///   `closure_predicate` that was verified against that run.
+///   captures show the residual no longer reproduces, the
+///   `closure_predicate` that was verified against that run, AND a CHANGED
+///   candidate artifact: a fix is a change in the thing being compared, so a
+///   resolution run that reused the original candidate is refused at record
+///   time (`require_fix_candidate_change`).
+/// - `Nonreproduced` carries a reason and the `observation_run_id` of the
+///   court run whose captures show the residual did not reproduce while the
+///   candidate stayed IDENTICAL. A single pass on the same candidate is
+///   real evidence of nondeterminism, never remediation evidence: it still
+///   blocks positive claims.
+/// - `Stabilized` carries a reason, the `trajectory_id` of a VERIFIED
+///   trajectory whose tail establishes persistent disappearance, the
+///   `consecutive_passes` the trajectory's tail showed, and the
+///   `stabilization_bound` (≥ `STABILIZATION_MIN_CONSECUTIVE_PASSES`) the
+///   evidence had to meet. Repeated passes on the same candidate establish
+///   persistent non-reproduction — still not a fix, still claim-blocking.
 ///
-/// There is no representable "fixed without evidence" state.
+/// There is no representable "fixed without evidence" state, and no way to
+/// promote a same-candidate pass into remediation evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Disposition {
     Open,
@@ -1662,6 +1695,16 @@ pub enum Disposition {
         resolution_run_id: String,
         closure_predicate: String,
     },
+    Nonreproduced {
+        reason: String,
+        observation_run_id: String,
+    },
+    Stabilized {
+        reason: String,
+        trajectory_id: String,
+        consecutive_passes: String,
+        stabilization_bound: String,
+    },
 }
 
 impl Disposition {
@@ -1670,6 +1713,8 @@ impl Disposition {
             Disposition::Open => "open",
             Disposition::Closed { kind, .. } => kind.as_str(),
             Disposition::Fixed { .. } => "fixed",
+            Disposition::Nonreproduced { .. } => "nonreproduced",
+            Disposition::Stabilized { .. } => "stabilized",
         }
     }
 
@@ -1678,6 +1723,8 @@ impl Disposition {
             Disposition::Open => None,
             Disposition::Closed { reason, .. } => Some(reason),
             Disposition::Fixed { reason, .. } => Some(reason),
+            Disposition::Nonreproduced { reason, .. } => Some(reason),
+            Disposition::Stabilized { reason, .. } => Some(reason),
         }
     }
 
@@ -1691,11 +1738,38 @@ impl Disposition {
         }
     }
 
+    /// The observation run backing a `nonreproduced` closure, if any.
+    pub fn observation_run_id(&self) -> Option<&str> {
+        match self {
+            Disposition::Nonreproduced {
+                observation_run_id, ..
+            } => Some(observation_run_id),
+            _ => None,
+        }
+    }
+
+    /// The trajectory backing a `stabilized` closure, if any.
+    pub fn trajectory_id(&self) -> Option<&str> {
+        match self {
+            Disposition::Stabilized { trajectory_id, .. } => Some(trajectory_id),
+            _ => None,
+        }
+    }
+
+    /// Does this disposition still block a positive claim?
+    ///
+    /// `fixed` is the ONLY remediation-evidence state: a changed candidate
+    /// artifact that no longer reproduces the divergence. `nonreproduced` and
+    /// `stabilized` observe disappearance WITHOUT a candidate change — real
+    /// evidence of nondeterminism, never a license to claim: nondeterminism
+    /// must not become remediation evidence.
     pub fn is_blocking(&self) -> bool {
         match self {
             Disposition::Open => true,
             Disposition::Closed { kind, .. } => kind.blocks_claim(),
             Disposition::Fixed { .. } => false,
+            Disposition::Nonreproduced { .. } => true,
+            Disposition::Stabilized { .. } => true,
         }
     }
 }
@@ -1707,8 +1781,8 @@ impl fmt::Display for Disposition {
 }
 
 // `Disposition` serializes as `disposition: <status>` with a sibling
-// `reason:` key exactly when closed, and a `resolution_run_id:` key exactly
-// when fixed — the Appendix A / Section 12 shape:
+// `reason:` key exactly when closed, and the evidence edges exactly when the
+// kind carries them — the Appendix A / Section 12 shape:
 //
 //   disposition: open
 //   disposition: intentional
@@ -1716,10 +1790,20 @@ impl fmt::Display for Disposition {
 //   disposition: fixed
 //   reason: "candidate patched to match reference exit class"
 //   resolution_run_id: run-cli-malformed-input-…
+//   closure_predicate: fix-court: …; candidate artifact identity changed; …
+//   disposition: nonreproduced
+//   reason: "flaky under load; passed once on the same candidate"
+//   observation_run_id: run-cli-malformed-input-…
+//   disposition: stabilized
+//   reason: "three consecutive non-reproductions on the same candidate"
+//   trajectory_id: <content address>
+//   consecutive_passes: "3"
+//   stabilization_bound: "2"
 //
 // The custom impl exists so the forbidden states are unrepresentable even in
 // YAML: `open` cannot carry a reason, a non-fixed closure cannot carry a
-// resolution_run_id, and `fixed` cannot omit one.
+// resolution_run_id, `fixed` cannot omit one, and a `nonreproduced`/
+// `stabilized` closure cannot borrow another kind's evidence fields.
 impl Serialize for Disposition {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -1744,6 +1828,26 @@ impl Serialize for Disposition {
                 map.serialize_entry("reason", reason)?;
                 map.serialize_entry("resolution_run_id", resolution_run_id)?;
                 map.serialize_entry("closure_predicate", closure_predicate)?;
+            }
+            Disposition::Nonreproduced {
+                reason,
+                observation_run_id,
+            } => {
+                map.serialize_entry("disposition", "nonreproduced")?;
+                map.serialize_entry("reason", reason)?;
+                map.serialize_entry("observation_run_id", observation_run_id)?;
+            }
+            Disposition::Stabilized {
+                reason,
+                trajectory_id,
+                consecutive_passes,
+                stabilization_bound,
+            } => {
+                map.serialize_entry("disposition", "stabilized")?;
+                map.serialize_entry("reason", reason)?;
+                map.serialize_entry("trajectory_id", trajectory_id)?;
+                map.serialize_entry("consecutive_passes", consecutive_passes)?;
+                map.serialize_entry("stabilization_bound", stabilization_bound)?;
             }
         }
         map.end()
@@ -1770,12 +1874,20 @@ impl<'de> Deserialize<'de> for Disposition {
                 let mut reason: Option<String> = None;
                 let mut resolution_run_id: Option<String> = None;
                 let mut closure_predicate: Option<String> = None;
+                let mut observation_run_id: Option<String> = None;
+                let mut trajectory_id: Option<String> = None;
+                let mut consecutive_passes: Option<String> = None;
+                let mut stabilization_bound: Option<String> = None;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "disposition" => status = Some(map.next_value()?),
                         "reason" => reason = Some(map.next_value()?),
                         "resolution_run_id" => resolution_run_id = Some(map.next_value()?),
                         "closure_predicate" => closure_predicate = Some(map.next_value()?),
+                        "observation_run_id" => observation_run_id = Some(map.next_value()?),
+                        "trajectory_id" => trajectory_id = Some(map.next_value()?),
+                        "consecutive_passes" => consecutive_passes = Some(map.next_value()?),
+                        "stabilization_bound" => stabilization_bound = Some(map.next_value()?),
                         // Unknown keys are ignored so the flattened map can be
                         // consumed in any field order.
                         _ => {
@@ -1784,14 +1896,46 @@ impl<'de> Deserialize<'de> for Disposition {
                     }
                 }
                 let status = status.ok_or_else(|| A::Error::missing_field("disposition"))?;
+                let forbid_foreign_edges = |kind: &str,
+                                            resolution_run_id: &Option<String>,
+                                            closure_predicate: &Option<String>,
+                                            observation_run_id: &Option<String>,
+                                            trajectory_id: &Option<String>,
+                                            consecutive_passes: &Option<String>,
+                                            stabilization_bound: &Option<String>|
+                 -> std::result::Result<(), A::Error> {
+                    if resolution_run_id.is_some() || closure_predicate.is_some() {
+                        return Err(A::Error::custom(format!(
+                            "only 'fixed' may carry a resolution_run_id or closure_predicate, not '{kind}'"
+                        )));
+                    }
+                    if observation_run_id.is_some() {
+                        return Err(A::Error::custom(format!(
+                            "only 'nonreproduced' may carry an observation_run_id, not '{kind}'"
+                        )));
+                    }
+                    if trajectory_id.is_some()
+                        || consecutive_passes.is_some()
+                        || stabilization_bound.is_some()
+                    {
+                        return Err(A::Error::custom(format!(
+                            "only 'stabilized' may carry trajectory evidence (trajectory_id/consecutive_passes/stabilization_bound), not '{kind}'"
+                        )));
+                    }
+                    Ok(())
+                };
                 match status.as_str() {
                     "open" => {
                         if reason.is_some()
                             || resolution_run_id.is_some()
                             || closure_predicate.is_some()
+                            || observation_run_id.is_some()
+                            || trajectory_id.is_some()
+                            || consecutive_passes.is_some()
+                            || stabilization_bound.is_some()
                         {
                             return Err(A::Error::custom(
-                                "disposition 'open' cannot carry a reason, resolution_run_id, or closure_predicate",
+                                "disposition 'open' cannot carry a reason or any evidence edge (resolution_run_id, closure_predicate, observation_run_id, trajectory_id, consecutive_passes, stabilization_bound)",
                             ));
                         }
                         Ok(Disposition::Open)
@@ -1808,6 +1952,15 @@ impl<'de> Deserialize<'de> for Disposition {
                         let closure_predicate = closure_predicate.ok_or_else(|| {
                             A::Error::custom("disposition 'fixed' requires a closure_predicate")
                         })?;
+                        forbid_foreign_edges(
+                            "fixed",
+                            &None,
+                            &None,
+                            &observation_run_id,
+                            &trajectory_id,
+                            &consecutive_passes,
+                            &stabilization_bound,
+                        )?;
                         if reason.trim().is_empty() {
                             return Err(A::Error::custom("reason must not be empty"));
                         }
@@ -1823,15 +1976,102 @@ impl<'de> Deserialize<'de> for Disposition {
                             closure_predicate,
                         })
                     }
+                    "nonreproduced" => {
+                        let reason = reason.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'nonreproduced' requires a one-line reason",
+                            )
+                        })?;
+                        let observation_run_id = observation_run_id.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'nonreproduced' requires an observation_run_id (a disposition is not evidence)",
+                            )
+                        })?;
+                        forbid_foreign_edges(
+                            "nonreproduced",
+                            &resolution_run_id,
+                            &closure_predicate,
+                            &None,
+                            &trajectory_id,
+                            &consecutive_passes,
+                            &stabilization_bound,
+                        )?;
+                        if reason.trim().is_empty() {
+                            return Err(A::Error::custom("reason must not be empty"));
+                        }
+                        if observation_run_id.trim().is_empty() {
+                            return Err(A::Error::custom("observation_run_id must not be empty"));
+                        }
+                        Ok(Disposition::Nonreproduced {
+                            reason,
+                            observation_run_id,
+                        })
+                    }
+                    "stabilized" => {
+                        let reason = reason.ok_or_else(|| {
+                            A::Error::custom("disposition 'stabilized' requires a one-line reason")
+                        })?;
+                        let trajectory_id = trajectory_id.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'stabilized' requires a trajectory_id (a disposition is not evidence)",
+                            )
+                        })?;
+                        let consecutive_passes = consecutive_passes.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'stabilized' requires consecutive_passes (the trajectory tail's non-reproductions)",
+                            )
+                        })?;
+                        let stabilization_bound = stabilization_bound.ok_or_else(|| {
+                            A::Error::custom(
+                                "disposition 'stabilized' requires a stabilization_bound (the required minimum)",
+                            )
+                        })?;
+                        forbid_foreign_edges(
+                            "stabilized",
+                            &resolution_run_id,
+                            &closure_predicate,
+                            &observation_run_id,
+                            &None,
+                            &None,
+                            &None,
+                        )?;
+                        if reason.trim().is_empty() {
+                            return Err(A::Error::custom("reason must not be empty"));
+                        }
+                        for (label, v) in [
+                            ("trajectory_id", trajectory_id.as_str()),
+                            ("consecutive_passes", consecutive_passes.as_str()),
+                            ("stabilization_bound", stabilization_bound.as_str()),
+                        ] {
+                            if v.trim().is_empty() {
+                                return Err(A::Error::custom(format!("{label} must not be empty")));
+                            }
+                            if v.parse::<u32>().is_err() {
+                                return Err(A::Error::custom(format!(
+                                    "{label} must be a decimal string of a u32, not {v:?}"
+                                )));
+                            }
+                        }
+                        Ok(Disposition::Stabilized {
+                            reason,
+                            trajectory_id,
+                            consecutive_passes,
+                            stabilization_bound,
+                        })
+                    }
                     other => {
                         let kind = ClosureKind::parse(other).ok_or_else(|| {
                             A::Error::custom(format!("unknown disposition '{other}'"))
                         })?;
-                        if resolution_run_id.is_some() || closure_predicate.is_some() {
-                            return Err(A::Error::custom(format!(
-                                "only 'fixed' may carry a resolution_run_id or closure_predicate, not '{other}'"
-                            )));
-                        }
+                        forbid_foreign_edges(
+                            other,
+                            &resolution_run_id,
+                            &closure_predicate,
+                            &observation_run_id,
+                            &trajectory_id,
+                            &consecutive_passes,
+                            &stabilization_bound,
+                        )?;
                         let reason = reason.ok_or_else(|| {
                             A::Error::custom(format!(
                                 "disposition '{other}' requires a one-line reason"
@@ -3100,6 +3340,10 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                 let mut reason: Option<String> = None;
                 let mut resolution_run_id: Option<String> = None;
                 let mut closure_predicate: Option<String> = None;
+                let mut observation_run_id: Option<String> = None;
+                let mut trajectory_id: Option<String> = None;
+                let mut consecutive_passes: Option<String> = None;
+                let mut stabilization_bound: Option<String> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -3112,6 +3356,10 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                         "reason" => reason = Some(map.next_value()?),
                         "resolution_run_id" => resolution_run_id = Some(map.next_value()?),
                         "closure_predicate" => closure_predicate = Some(map.next_value()?),
+                        "observation_run_id" => observation_run_id = Some(map.next_value()?),
+                        "trajectory_id" => trajectory_id = Some(map.next_value()?),
+                        "consecutive_passes" => consecutive_passes = Some(map.next_value()?),
+                        "stabilization_bound" => stabilization_bound = Some(map.next_value()?),
                         other => {
                             return Err(A::Error::custom(format!(
                                 "unknown field `{other}` on DispositionEvent — the event is content-addressed; unknown properties are refused, never dropped"
@@ -3120,23 +3368,103 @@ impl<'de> Deserialize<'de> for DispositionEvent {
                     }
                 }
 
+                let forbid_foreign_edges = |kind: &str,
+                                            allow_fix: bool,
+                                            allow_observation: bool,
+                                            allow_trajectory: bool|
+                 -> std::result::Result<(), A::Error> {
+                    if !allow_fix && (resolution_run_id.is_some() || closure_predicate.is_some()) {
+                        return Err(A::Error::custom(format!(
+                            "{kind} event carries resolution_run_id/closure_predicate — only fixed may"
+                        )));
+                    }
+                    if !allow_observation && observation_run_id.is_some() {
+                        return Err(A::Error::custom(format!(
+                            "{kind} event carries observation_run_id — only nonreproduced may"
+                        )));
+                    }
+                    if !allow_trajectory
+                        && (trajectory_id.is_some()
+                            || consecutive_passes.is_some()
+                            || stabilization_bound.is_some())
+                    {
+                        return Err(A::Error::custom(format!(
+                            "{kind} event carries trajectory evidence (trajectory_id/consecutive_passes/stabilization_bound) — only stabilized may"
+                        )));
+                    }
+                    Ok(())
+                };
+
                 let disposition = match disposition.as_deref() {
-                    Some("fixed") => Disposition::Fixed {
-                        reason: reason
-                            .ok_or_else(|| A::Error::custom("fixed event without a reason"))?,
-                        resolution_run_id: resolution_run_id.ok_or_else(|| {
-                            A::Error::custom("fixed event without a resolution_run_id")
-                        })?,
-                        closure_predicate: closure_predicate.ok_or_else(|| {
-                            A::Error::custom("fixed event without a closure_predicate")
-                        })?,
-                    },
-                    Some(kind) => {
-                        if resolution_run_id.is_some() || closure_predicate.is_some() {
+                    Some("fixed") => {
+                        forbid_foreign_edges("fixed", true, false, false)?;
+                        Disposition::Fixed {
+                            reason: reason
+                                .ok_or_else(|| A::Error::custom("fixed event without a reason"))?,
+                            resolution_run_id: resolution_run_id.ok_or_else(|| {
+                                A::Error::custom("fixed event without a resolution_run_id")
+                            })?,
+                            closure_predicate: closure_predicate.ok_or_else(|| {
+                                A::Error::custom("fixed event without a closure_predicate")
+                            })?,
+                        }
+                    }
+                    Some("nonreproduced") => {
+                        forbid_foreign_edges("nonreproduced", false, true, false)?;
+                        Disposition::Nonreproduced {
+                            reason: reason.ok_or_else(|| {
+                                A::Error::custom("nonreproduced event without a reason")
+                            })?,
+                            observation_run_id: observation_run_id.ok_or_else(|| {
+                                A::Error::custom(
+                                    "nonreproduced event without an observation_run_id",
+                                )
+                            })?,
+                        }
+                    }
+                    Some("stabilized") => {
+                        forbid_foreign_edges("stabilized", false, false, true)?;
+                        let consecutive_passes = consecutive_passes.ok_or_else(|| {
+                            A::Error::custom("stabilized event without consecutive_passes")
+                        })?;
+                        let stabilization_bound = stabilization_bound.ok_or_else(|| {
+                            A::Error::custom("stabilized event without stabilization_bound")
+                        })?;
+                        if consecutive_passes.parse::<u32>().is_err() {
                             return Err(A::Error::custom(format!(
-                                "{kind} event carries resolution_run_id/closure_predicate — only fixed may"
+                                "stabilized event: consecutive_passes must be a decimal u32 string, not {consecutive_passes:?}"
                             )));
                         }
+                        if stabilization_bound.parse::<u32>().is_err() {
+                            return Err(A::Error::custom(format!(
+                                "stabilized event: stabilization_bound must be a decimal u32 string, not {stabilization_bound:?}"
+                            )));
+                        }
+                        let passes: u32 = consecutive_passes.parse().unwrap();
+                        let bound: u32 = stabilization_bound.parse().unwrap();
+                        if bound < STABILIZATION_MIN_CONSECUTIVE_PASSES {
+                            return Err(A::Error::custom(format!(
+                                "stabilized event: stabilization_bound {bound} is below the protocol floor of {STABILIZATION_MIN_CONSECUTIVE_PASSES} — a single pass is 'nonreproduced', not 'stabilized'"
+                            )));
+                        }
+                        if passes < bound {
+                            return Err(A::Error::custom(format!(
+                                "stabilized event: consecutive_passes {passes} is below the declared stabilization_bound {bound}"
+                            )));
+                        }
+                        Disposition::Stabilized {
+                            reason: reason.ok_or_else(|| {
+                                A::Error::custom("stabilized event without a reason")
+                            })?,
+                            trajectory_id: trajectory_id.ok_or_else(|| {
+                                A::Error::custom("stabilized event without a trajectory_id")
+                            })?,
+                            consecutive_passes,
+                            stabilization_bound,
+                        }
+                    }
+                    Some(kind) => {
+                        forbid_foreign_edges(kind, false, false, false)?;
                         let kind = match kind {
                             "intentional" => ClosureKind::Intentional,
                             "environmental" => ClosureKind::Environmental,
@@ -3229,6 +3557,86 @@ impl DispositionEvent {
                 reason,
                 resolution_run_id,
                 closure_predicate,
+            },
+            evidence_refs: vec![],
+        })
+    }
+
+    /// Build a `nonreproduced` closure event: ONE later observation run,
+    /// under the SAME candidate artifact, in which the residual did not
+    /// reproduce. A disposition is not evidence — the observation run is.
+    pub fn nonreproduced(
+        residual_id: &str,
+        reason: String,
+        observation_run_id: String,
+    ) -> crate::error::Result<Self> {
+        validate_reason(&reason)?;
+        if observation_run_id.trim().is_empty() {
+            return Err(crate::error::FrfError::new(
+                "a nonreproduced disposition requires an observation_run_id",
+            ));
+        }
+        Ok(DispositionEvent {
+            schema_version: SCHEMA_DISPOSITION.to_string(),
+            event_id: String::new(),
+            residual_id: residual_id.to_string(),
+            parent_event_id: None,
+            disposition: Disposition::Nonreproduced {
+                reason,
+                observation_run_id,
+            },
+            evidence_refs: vec![],
+        })
+    }
+
+    /// Build a `stabilized` closure event: a VERIFIED trajectory whose tail
+    /// establishes persistent disappearance (at least `stabilization_bound`
+    /// CONSECUTIVE non-reproductions, all under the same candidate). The
+    /// bound is recorded next to the observed passes so the evidence can
+    /// never be promoted past what the trajectory showed.
+    pub fn stabilized(
+        residual_id: &str,
+        reason: String,
+        trajectory_id: String,
+        consecutive_passes: String,
+        stabilization_bound: String,
+    ) -> crate::error::Result<Self> {
+        validate_reason(&reason)?;
+        if trajectory_id.trim().is_empty() {
+            return Err(crate::error::FrfError::new(
+                "a stabilized disposition requires a trajectory_id",
+            ));
+        }
+        let passes: u32 = consecutive_passes.parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "consecutive_passes must be a decimal u32 string, not {consecutive_passes:?}"
+            ))
+        })?;
+        let bound: u32 = stabilization_bound.parse().map_err(|_| {
+            crate::error::FrfError::new(format!(
+                "stabilization_bound must be a decimal u32 string, not {stabilization_bound:?}"
+            ))
+        })?;
+        if bound < STABILIZATION_MIN_CONSECUTIVE_PASSES {
+            return Err(crate::error::FrfError::new(format!(
+                "stabilization_bound {bound} is below the protocol floor of {STABILIZATION_MIN_CONSECUTIVE_PASSES} — a single pass is 'nonreproduced', not 'stabilized'"
+            )));
+        }
+        if passes < bound {
+            return Err(crate::error::FrfError::new(format!(
+                "consecutive_passes {passes} is below the declared stabilization_bound {bound}"
+            )));
+        }
+        Ok(DispositionEvent {
+            schema_version: SCHEMA_DISPOSITION.to_string(),
+            event_id: String::new(),
+            residual_id: residual_id.to_string(),
+            parent_event_id: None,
+            disposition: Disposition::Stabilized {
+                reason,
+                trajectory_id,
+                consecutive_passes,
+                stabilization_bound,
             },
             evidence_refs: vec![],
         })
@@ -4582,6 +4990,8 @@ where
         s.as_str(),
         "open"
             | "fixed"
+            | "nonreproduced"
+            | "stabilized"
             | "intentional"
             | "environmental"
             | "oracle_version"
@@ -4761,6 +5171,21 @@ pub struct ReceiptResidual {
     /// The comparability predicate verified against the resolution run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closure_predicate: Option<String>,
+    /// The observation run backing a `nonreproduced` disposition: ONE later
+    /// pass under the SAME candidate artifact (v20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_run_id: Option<String>,
+    /// The trajectory backing a `stabilized` disposition: repeated later
+    /// passes under the SAME candidate artifact (v20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trajectory_id: Option<String>,
+    /// The consecutive non-reproductions the trajectory's tail established
+    /// (decimal string; v20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consecutive_passes: Option<String>,
+    /// The required minimum those passes had to meet (decimal string; v20).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stabilization_bound: Option<String>,
     pub reproducer: String,
     pub invariant: String,
     pub residual_fingerprint: String,
@@ -5312,7 +5737,7 @@ mod tests {
 
     #[test]
     fn disposition_event_reader_is_strict() {
-        let good = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: clearer wording\nevidence_refs: []\n";
+        let good = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: clearer wording\nevidence_refs: []\n";
         let parsed: DispositionEvent = serde_yaml::from_str(good).unwrap();
         assert_eq!(parsed.disposition.as_str(), "intentional");
 
@@ -5323,10 +5748,25 @@ mod tests {
         assert!(err.to_string().contains("unknown field"), "error: {err}");
 
         // Cross-field rules are enforced literally: a fixed event without a
-        // resolution run is refused; an intentional event carrying one is.
-        let bad = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: fixed\nreason: patched\nevidence_refs: []\n";
+        // resolution run is refused; an intentional event carrying one is;
+        // and the non-fix evidence edges cannot borrow another kind's edge.
+        let bad = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: fixed\nreason: patched\nevidence_refs: []\n";
         assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
-        let bad = "schema_version: frf-disposition-v2\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: x\nresolution_run_id: run-y\nevidence_refs: []\n";
+        let bad = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: intentional\nreason: x\nresolution_run_id: run-y\nevidence_refs: []\n";
         assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
+        let bad = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: nonreproduced\nreason: x\nresolution_run_id: run-y\nevidence_refs: []\n";
+        assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
+        let bad = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: stabilized\nreason: x\nevidence_refs: []\n";
+        assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
+        let bad = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: stabilized\nreason: x\ntrajectory_id: a.repeat_index.b\nconsecutive_passes: 1\nstabilization_bound: 2\nevidence_refs: []\n";
+        assert!(serde_yaml::from_str::<DispositionEvent>(bad).is_err());
+
+        // The v3 vocabulary round-trips with its evidence edges.
+        let nonrep = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: nonreproduced\nreason: flaky\nobservation_run_id: run-y\nevidence_refs: []\n";
+        let parsed: DispositionEvent = serde_yaml::from_str(nonrep).unwrap();
+        assert_eq!(parsed.disposition.as_str(), "nonreproduced");
+        let stab = "schema_version: frf-disposition-v3\nevent_id: aaaa\nresidual_id: r\nparent_event_id: null\ndisposition: stabilized\nreason: settled\ntrajectory_id: a.repeat_index.b\nconsecutive_passes: \"2\"\nstabilization_bound: \"2\"\nevidence_refs: []\n";
+        let parsed: DispositionEvent = serde_yaml::from_str(stab).unwrap();
+        assert_eq!(parsed.disposition.as_str(), "stabilized");
     }
 }

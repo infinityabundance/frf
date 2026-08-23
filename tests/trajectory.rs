@@ -276,7 +276,10 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
             assert_eq!(o["coordinate"], (i + 1).to_string());
             assert_eq!(o["run"], run, "identical evidence is the same run");
             assert_eq!(o["observed"], true);
-            assert!(o["residual"].as_str().unwrap().starts_with("cli-"));
+            assert!(
+                o["residual"].as_str().unwrap().len() == 64,
+                "residual ids are content addresses (FRF/RESIDUAL/v1)"
+            );
             assert!(
                 o["fingerprint"].as_str().unwrap().len() == 64,
                 "observed entry carries the exact fingerprint"

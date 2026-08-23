@@ -118,7 +118,7 @@ var resolverKeys = []string{"kind", "path", "sha256", "path_digest"}
 var environmentKeys = []string{"schema_version", "os", "architecture", "kernel_release", "locale", "timezone", "umask", "cwd", "environment", "digest"}
 var fixtureKeys = []string{"id", "hash", "arguments", "declared_arguments"}
 var observableKeys = []string{"axis", "raw_reference_hash", "raw_candidate_hash", "comparator", "normalization_rules", "verdict", "comparator_request", "comparator_result"}
-var residualKeys = []string{"id", "axis", "kind", "sign", "grammar_state", "raw_reference_hash", "raw_candidate_hash", "invariant", "reproducer", "residual_fingerprint", "disposition", "disposition_event_id", "reason", "resolution_run_id", "closure_predicate"}
+var residualKeys = []string{"id", "axis", "kind", "sign", "grammar_state", "raw_reference_hash", "raw_candidate_hash", "invariant", "reproducer", "residual_fingerprint", "disposition", "disposition_event_id", "reason", "resolution_run_id", "closure_predicate", "observation_run_id", "trajectory_id", "consecutive_passes", "stabilization_bound"}
 var signKeys = []string{"trajectory_evidence"}
 var trajectoryEvidenceKeys = []string{"coordinate_system", "series", "drift", "slew"}
 var tokenKeys = []string{"residual_id", "token", "next_court", "blocks_claims"}
@@ -129,8 +129,8 @@ var captureBoundsKeys = []string{"timeout_ms", "max_stream_bytes", "produced_max
 var executionContextKeys = []string{"schema_version", "cid", "artifacts"}
 var executionContextArtifactKeys = []string{"path", "role", "sha256"}
 var executionContextRoles = []string{"child-executable", "runtime-library", "data"}
-var dispositeions = []string{"open", "fixed", "intentional", "environmental", "oracle_version", "harness", "unknown"}
-var closurePredicate = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality"
+var dispositeions = []string{"open", "fixed", "nonreproduced", "stabilized", "intentional", "environmental", "oracle_version", "harness", "unknown"}
+var closurePredicate = "fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; candidate artifact identity changed; axis equality"
 
 func push(v *[]string, s string) {
 	*v = append(*v, s)
@@ -142,8 +142,8 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v19" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v19", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v20" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v20", str(o, "schema_version")))
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
@@ -371,8 +371,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v19" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v19", str(o, "schema_version")))
+	if str(o, "schema_version") != "frf-receipt-v20" {
+		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v20", str(o, "schema_version")))
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -555,6 +555,18 @@ func semanticViolations(rec jcs.Value) []string {
 			if _, ok := ro.Get("closure_predicate"); ok {
 				push(&v, fmt.Sprintf("open residual %s carries a closure_predicate", rid))
 			}
+			if _, ok := ro.Get("observation_run_id"); ok {
+				push(&v, fmt.Sprintf("open residual %s carries an observation_run_id", rid))
+			}
+			if _, ok := ro.Get("trajectory_id"); ok {
+				push(&v, fmt.Sprintf("open residual %s carries a trajectory_id", rid))
+			}
+			if _, ok := ro.Get("consecutive_passes"); ok {
+				push(&v, fmt.Sprintf("open residual %s carries consecutive_passes", rid))
+			}
+			if _, ok := ro.Get("stabilization_bound"); ok {
+				push(&v, fmt.Sprintf("open residual %s carries a stabilization_bound", rid))
+			}
 			if eid, ok := ro.Get("disposition_event_id"); ok && eid != nil {
 				if _, isStr := eid.(string); isStr {
 					push(&v, fmt.Sprintf("open residual %s carries a disposition_event_id", rid))
@@ -570,8 +582,70 @@ func semanticViolations(rec jcs.Value) []string {
 			if str(ro, "closure_predicate") != closurePredicate {
 				push(&v, fmt.Sprintf("fixed residual %s must carry the fix-court closure predicate", rid))
 			}
+			if _, ok := ro.Get("observation_run_id"); ok {
+				push(&v, fmt.Sprintf("fixed residual %s carries an observation_run_id", rid))
+			}
+			if _, ok := ro.Get("trajectory_id"); ok {
+				push(&v, fmt.Sprintf("fixed residual %s carries a trajectory_id", rid))
+			}
+			if _, ok := ro.Get("consecutive_passes"); ok {
+				push(&v, fmt.Sprintf("fixed residual %s carries consecutive_passes", rid))
+			}
+			if _, ok := ro.Get("stabilization_bound"); ok {
+				push(&v, fmt.Sprintf("fixed residual %s carries a stabilization_bound", rid))
+			}
 			if eid, ok := ro.Get("disposition_event_id"); !ok || eid == nil {
 				push(&v, fmt.Sprintf("fixed residual %s without a disposition_event_id", rid))
+			}
+		case "nonreproduced":
+			if _, ok := ro.Get("reason"); !ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s without a reason", rid))
+			}
+			if _, ok := ro.Get("observation_run_id"); !ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s without an observation_run_id", rid))
+			}
+			if _, ok := ro.Get("resolution_run_id"); ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s carries a resolution_run_id", rid))
+			}
+			if _, ok := ro.Get("closure_predicate"); ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s carries a closure_predicate", rid))
+			}
+			if _, ok := ro.Get("trajectory_id"); ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s carries a trajectory_id", rid))
+			}
+			if _, ok := ro.Get("consecutive_passes"); ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s carries consecutive_passes", rid))
+			}
+			if _, ok := ro.Get("stabilization_bound"); ok {
+				push(&v, fmt.Sprintf("nonreproduced residual %s carries a stabilization_bound", rid))
+			}
+			if eid, ok := ro.Get("disposition_event_id"); !ok || eid == nil {
+				push(&v, fmt.Sprintf("nonreproduced residual %s without a disposition_event_id", rid))
+			}
+		case "stabilized":
+			if _, ok := ro.Get("reason"); !ok {
+				push(&v, fmt.Sprintf("stabilized residual %s without a reason", rid))
+			}
+			if _, ok := ro.Get("trajectory_id"); !ok {
+				push(&v, fmt.Sprintf("stabilized residual %s without a trajectory_id", rid))
+			}
+			if _, ok := ro.Get("consecutive_passes"); !ok {
+				push(&v, fmt.Sprintf("stabilized residual %s without consecutive_passes", rid))
+			}
+			if _, ok := ro.Get("stabilization_bound"); !ok {
+				push(&v, fmt.Sprintf("stabilized residual %s without a stabilization_bound", rid))
+			}
+			if _, ok := ro.Get("resolution_run_id"); ok {
+				push(&v, fmt.Sprintf("stabilized residual %s carries a resolution_run_id", rid))
+			}
+			if _, ok := ro.Get("closure_predicate"); ok {
+				push(&v, fmt.Sprintf("stabilized residual %s carries a closure_predicate", rid))
+			}
+			if _, ok := ro.Get("observation_run_id"); ok {
+				push(&v, fmt.Sprintf("stabilized residual %s carries an observation_run_id", rid))
+			}
+			if eid, ok := ro.Get("disposition_event_id"); !ok || eid == nil {
+				push(&v, fmt.Sprintf("stabilized residual %s without a disposition_event_id", rid))
 			}
 		default:
 			found := false
@@ -592,6 +666,18 @@ func semanticViolations(rec jcs.Value) []string {
 			}
 			if _, ok := ro.Get("closure_predicate"); ok {
 				push(&v, fmt.Sprintf("%s residual %s carries a closure_predicate", d, rid))
+			}
+			if _, ok := ro.Get("observation_run_id"); ok {
+				push(&v, fmt.Sprintf("%s residual %s carries an observation_run_id", d, rid))
+			}
+			if _, ok := ro.Get("trajectory_id"); ok {
+				push(&v, fmt.Sprintf("%s residual %s carries a trajectory_id", d, rid))
+			}
+			if _, ok := ro.Get("consecutive_passes"); ok {
+				push(&v, fmt.Sprintf("%s residual %s carries consecutive_passes", d, rid))
+			}
+			if _, ok := ro.Get("stabilization_bound"); ok {
+				push(&v, fmt.Sprintf("%s residual %s carries a stabilization_bound", d, rid))
 			}
 			if eid, ok := ro.Get("disposition_event_id"); !ok || eid == nil {
 				push(&v, fmt.Sprintf("%s residual %s without a disposition_event_id", d, rid))

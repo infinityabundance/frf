@@ -810,6 +810,16 @@ func dispositionDoc(event *jcs.Object) *jcs.Object {
 			Keys:   []string{"kind", "reason", "resolution_run_id", "closure_predicate"},
 			Values: []jcs.Value{"fixed", str(event, "reason"), str(event, "resolution_run_id"), str(event, "closure_predicate")},
 		}
+	case "nonreproduced":
+		return &jcs.Object{
+			Keys:   []string{"kind", "reason", "observation_run_id"},
+			Values: []jcs.Value{"nonreproduced", str(event, "reason"), str(event, "observation_run_id")},
+		}
+	case "stabilized":
+		return &jcs.Object{
+			Keys:   []string{"kind", "reason", "trajectory_id", "consecutive_passes", "stabilization_bound"},
+			Values: []jcs.Value{"stabilized", str(event, "reason"), str(event, "trajectory_id"), str(event, "consecutive_passes"), str(event, "stabilization_bound")},
+		}
 	default:
 		return &jcs.Object{
 			Keys:   []string{"kind", "reason"},
@@ -969,7 +979,7 @@ func grammarState(disposition string) string {
 	switch disposition {
 	case "open":
 		return "violation"
-	case "fixed":
+	case "fixed", "nonreproduced", "stabilized":
 		return "recovery"
 	case "intentional":
 		return "intentional_divergence"

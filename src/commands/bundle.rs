@@ -938,6 +938,16 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                 {
                     runs.push(resolution_run_id.clone());
                 }
+                if let Disposition::Nonreproduced {
+                    observation_run_id, ..
+                } = &e.disposition
+                {
+                    runs.push(observation_run_id.clone());
+                }
+                // A stabilized event's evidence edge is the trajectory
+                // DOCUMENT, which lives under `trajectories/` and is already
+                // swept by the namespace walker; the series it derives from
+                // travels with the receipt's sign evidence.
             }
             // Refused external-minimizer proposals: a content-addressed
             // minimizer refusal under `residuals/<id>.minimizer/<request_cid>/`

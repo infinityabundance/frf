@@ -112,6 +112,42 @@ fn assert_disposition_invariant(d: &Disposition, origin: &str) {
                 "{origin}: fixed disposition without a closure_predicate"
             );
         }
+        Disposition::Nonreproduced {
+            reason,
+            observation_run_id,
+        } => {
+            assert!(
+                !reason.trim().is_empty() && !reason.contains('\n'),
+                "{origin}: nonreproduced disposition with an invalid reason"
+            );
+            assert!(
+                !observation_run_id.trim().is_empty(),
+                "{origin}: nonreproduced disposition without an observation_run_id"
+            );
+        }
+        Disposition::Stabilized {
+            reason,
+            trajectory_id,
+            consecutive_passes,
+            stabilization_bound,
+        } => {
+            assert!(
+                !reason.trim().is_empty() && !reason.contains('\n'),
+                "{origin}: stabilized disposition with an invalid reason"
+            );
+            assert!(
+                !trajectory_id.trim().is_empty(),
+                "{origin}: stabilized disposition without a trajectory_id"
+            );
+            assert!(
+                consecutive_passes.parse::<u32>().is_ok(),
+                "{origin}: stabilized disposition with a non-decimal consecutive_passes"
+            );
+            assert!(
+                stabilization_bound.parse::<u32>().is_ok(),
+                "{origin}: stabilized disposition with a non-decimal stabilization_bound"
+            );
+        }
     }
 }
 
@@ -151,7 +187,7 @@ fn mutated_valid_documents_never_panic() {
         "disposition: open\n",
         "disposition: fixed\nreason: patched the candidate\n",
         "disposition: intentional\nreason: clearer wording\n",
-        "disposition: fixed\nreason: patched and re-observed\nresolution_run_id: run-cli-malformed-input-cafebabe\nclosure_predicate: \"fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; axis equality\"\n",
+        "disposition: fixed\nreason: patched and re-observed\nresolution_run_id: run-cli-malformed-input-cafebabe\nclosure_predicate: \"fix-court: same court, authority, fixture, arguments, observables, normalizers, environment; candidate artifact identity changed; axis equality\"\n",
         r#"{"schema_version":"frf-residual-v1","id":"cli-exit-0001","court":"cli-malformed-input","run":"run-cli-malformed-input-ab12cd34","axis":"exit","kind":"exit","authority":"ref-cli-1.8.2","scope":"malformed-input","candidate_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","raw_reference":"2","raw_candidate":"1","raw_reference_sha256":"0000000000000000000000000000000000000000000000000000000000000000","raw_candidate_sha256":"1111111111111111111111111111111111111111111111111111111111111111"}"#,
         r#"court:
   id: cli-malformed-input

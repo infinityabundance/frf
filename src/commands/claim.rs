@@ -52,7 +52,14 @@ use crate::store::Store;
 /// Blocking residuals: `open`/`unknown` (unexplained divergences). `harness`
 /// is run-level and handled separately.
 fn is_scope_blocking(disposition: &str) -> bool {
-    matches!(disposition, "open" | "unknown")
+    // `fixed` is the ONLY remediation-evidence state (a changed candidate
+    // that no longer reproduces). `nonreproduced` and `stabilized` observe
+    // disappearance WITHOUT a candidate change — real evidence of
+    // nondeterminism, never a license to claim compatibility.
+    matches!(
+        disposition,
+        "open" | "unknown" | "nonreproduced" | "stabilized"
+    )
 }
 
 /// Scan the EVIDENCE UNIVERSE (the committed [`KnowledgeSnapshot`] the claim

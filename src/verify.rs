@@ -1260,6 +1260,16 @@ fn disposition_of(res: &ReceiptResidual) -> Option<Disposition> {
             resolution_run_id: res.resolution_run_id.clone()?,
             closure_predicate: res.closure_predicate.clone()?,
         }),
+        "nonreproduced" => Some(Disposition::Nonreproduced {
+            reason: res.reason.clone()?,
+            observation_run_id: res.observation_run_id.clone()?,
+        }),
+        "stabilized" => Some(Disposition::Stabilized {
+            reason: res.reason.clone()?,
+            trajectory_id: res.trajectory_id.clone()?,
+            consecutive_passes: res.consecutive_passes.clone()?,
+            stabilization_bound: res.stabilization_bound.clone()?,
+        }),
         other => Some(Disposition::Closed {
             kind: ClosureKind::parse(other)?,
             reason: res.reason.clone()?,
@@ -1686,11 +1696,48 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                     (_, None) => true,
                     (_, Some(_)) => false,
                 };
+                let observation_ok = match (&event.disposition, &res.observation_run_id) {
+                    (
+                        Disposition::Nonreproduced {
+                            observation_run_id, ..
+                        },
+                        Some(oid),
+                    ) => observation_run_id == oid,
+                    (Disposition::Nonreproduced { .. }, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
+                };
+                let trajectory_ok = match (&event.disposition, &res.trajectory_id) {
+                    (Disposition::Stabilized { trajectory_id, .. }, Some(tid)) => {
+                        trajectory_id == tid
+                    }
+                    (Disposition::Stabilized { .. }, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
+                };
+                let stabilized_ok = match &event.disposition {
+                    Disposition::Stabilized {
+                        consecutive_passes,
+                        stabilization_bound,
+                        ..
+                    } => {
+                        res.consecutive_passes.as_deref() == Some(consecutive_passes.as_str())
+                            && res.stabilization_bound.as_deref()
+                                == Some(stabilization_bound.as_str())
+                    }
+                    _ => res.consecutive_passes.is_none() && res.stabilization_bound.is_none(),
+                };
                 if event.disposition.as_str() != res.disposition
                     || event.disposition.reason().map(str::to_string) != res.reason
                     || event.disposition.resolution_run_id().map(str::to_string)
                         != res.resolution_run_id
+                    || event.disposition.observation_run_id().map(str::to_string)
+                        != res.observation_run_id
+                    || event.disposition.trajectory_id().map(str::to_string) != res.trajectory_id
                     || !closure_ok
+                    || !observation_ok
+                    || !trajectory_ok
+                    || !stabilized_ok
                 {
                     return Err(FrfError::new(format!(
                         "receipt {id}: residual {} disposition {:?} does not match the bound event {eid} — the receipt must not drift from the event it points at",
@@ -1726,25 +1773,93 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         }
     }
 
-    // 5. Fixed closures must be backed by verifiable resolution evidence.
+    // 5. Evidence-bearing closures must be backed by verifiable evidence:
+    //    - `fixed` requires a resolution run under the SAME question/envelope
+    //      whose axis closes, AND a CHANGED candidate artifact (a pass on the
+    //      same candidate is a non-reproduction, not a fix);
+    //    - `nonreproduced` requires a resolution-comparable observation run
+    //      whose axis closes under the SAME candidate;
+    //    - `stabilized` requires a verified trajectory whose tail establishes
+    //      the declared consecutive non-reproductions under the SAME
+    //      candidate.
     for res in &body.residuals {
-        if let (Some(resolution_run_id), Ok(axis)) =
-            (&res.resolution_run_id, ObservableId::parse(&res.axis))
-        {
-            if resolution_run_id == run {
-                return Err(FrfError::new(format!(
-                    "receipt {id}: residual {} claims to be fixed by the run that observed it — a disposition must not substitute for new evidence",
-                    res.id
-                )));
-            }
-            store
-                .resolution_compatibility(run, resolution_run_id, &axis)
-                .map_err(|e| {
+        let axis = match ObservableId::parse(&res.axis) {
+            Ok(a) => a,
+            Err(_) => continue, // an undeclared/invalid axis is refused by validate_semantics
+        };
+        // The residual record (verified) drives the lineage / candidate
+        // comparisons of its evidence-bearing closure.
+        let Ok(record) = store.load_residual(&res.id).map(|u| u.into_inner()) else {
+            continue; // refused by the residual loop above
+        };
+        match res.disposition.as_str() {
+            "fixed" => {
+                let Some(resolution_run_id) = &res.resolution_run_id else {
+                    continue; // refused by validate_semantics
+                };
+                if resolution_run_id == run {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: residual {} claims to be fixed by the run that observed it — a disposition must not substitute for new evidence",
+                        res.id
+                    )));
+                }
+                store
+                    .resolution_compatibility(run, resolution_run_id, &axis)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "receipt {id}: the fixed closure of {} is not backed by verifiable resolution evidence: {e}",
+                            res.id
+                        ))
+                    })?;
+                store.require_fix_candidate_change(run, resolution_run_id).map_err(|e| {
                     FrfError::new(format!(
-                        "receipt {id}: the fixed closure of {} is not backed by verifiable resolution evidence: {e}",
+                        "receipt {id}: the fixed closure of {} is not backed by a changed candidate artifact: {e}",
                         res.id
                     ))
                 })?;
+            }
+            "nonreproduced" => {
+                let Some(observation_run_id) = &res.observation_run_id else {
+                    continue; // refused by validate_semantics
+                };
+                if observation_run_id == run {
+                    return Err(FrfError::new(format!(
+                        "receipt {id}: residual {} claims to be nonreproduced by the run that observed it — a disposition must not substitute for new evidence",
+                        res.id
+                    )));
+                }
+                store
+                    .resolution_compatibility(run, observation_run_id, &axis)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "receipt {id}: the nonreproduced closure of {} is not backed by a verifiable observation run: {e}",
+                            res.id
+                        ))
+                    })?;
+                store.require_same_candidate(run, observation_run_id).map_err(|e| {
+                    FrfError::new(format!(
+                        "receipt {id}: the nonreproduced closure of {} changed the candidate — a candidate change is a fix, not a non-reproduction: {e}",
+                        res.id
+                    ))
+                })?;
+            }
+            "stabilized" => {
+                let Some(trajectory_id) = &res.trajectory_id else {
+                    continue; // refused by validate_semantics
+                };
+                let Some(passes) = &res.consecutive_passes else {
+                    continue; // refused by validate_semantics
+                };
+                store
+                    .require_stabilization_trajectory(&record, trajectory_id, passes)
+                    .map_err(|e| {
+                        FrfError::new(format!(
+                            "receipt {id}: the stabilized closure of {} is not backed by verifiable trajectory evidence: {e}",
+                            res.id
+                        ))
+                    })?;
+            }
+            _ => {}
         }
     }
 
@@ -2804,6 +2919,24 @@ impl Receipt {
                             format!("open residual {} carries a closure_predicate", r.id),
                         );
                     }
+                    if r.observation_run_id.is_some() {
+                        fail(
+                            &mut violations,
+                            format!("open residual {} carries an observation_run_id", r.id),
+                        );
+                    }
+                    if r.trajectory_id.is_some()
+                        || r.consecutive_passes.is_some()
+                        || r.stabilization_bound.is_some()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "open residual {} carries trajectory evidence (trajectory_id/consecutive_passes/stabilization_bound)",
+                                r.id
+                            ),
+                        );
+                    }
                     if r.disposition_event_id.is_some() {
                         fail(
                             &mut violations,
@@ -2836,11 +2969,112 @@ impl Receipt {
                             ),
                         );
                     }
+                    if r.observation_run_id.is_some()
+                        || r.trajectory_id.is_some()
+                        || r.consecutive_passes.is_some()
+                        || r.stabilization_bound.is_some()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "fixed residual {} carries non-fix evidence edges (observation_run_id/trajectory_id/consecutive_passes/stabilization_bound)",
+                                r.id
+                            ),
+                        );
+                    }
                     if r.disposition_event_id.is_none() {
                         fail(
                             &mut violations,
                             format!(
                                 "fixed residual {} without a disposition_event_id — a receipt must point at the exact event that supplied the disposition",
+                                r.id
+                            ),
+                        );
+                    }
+                }
+                "nonreproduced" => {
+                    if r.reason.is_none() {
+                        fail(
+                            &mut violations,
+                            format!("nonreproduced residual {} without a reason", r.id),
+                        );
+                    }
+                    if r.observation_run_id.is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "nonreproduced residual {} without an observation_run_id — a disposition must not substitute for new evidence",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.resolution_run_id.is_some() || r.closure_predicate.is_some() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "nonreproduced residual {} carries resolution_run_id/closure_predicate — only fixed may",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.trajectory_id.is_some()
+                        || r.consecutive_passes.is_some()
+                        || r.stabilization_bound.is_some()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "nonreproduced residual {} carries trajectory evidence — only stabilized may",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.disposition_event_id.is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "nonreproduced residual {} without a disposition_event_id — a receipt must point at the exact event that supplied the disposition",
+                                r.id
+                            ),
+                        );
+                    }
+                }
+                "stabilized" => {
+                    if r.reason.is_none() {
+                        fail(
+                            &mut violations,
+                            format!("stabilized residual {} without a reason", r.id),
+                        );
+                    }
+                    if r.trajectory_id.is_none()
+                        || r.consecutive_passes.is_none()
+                        || r.stabilization_bound.is_none()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "stabilized residual {} requires trajectory_id + consecutive_passes + stabilization_bound — a disposition must not substitute for new evidence",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.resolution_run_id.is_some()
+                        || r.closure_predicate.is_some()
+                        || r.observation_run_id.is_some()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "stabilized residual {} carries resolution_run_id/closure_predicate/observation_run_id — only fixed/nonreproduced may",
+                                r.id
+                            ),
+                        );
+                    }
+                    if r.disposition_event_id.is_none() {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "stabilized residual {} without a disposition_event_id — a receipt must point at the exact event that supplied the disposition",
                                 r.id
                             ),
                         );
@@ -2869,6 +3103,24 @@ impl Receipt {
                         fail(
                             &mut violations,
                             format!("{other} residual {} carries a closure_predicate", r.id),
+                        );
+                    }
+                    if r.observation_run_id.is_some() {
+                        fail(
+                            &mut violations,
+                            format!("{other} residual {} carries an observation_run_id", r.id),
+                        );
+                    }
+                    if r.trajectory_id.is_some()
+                        || r.consecutive_passes.is_some()
+                        || r.stabilization_bound.is_some()
+                    {
+                        fail(
+                            &mut violations,
+                            format!(
+                                "{other} residual {} carries trajectory evidence — only stabilized may",
+                                r.id
+                            ),
                         );
                     }
                     if r.disposition_event_id.is_none() {
@@ -3420,6 +3672,10 @@ mod tests {
                 reason: None,
                 resolution_run_id: None,
                 closure_predicate: None,
+                observation_run_id: None,
+                trajectory_id: None,
+                consecutive_passes: None,
+                stabilization_bound: None,
                 reproducer: "run-cli-malformed-input-1234".into(),
                 invariant: String::new(),
                 residual_fingerprint: "0".repeat(64),

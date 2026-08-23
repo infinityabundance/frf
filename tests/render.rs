@@ -10,11 +10,17 @@ use common::*;
 /// Drive the golden path to a compiled claim (resolution receipt → claim).
 fn compiled_claim(work: &Workdir) -> String {
     admit_reference(work);
-    let _run = run_court(work);
+    let run = run_court(work);
     let resolution_run = run_resolution_court(work);
+    // Residual ids are CONTENT ADDRESSES (FRF/RESIDUAL/v1 over the run +
+    // divergence): resolve them from the runs instead of assuming storage
+    // labels.
+    let exit_id = residual_id(work, &run, "exit");
+    let text_id = residual_id(work, &run, "stderr");
+    let reobserved_text_id = residual_id(work, &resolution_run, "stderr");
     for (id, args) in [
         (
-            "cli-exit-0001",
+            exit_id.as_str(),
             vec![
                 "--disposition",
                 "fixed",
@@ -25,7 +31,7 @@ fn compiled_claim(work: &Workdir) -> String {
             ],
         ),
         (
-            "cli-text-0001",
+            text_id.as_str(),
             vec![
                 "--disposition",
                 "intentional",
@@ -34,7 +40,7 @@ fn compiled_claim(work: &Workdir) -> String {
             ],
         ),
         (
-            "cli-text-0002",
+            reobserved_text_id.as_str(),
             vec![
                 "--disposition",
                 "intentional",

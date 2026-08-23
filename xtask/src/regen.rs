@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
-const RECEIPT_SCHEMA: &str = "frf-receipt-v19";
+const RECEIPT_SCHEMA: &str = "frf-receipt-v20";
 
 /// The corpus's fixed environment strata (deterministic values; the digest is
 /// recomputed from them by [`bump`]).
@@ -373,7 +373,15 @@ pub fn regen_corpus(dir: &Path) {
     let mut valid_names: Vec<String> = sorted_names(&dir.join("valid"));
     for name in &valid_names {
         let mut doc = load_json(&dir.join("valid").join(name));
-        bump(&mut doc, true, true);
+        // The corpus carries THREE document families in `valid/`: OpenReceipt
+        // receipts, the detached-objects declaration, and reduction records.
+        // Only the RECEIPT family gets the receipt bump; the other families
+        // are re-pinned verbatim (their own schema versions are protocol
+        // constants the bump must not touch).
+        let is_receipt = !name.starts_with("detached-") && !name.starts_with("reduction-");
+        if is_receipt {
+            bump(&mut doc, true, true);
+        }
         let canonical = canonical(&doc);
         write(dir, &format!("valid/{name}"), &canonical);
         write(dir, &format!("canonical/{name}"), &canonical);
@@ -435,8 +443,13 @@ pub fn regen_corpus(dir: &Path) {
 
     // 3. Invalid-semantic fixtures: bump; recompute the semantic identity
     //    EXCEPT for the fixture whose violation IS the identity. Each keeps
-    //    its one intended violation.
+    //    its one intended violation. The detached-objects and reduction
+    //    families are NOT receipts: they are re-pinned verbatim (their
+    //    violations are their own semantic validators' business).
     for name in sorted_names(&dir.join("invalid-semantic")) {
+        if name.starts_with("detached-") || name.starts_with("reduction-") {
+            continue;
+        }
         let fix_identity = name != "10-bad-semantic-identity.json";
         let fix_env_digest = name != "09-bad-environment-digest.json";
         let mut doc = load_json(&dir.join("invalid-semantic").join(&name));
@@ -565,9 +578,14 @@ pub fn regen_corpus(dir: &Path) {
         // `06-duplicate-property` cannot be parsed (that IS its violation)
         // and `03-number-in-string-slot` cannot be canonicalized (numbers
         // are outside the value domain — its violation); both stay verbatim.
+        // The reduction-family invalid fixture is likewise non-strict JSON
+        // by construction (its violation is the duplicate property name)
+        // and is left verbatim.
         if matches!(
             name.as_str(),
-            "06-duplicate-property.json" | "03-number-in-string-slot.json"
+            "06-duplicate-property.json"
+                | "03-number-in-string-slot.json"
+                | "reduction-duplicate-property.json"
         ) {
             continue;
         }

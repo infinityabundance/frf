@@ -129,6 +129,8 @@ pub fn kappa(r: &ResidualRecord, disposition: &Disposition) -> TokenRecord {
 /// |----------------|---------------------|
 /// | open           | violation           |
 /// | fixed          | recovery            |
+/// | nonreproduced  | recovery            |
+/// | stabilized     | recovery            |
 /// | intentional    | intentional_divergence |
 /// | environmental  | boundary            |
 /// | oracle_version | boundary            |
@@ -137,7 +139,9 @@ pub fn kappa(r: &ResidualRecord, disposition: &Disposition) -> TokenRecord {
 pub fn grammar_state(disposition: &Disposition) -> &'static str {
     match disposition {
         Disposition::Open => "violation",
-        Disposition::Fixed { .. } => "recovery",
+        Disposition::Fixed { .. }
+        | Disposition::Nonreproduced { .. }
+        | Disposition::Stabilized { .. } => "recovery",
         Disposition::Closed { kind, .. } => match kind {
             ClosureKind::Intentional => "intentional_divergence",
             ClosureKind::Environmental => "boundary",
