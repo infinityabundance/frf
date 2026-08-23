@@ -24,7 +24,7 @@
 
 use frf::canon;
 use frf::host;
-use frf::model::{DetachedObjects, Receipt, KIND_SCHEMAS};
+use frf::model::{DetachedObjects, Receipt, ReductionRecord, KIND_SCHEMAS};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -34,6 +34,13 @@ use std::path::PathBuf;
 /// [`Receipt`]. Named `detached-*.json`.
 fn is_detached_fixture(name: &str) -> bool {
     name.starts_with("detached-")
+}
+
+/// The reduction-record fixtures are a third document family: they
+/// deserialize as [`ReductionRecord`] (frf-reduction-v4) and must pass the
+/// reduction semantic validator. Named `reduction-*.json`.
+fn is_reduction_fixture(name: &str) -> bool {
+    name.starts_with("reduction-")
 }
 
 fn dir(rel: &str) -> PathBuf {
@@ -271,6 +278,7 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
         let value: Value = canon::parse_strict(source.as_bytes())
             .unwrap_or_else(|e| panic!("{name}: not strict JSON: {e}"));
         let detached_family = is_detached_fixture(&name);
+        let reduction_family = is_reduction_fixture(&name);
         if detached_family {
             let declaration: DetachedObjects = serde_json::from_value(value.clone())
                 .unwrap_or_else(|e| {
@@ -279,6 +287,52 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
             declaration.validate_semantics().unwrap_or_else(|e| {
                 panic!("{name}: fails detached-objects semantic conformance: {e}")
             });
+        } else if reduction_family {
+            let record: ReductionRecord =
+                serde_json::from_value(value.clone()).unwrap_or_else(|e| {
+                    panic!("{name}: does not deserialize as a reduction record: {e}")
+                });
+            record
+                .validate_semantics()
+                .unwrap_or_else(|e| panic!("{name}: fails reduction semantic conformance: {e}"));
+            // The record's content address rederives from its own fields
+            // (the domain-aware minimality predicate enters the identity
+            // exactly as it serializes) — the same function the store's
+            // verified loader runs.
+            let expected = frf::semantics::reduction_identity(
+                &record.residual_id,
+                &record.source_run,
+                &record.axis,
+                record.kind.clone(),
+                &record.court_semantic_identity,
+                &record.authority_artifact_sha256,
+                &record.candidate_artifact_sha256,
+                &record.environment_digest,
+                &record.comparator_semantic_id,
+                &record.comparator_semantic_hash,
+                &record.comparator_implementation_hash,
+                &record.argv_template,
+                &record.original_fixture_sha256,
+                &record.final_fixture_sha256,
+                &record.attempts,
+                &record.derivation,
+                &record.transform,
+                frf::store::minimizer_binding(&record).as_ref().map(|b| {
+                    (
+                        b.0.as_str(),
+                        b.1.as_str(),
+                        b.2.as_str(),
+                        b.3,
+                        b.4.as_str(),
+                        b.5.as_str(),
+                    )
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{name}: cannot rederive its content address: {e}"));
+            assert_eq!(
+                expected, record.id,
+                "{name}: the content address does not rederive from its own fields"
+            );
         } else {
             let _receipt: Receipt = serde_json::from_value(value.clone())
                 .unwrap_or_else(|e| panic!("{name}: does not deserialize as an OpenReceipt: {e}"));
@@ -308,8 +362,8 @@ fn valid_fixtures_parse_canonicalize_and_hash_to_the_pinned_values() {
                 });
         assert_eq!(hash, expected_hash.trim(), "{name}: digest drifted");
         // The schema validates the canonical form too (OpenReceipt family
-        // only — the detached family validated above).
-        if !detached_family {
+        // only — the detached and reduction families validated above).
+        if !detached_family && !reduction_family {
             let canonical_value: Value =
                 serde_json::from_str(&canonical).expect("canonical bytes must be JSON");
             schema_valid(&canonical_value)
@@ -332,12 +386,21 @@ fn invalid_fixtures_must_be_refused() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         let source = fs::read_to_string(&path).unwrap();
         // Either the JSON is not strict (duplicate property names — RFC 8785
-        // §2 I-JSON), or it does not deserialize as an OpenReceipt (schema
-        // version enforced, fields required, enums closed, unknown properties
-        // refused). Both are refusals.
+        // §2 I-JSON), or it does not deserialize into its document family's
+        // schema (schema version enforced, fields required, enums closed,
+        // unknown properties refused). Both are refusals.
         let refused = canon::parse_strict(source.as_bytes())
             .ok()
-            .and_then(|v| serde_json::from_value::<Receipt>(v).ok())
+            .and_then(|v| {
+                let ok = if is_detached_fixture(&name) {
+                    serde_json::from_value::<DetachedObjects>(v.clone()).is_ok()
+                } else if is_reduction_fixture(&name) {
+                    serde_json::from_value::<ReductionRecord>(v.clone()).is_ok()
+                } else {
+                    serde_json::from_value::<Receipt>(v).is_ok()
+                };
+                ok.then_some(())
+            })
             .is_none();
         assert!(refused, "{name}: must be refused");
         count += 1;
@@ -376,6 +439,19 @@ fn semantic_invalid_fixtures_must_be_refused() {
             assert!(
                 declaration.validate_semantics().is_err(),
                 "{name}: must fail detached-objects semantic conformance"
+            );
+            count += 1;
+            continue;
+        }
+        if is_reduction_fixture(&name) {
+            let record: ReductionRecord = serde_json::from_value(value).unwrap_or_else(|e| {
+                panic!(
+                    "{name}: must deserialize as a reduction record (structural conformance): {e}"
+                )
+            });
+            assert!(
+                record.validate_semantics().is_err(),
+                "{name}: must fail reduction semantic conformance"
             );
             count += 1;
             continue;

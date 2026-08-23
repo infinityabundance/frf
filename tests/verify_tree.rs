@@ -1387,27 +1387,48 @@ fn reductions_are_self_consistent() {
                 a.attempt
             );
         }
-        // A minimality-proven reduction is exactly the deterministic ddmin
-        // outcome; the budget-cut case must say so honestly.
-        assert_eq!(r.derivation.minimality.kind, "one-minimal");
-        assert_eq!(r.derivation.minimality.granularity, "line");
-        // The epistemic line that separates a claim from a proof: `proven` is
-        // only ever the CORE's own statement (a completed search, or a
-        // separately verifiable proof). A record that proves minimality can
-        // never be carrying a relayed external-minimizer claim.
-        assert!(
-            !r.derivation.minimality.proven
-                || r.derivation
-                    .minimality
-                    .proposal_minimality_claimed
-                    .is_none(),
-            "reduction {id}: proven=true must never be a relayed external-minimizer claim"
-        );
-        if r.derivation.minimality.proven {
-            assert!(
-                r.attempts.len() < 256,
-                "reduction {id}: minimality proven but the attempt budget was exhausted"
-            );
+        // The minimality predicate is exactly what the record's own attempts
+        // establish: the semantic validator is the executable form of this
+        // contract (kind/coordinate consistency, and `proven` never a relayed
+        // external claim — a proven one-minimal carries no claim, a proven
+        // boundary carries the core's own lost boundary control).
+        r.validate_semantics()
+            .unwrap_or_else(|e| panic!("reduction {id}: fails semantic conformance: {e}"));
+        match r.derivation.minimality.kind.as_str() {
+            "one-minimal" => {
+                assert_eq!(
+                    r.derivation.minimality.granularity.as_deref(),
+                    Some("line"),
+                    "reduction {id}: one-minimal at line granularity"
+                );
+                if r.derivation.minimality.proven {
+                    assert!(
+                        r.attempts.len() < 256,
+                        "reduction {id}: minimality proven but the attempt budget was exhausted"
+                    );
+                }
+            }
+            "boundary" => {
+                let m = &r.derivation.minimality;
+                assert!(
+                    m.domain.is_some() && m.ordering.is_some(),
+                    "reduction {id}: a boundary carries its domain and ordering"
+                );
+                assert!(
+                    m.passing_point.is_some() && m.adjacent_nonpassing_point.is_some(),
+                    "reduction {id}: a boundary carries both points"
+                );
+                if m.proven {
+                    assert!(
+                        r.attempts.iter().any(|a| {
+                            a.role == frf::model::ReductionAttemptRole::BoundaryControl
+                                && a.outcome == frf::model::ReductionAttemptOutcome::Lost
+                        }),
+                        "reduction {id}: a proven boundary requires the core's own lost boundary control"
+                    );
+                }
+            }
+            other => panic!("reduction {id}: unknown minimality kind {other}"),
         }
         found += 1;
     }

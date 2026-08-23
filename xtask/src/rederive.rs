@@ -22,6 +22,32 @@ fn s(v: &Value) -> &str {
     v.as_str().unwrap_or_default()
 }
 
+/// The minimizer document a reduction's identity binds: built from the
+/// record's OWN `minimizer_*` fields (the record carries no top-level
+/// `minimizer` key) — mirroring the reference engine's
+/// `store::minimizer_binding`. `Null` for a built-in ddmin reduction (the
+/// identity's `minimizer` member is optional).
+pub fn minimizer_doc(reduction: &Value) -> Value {
+    if !reduction["minimizer_semantic_id"].is_string() {
+        return Value::Null;
+    }
+    let mut map = serde_json::Map::new();
+    for key in [
+        "semantic_id",
+        "semantic_hash",
+        "implementation_hash",
+        "implementation_artifact",
+        "invocation_id",
+        "result_id",
+    ] {
+        map.insert(
+            key.to_string(),
+            reduction[&format!("minimizer_{key}")].clone(),
+        );
+    }
+    Value::Object(map)
+}
+
 /// The identity of a harness-enforcement evidence record: `FRF/HARNESS-EVENT/v1`
 /// over the event's own fields (the id is never in the preimage). Mirrors the
 /// reference engine's `semantics::harness_event_identity`.
@@ -661,11 +687,25 @@ pub fn reduction_identity(
 ) -> String {
     let mut minimality = json!({
         "kind": s(&derivation["minimality"]["kind"]),
-        "granularity": s(&derivation["minimality"]["granularity"]),
         "proven": derivation["minimality"]["proven"]
             .as_bool()
             .unwrap_or(false),
     });
+    // The domain-aware predicate fields enter the identity ONLY when the
+    // record carries them, exactly as they serialize (absent == the record
+    // shape written before the generalization; an explicit coordinate is a
+    // different preimage).
+    for key in [
+        "granularity",
+        "domain",
+        "ordering",
+        "passing_point",
+        "adjacent_nonpassing_point",
+    ] {
+        if let Some(v) = derivation["minimality"].get(key) {
+            minimality[key] = v.clone();
+        }
+    }
     // The minimizer's claim enters the identity ONLY when the record carries
     // one (absent == None == the record shape written before the field
     // existed; an explicit claim is a different preimage).

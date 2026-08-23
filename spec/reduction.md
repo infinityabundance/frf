@@ -61,30 +61,46 @@ ReductionRecord {
 ```
 
 Every recorded attempt carries its ROLE (`baseline` — the original fixture
-checked before the search; `candidate` — a ddmin step; `final_verification`
-— the reproducer's last court run), its OUTCOME (`preserved` / `lost` /
-`harness_failure` — an unevaluable attempt ABORTS the minimization, never
-silently skipped), and whether it was ACCEPTED (preserved AND the fixture
-shrank; a baseline is never accepted). The attempt budget is a HARD gate
-around every executable attempt: neither the outer nor the inner ddmin loop
-can exceed it, and the final verification is executed under the same gate.
+checked before the search; `candidate` — a ddmin step; `boundary_control` —
+the ADJACENT NON-PASSING point the core executed to establish a domain-aware
+boundary predicate; `final_verification` — the reproducer's last court run),
+its OUTCOME (`preserved` / `lost` / `harness_failure` — an unevaluable
+attempt ABORTS the minimization, never silently skipped), and whether it was
+ACCEPTED (preserved AND the fixture shrank; a baseline is never accepted,
+and a boundary control is never accepted — a preserved control is a
+REFUTATION). The attempt budget is a HARD gate around every executable
+attempt: neither the outer nor the inner ddmin loop can exceed it, and the
+final verification is executed under the same gate.
 
-`minimality` is stated precisely — `{kind: one-minimal, granularity: line,
-proven, proposal_minimality_claimed?}`: classic ddmin establishes that no
-single line can be removed while preserving the lineage, not global
-cardinality minimality. `proven` is the CORE's own statement — true only
-when the deterministic search completed within the attempt budget (a
-budget-cut search says so honestly), or when the core itself checked a
-separately verifiable proof. An EXTERNAL minimizer has no oracle and no
-search of its own: it proposes, and the core court-verifies each proposal.
-Its response's `minimal` field is therefore recorded as the CLAIM
-`proposal_minimality_claimed` (present, true or false, only for
-external-minimizer reductions) and is NEVER relayed into `proven` — a
-claim is not a proof, and `proven` stays false unless the core established
-the predicate itself. The claim enters the record's content address when
-present, so a record carrying an external claim is identity-distinct from
-one that does not. The reproducer object lives under `objects/sha256/`
-like every other content-addressed artifact.
+`minimality` is stated precisely and DOMAIN-AWARE. Two predicate kinds
+exist:
+
+- `{kind: one-minimal, granularity: line, proven, proposal_minimality_claimed?}`
+  — classic ddmin establishes that no single line can be removed while
+  preserving the lineage (not global cardinality minimality). `proven` is
+  true only when the deterministic search completed within the attempt
+  budget; a budget-cut search says so honestly.
+- `{kind: boundary, domain: heartbeat.claimed_payload_length, ordering:
+  integer-ascending, passing_point: "4073", adjacent_nonpassing_point:
+  "4072", proven, proposal_minimality_claimed?}` — the proposal sits at an
+  OBSERVATION BOUNDARY of a numeric parameter: at `passing_point` the
+  lineage survives, at the adjacent `adjacent_nonpassing_point` it does
+  not. The coordinates are the minimizer's domain interpretation; the CORE
+  establishes the pair by executing BOTH points itself (the recorded
+  `boundary_control` attempt must be LOST and the final verification
+  preserved) before `proven` can be true. All points are decimal STRINGS
+  (the canonical JSON value domain has no numbers).
+
+`proven` is the CORE's own statement — a completed search, or the two
+boundary observations above — never a relayed claim. An EXTERNAL minimizer
+has no oracle and no search of its own: it proposes, and the core
+court-verifies each proposal. Its response's `minimal` field is recorded as
+the CLAIM `proposal_minimality_claimed` (present, true or false, only for
+external-minimizer reductions) and is NEVER relayed into `proven`. The
+claim and every declared coordinate enter the record's content address when
+present, so a record carrying them is identity-distinct from one that does
+not. The reproducer object lives under `objects/sha256/` like every other
+content-addressed artifact.
 
 The preservation predicate is decided by the SAME evaluation plan that
 observed the residual (`spec/evaluation.md`): the built-in implementation

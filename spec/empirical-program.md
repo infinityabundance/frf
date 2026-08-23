@@ -236,8 +236,10 @@ Per case:
    markers, so the honest measurement is one-minimal at line granularity
    with ratio 1.00 — the v1 program measured real multi-line reductions;
    when the residual's κ route is served by an EXTERNAL minimizer, the
-   record carries that minimizer's claim as `proposal_minimality_claimed`
-   and never a core-established `proven`).
+   record carries that minimizer's claim as `proposal_minimality_claimed`,
+   and a domain-aware boundary (kind=boundary) is `proven` only when the
+   core itself executed both points: the adjacent non-passing control LOST
+   and the final verification preserved).
 8. **claim inflation prevented** — the claim compiler on the buggy ladder
    run's receipt never covers a defect axis (the premise itself observed
    the divergence; a receipt with no clean axis is refused); the FIXED-side

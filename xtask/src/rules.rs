@@ -1510,3 +1510,75 @@ pub fn detached_semantic_violations(doc: &Value) -> Vec<String> {
     }
     v
 }
+
+/// Reduction-record semantic conformance (frf-reduction-v4): the minimality
+/// predicate must be exactly what the record's own attempts establish, and
+/// `proven` is never a relayed claim — a proven one-minimal carries no
+/// external claim, a proven boundary carries the core's own LOST
+/// boundary-control attempt.
+pub fn reduction_semantic_violations(doc: &Value) -> Vec<String> {
+    let mut v = Vec::new();
+    if as_str(&doc["schema_version"]) != "frf-reduction-v4" {
+        v.push(format!(
+            "schema_version is {:?}, expected frf-reduction-v4",
+            doc["schema_version"]
+        ));
+    }
+    let minimality = &doc["derivation"]["minimality"];
+    let kind = as_str(&minimality["kind"]);
+    let coordinates = [
+        "domain",
+        "ordering",
+        "passing_point",
+        "adjacent_nonpassing_point",
+    ];
+    match kind {
+        "one-minimal" => {
+            if minimality.get("granularity").is_none() {
+                v.push("one-minimal minimality requires a granularity".to_string());
+            }
+            for key in coordinates {
+                if minimality.get(key).is_some() {
+                    v.push(format!(
+                        "one-minimal minimality carries a boundary coordinate {key:?}"
+                    ));
+                }
+            }
+            let proven = minimality["proven"].as_bool().unwrap_or(false);
+            let claimed = minimality["proposal_minimality_claimed"]
+                .as_bool()
+                .unwrap_or(false);
+            if proven && claimed {
+                v.push(
+                    "one-minimal proven=true must never be a relayed external-minimizer claim"
+                        .to_string(),
+                );
+            }
+        }
+        "boundary" => {
+            if minimality.get("granularity").is_some() {
+                v.push("boundary minimality has no removal granularity".to_string());
+            }
+            for key in coordinates {
+                if minimality.get(key).is_none() {
+                    v.push(format!("boundary minimality requires {key}"));
+                }
+            }
+            if minimality["proven"].as_bool().unwrap_or(false) {
+                let lost_control = doc["attempts"].as_array().map(|attempts| {
+                    attempts.iter().any(|a| {
+                        as_str(&a["role"]) == "boundary_control" && as_str(&a["outcome"]) == "lost"
+                    })
+                });
+                if lost_control != Some(true) {
+                    v.push(
+                        "boundary proven=true requires the core's lost boundary_control attempt"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        other => v.push(format!("unknown minimality kind {other:?}")),
+    }
+    v
+}

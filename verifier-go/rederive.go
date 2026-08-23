@@ -844,21 +844,27 @@ func reductionIdentity(r *jcs.Object) (string, error) {
 		})
 	}
 	var minimizer jcs.Value
-	if m, ok := r.Get("minimizer"); ok && m != nil {
-		mo := m.(*jcs.Object)
+	if _, ok := r.Get("minimizer_semantic_id"); ok {
+		// The record carries the minimizer binding as minimizer_* fields (no
+		// top-level `minimizer` key); the identity doc mirrors the reference
+		// engine's store::minimizer_binding.
 		minimizer = &jcs.Object{
 			Keys:   []string{"semantic_id", "semantic_hash", "implementation_hash", "implementation_artifact", "invocation_id", "result_id"},
-			Values: []jcs.Value{str(mo, "semantic_id"), str(mo, "semantic_hash"), str(mo, "implementation_hash"), recVal(mo, "implementation_artifact"), str(mo, "invocation_id"), str(mo, "result_id")},
+			Values: []jcs.Value{str(r, "minimizer_semantic_id"), str(r, "minimizer_semantic_hash"), str(r, "minimizer_implementation_hash"), recVal(r, "minimizer_implementation_artifact"), str(r, "minimizer_invocation_id"), str(r, "minimizer_result_id")},
 		}
 	}
-	// The minimizer's claim enters the identity ONLY when the record carries
-	// one (absent == None == the record shape written before the field
-	// existed; an explicit claim is a different preimage).
-	minimalityKeys := []string{"kind", "granularity", "proven"}
-	minimalityValues := []jcs.Value{str(minimality, "kind"), str(minimality, "granularity"), recVal(minimality, "proven")}
-	if v, ok := minimality.Get("proposal_minimality_claimed"); ok && v != nil {
-		minimalityKeys = append(minimalityKeys, "proposal_minimality_claimed")
-		minimalityValues = append(minimalityValues, v)
+	// The domain-aware predicate fields enter the identity ONLY when the
+	// record carries them, exactly as they serialize (absent == the record
+	// shape written before the generalization; an explicit coordinate is a
+	// different preimage). The minimizer's claim likewise enters only when
+	// present.
+	minimalityKeys := []string{"kind", "proven"}
+	minimalityValues := []jcs.Value{str(minimality, "kind"), recVal(minimality, "proven")}
+	for _, key := range []string{"granularity", "domain", "ordering", "passing_point", "adjacent_nonpassing_point", "proposal_minimality_claimed"} {
+		if v, ok := minimality.Get(key); ok && v != nil {
+			minimalityKeys = append(minimalityKeys, key)
+			minimalityValues = append(minimalityValues, v)
+		}
 	}
 	doc := &jcs.Object{
 		Keys: []string{"residual_id", "source_run", "axis", "kind", "court_semantic_identity", "authority_artifact_sha256", "candidate_artifact_sha256", "environment_digest", "comparator_semantic_id", "comparator_semantic_hash", "comparator_implementation_hash", "argv_template", "original_fixture_sha256", "final_fixture_sha256", "attempts", "derivation", "transform", "minimizer"},

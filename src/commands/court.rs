@@ -782,7 +782,11 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         final_lines,
         minimality: ReductionMinimality {
             kind: "one-minimal".to_string(),
-            granularity: "line".to_string(),
+            granularity: Some("line".to_string()),
+            domain: None,
+            ordering: None,
+            passing_point: None,
+            adjacent_nonpassing_point: None,
             proven: minimal_proven,
             // The built-in reducer IS the search: there is no external
             // minimizer whose claim could be recorded.
@@ -846,7 +850,7 @@ pub fn minimize(store: &Store, residual_id: &str) -> Result<String> {
         derivation.final_lines,
         reduction.attempts.len(),
         derivation.minimality.kind,
-        derivation.minimality.granularity,
+        derivation.minimality.granularity.as_deref().unwrap_or("-"),
         derivation.minimality.proven,
         &final_sha[..16]
     );
@@ -1130,7 +1134,66 @@ fn minimize_external(
     }
 
     // Court-verify the proposal: THE comparison operation decides, never the
-    // minimizer's claim. This is the only other executable attempt.
+    // minimizer's claim.
+    //
+    // The domain-aware boundary declaration (kind=boundary) is court-verified
+    // BEFORE the proposal's final confirmation: the minimizer CLAIMS the
+    // proposal sits at an observation boundary of a numeric parameter — at
+    // the passing point the lineage survives, at the adjacent non-passing
+    // point it does not. The core ESTABLISHES that itself by executing the
+    // adjacent point: the declaration is a claim, the two observations (this
+    // control lost + the final verification below preserved) are the proof.
+    // The control's outcome is always recorded — a preserved control is a
+    // REFUTATION, and the record keeps the refuting attempt as evidence
+    // while `proven` stays false.
+    let mut boundary_proven = false;
+    if let Some(declaration) = &response.minimality {
+        if declaration.kind != "boundary" {
+            return Err(FrfError::new(format!(
+                "minimizer {} declared an unsupported minimality kind {:?}; this version establishes kind=boundary",
+                semantic.id, declaration.kind
+            )));
+        }
+        let adjacent_bytes = crate::ext::unb64(
+            &declaration.adjacent_fixture_base64,
+            "the adjacent non-passing fixture",
+        )?;
+        let adjacent_sha = host::sha256_bytes(&adjacent_bytes);
+        if adjacent_sha != declaration.adjacent_fixture_sha256 {
+            return Err(FrfError::new(format!(
+                "minimizer {} declared an adjacent non-passing fixture that does not hash to its declared sha256; refusing to establish a self-contradictory boundary",
+                semantic.id
+            )));
+        }
+        if adjacent_bytes == proposal_bytes {
+            return Err(FrfError::new(format!(
+                "minimizer {} declared an adjacent non-passing fixture identical to its proposal; a boundary needs two distinct points",
+                semantic.id
+            )));
+        }
+        let control = run_attempt(
+            store,
+            capture,
+            plan,
+            authority_image,
+            candidate_image,
+            original_fixture_arg,
+            environment_digest,
+            &adjacent_bytes,
+            ReductionAttemptRole::BoundaryControl,
+            false,
+            &mut attempts,
+            &residual_id,
+            profile,
+        )?
+        .ok_or_else(|| {
+            FrfError::new(format!(
+                "minimization of {residual_id}: the attempt budget was exhausted before the boundary control could be executed"
+            ))
+        })?;
+        boundary_proven = control == ReductionAttemptOutcome::Lost;
+    }
+
     let outcome = run_attempt(
         store,
         capture,
@@ -1239,24 +1302,47 @@ fn minimize_external(
     })?;
     let final_lines = final_text.lines().count().to_string();
 
+    let (minimality_kind, granularity, domain, ordering, passing_point, adjacent_point) =
+        match &response.minimality {
+            Some(declaration) => (
+                "boundary".to_string(),
+                None,
+                Some(declaration.domain.clone()),
+                Some(declaration.ordering.clone()),
+                Some(declaration.passing_point.clone()),
+                Some(declaration.adjacent_nonpassing_point.clone()),
+            ),
+            // No boundary declared: the reduction is a line-level proposal
+            // (one-minimal at line granularity), the external minimizer's
+            // claim recorded, never proven.
+            None => (
+                "one-minimal".to_string(),
+                Some("line".to_string()),
+                None,
+                None,
+                None,
+                None,
+            ),
+        };
     let derivation = ReductionDerivation {
         strategy: format!("external:{}", semantic.relation_id),
         original_lines,
         final_lines,
         minimality: ReductionMinimality {
-            kind: "one-minimal".to_string(),
-            granularity: "line".to_string(),
+            kind: minimality_kind,
+            granularity,
+            domain,
+            ordering,
+            passing_point,
+            adjacent_nonpassing_point: adjacent_point,
             // The external minimizer has NO oracle and NO search of its
             // own; it proposes, and the core court-verifies each proposal.
-            // Minimality is NEVER relayed: the minimizer's `minimal` field
-            // is its own claim, recorded as `proposal_minimality_claimed`,
-            // and `proven` stays false unless the core establishes the
-            // predicate itself (a completed search or a separately
-            // verifiable proof — none exists for an external proposal in
-            // this version). The final proposal's SURVIVAL is
-            // independently court-verified above; survival is acceptance,
-            // not minimality.
-            proven: false,
+            // `proven` is never a relayed claim: the minimizer's `minimal`
+            // field is recorded as `proposal_minimality_claimed`, and
+            // `proven` is true only when the CORE itself established the
+            // predicate — a completed search, or the two boundary
+            // observations above.
+            proven: boundary_proven,
             proposal_minimality_claimed: Some(response.minimal),
         },
     };
@@ -1331,12 +1417,14 @@ fn minimize_external(
     store.write_reduction(&reduction)?;
 
     eprintln!(
-        "reduction {}: {} -> {} line(s) (external minimizer {}, {} attempt(s), minimality proven=false (a proposal is a claim, not a proof; the minimizer claimed {}), court-verified); reproducer object {}",
+        "reduction {}: {} -> {} line(s) (external minimizer {}, {} attempt(s), minimality kind={} proven={} (a proposal is a claim, not a proof; the minimizer claimed {}), court-verified); reproducer object {}",
         &id[..16],
         derivation.original_lines,
         derivation.final_lines,
         semantic.id,
         reduction.attempts.len(),
+        derivation.minimality.kind,
+        derivation.minimality.proven,
         derivation.minimality
             .proposal_minimality_claimed
             .unwrap_or(false),

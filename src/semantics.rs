@@ -783,9 +783,28 @@ pub fn reduction_identity(
     };
     let mut minimality = json!({
         "kind": derivation.minimality.kind,
-        "granularity": derivation.minimality.granularity,
         "proven": derivation.minimality.proven,
     });
+    // The domain-aware predicate fields enter the identity ONLY when the
+    // record carries them, exactly as they serialize: a `one-minimal` record
+    // (kind + granularity + proven) and a `boundary` record (kind + the
+    // boundary coordinates + proven) are different preimages, and records
+    // written before the domain-aware generalization rederive identically.
+    if let Some(granularity) = &derivation.minimality.granularity {
+        minimality["granularity"] = json!(granularity);
+    }
+    if let Some(domain) = &derivation.minimality.domain {
+        minimality["domain"] = json!(domain);
+    }
+    if let Some(ordering) = &derivation.minimality.ordering {
+        minimality["ordering"] = json!(ordering);
+    }
+    if let Some(point) = &derivation.minimality.passing_point {
+        minimality["passing_point"] = json!(point);
+    }
+    if let Some(point) = &derivation.minimality.adjacent_nonpassing_point {
+        minimality["adjacent_nonpassing_point"] = json!(point);
+    }
     // The minimizer's claim enters the identity ONLY when the record carries
     // one: an absent claim (built-in reducer) and an explicit claim (external
     // minimizer) are different preimages, while records written before the

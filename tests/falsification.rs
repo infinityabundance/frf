@@ -768,3 +768,286 @@ fn external_minimizer_minimal_claim_is_never_proof() {
         assert!(p.is_file(), "missing minimizer evidence {f}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The domain-aware boundary predicate (P0/P1: kind=boundary minimality)
+// ---------------------------------------------------------------------------
+
+/// The boundary court manifest template: the same reference/candidate pair
+/// and verbose fixture as the golden external-minimizer court, with a
+/// minimizer whose program path differs per case. `program` resolves
+/// relative to the workdir (the working directory the court runs under).
+const BOUNDARY_MANIFEST: &str = r#"court:
+  id: falsify-boundary-{COURT}
+  question: >-
+    For malformed input in fixture family malformed-input, does the candidate
+    preserve the admitted reference's exit class and first diagnostic line?
+  falsifier: >-
+    The candidate's exit class or first diagnostic line diverges from the
+    admitted reference on a fixture in family malformed-input.
+  authority: ref-cli-1.8.2
+  candidate:
+    name: cand-cli
+    version_or_commit: "0.1.0"
+    build_profile: debug
+    path: golden/candidate.sh
+  fixture:
+    id: malformed-verbose.conf
+    path: frf/courts/cli-external-minimizer/fixtures/malformed-verbose.conf
+    arguments: ["--strict", "{fixture}"]
+  admissibility_envelope:
+    fixture_family: malformed-input
+    platforms: ["x86_64-linux"]
+    observables: [exit, stderr]
+    normalizers: []
+    replay_scope: single-run
+minimizers:
+  - id: cli-exit-minimize
+    relation: drop-comment-blank-lines
+    relation_version: "v1"
+    program: falsify-minimizers/{PROGRAM}
+"#;
+
+/// One adversarial minimizer implementation: proposes dropping comment/blank
+/// lines (like the golden minimizer) and DECLARES a boundary whose adjacent
+/// non-passing fixture is the ORIGINAL fixture — which is preserved, so the
+/// boundary is REFUTED by the core's own execution. The minimizer also
+/// shouts `minimal: true`. Neither the claim nor the declaration may become
+/// proof.
+const REFUTED_MINIMIZER: &str = r##"#!/usr/bin/env python3
+import base64, hashlib, json, sys
+raw = sys.stdin.buffer.read()
+req = json.loads(raw.decode("utf-8"))
+request_id = hashlib.sha256(raw).hexdigest()
+original = base64.b64decode(req["fixture"]["raw_base64"])
+text = original.decode("utf-8", "replace")
+kept = [l for l in text.split("\n") if l.strip() and not l.lstrip().startswith("#")]
+proposal = "\n".join(kept)
+if not proposal.endswith("\n"):
+    proposal += "\n"
+proposal_bytes = proposal.encode("utf-8")
+# The declared adjacent non-passing fixture is the ORIGINAL fixture: the core
+# will execute it and observe the lineage SURVIVES -> the boundary is
+# refuted. This is the adversarial declaration.
+response = {
+    "schema_version": "frf-minimizer-response-v1",
+    "request_id": request_id,
+    "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
+    "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
+    "minimal": True,
+    "minimality": {
+        "kind": "boundary",
+        "domain": "falsify.example_parameter",
+        "ordering": "integer-ascending",
+        "passing_point": "2",
+        "adjacent_nonpassing_point": "1",
+        "adjacent_fixture_sha256": hashlib.sha256(original).hexdigest(),
+        "adjacent_fixture_base64": base64.b64encode(original).decode("ascii"),
+    },
+    "attempts": [],
+    "indeterminate": False,
+    "failure": None,
+}
+json.dump(response, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+"##;
+
+/// The honest minimizer: proposes the same reduction and declares a boundary
+/// whose adjacent non-passing fixture is a CLEAN config — both sides exit 0,
+/// so the lineage is genuinely LOST at the adjacent point. The core's two
+/// observations (final verification preserved, control lost) establish the
+/// boundary: `proven` may be true, and the record's attempts prove it.
+const HONEST_MINIMIZER: &str = r##"#!/usr/bin/env python3
+import base64, hashlib, json, sys
+raw = sys.stdin.buffer.read()
+req = json.loads(raw.decode("utf-8"))
+request_id = hashlib.sha256(raw).hexdigest()
+original = base64.b64decode(req["fixture"]["raw_base64"])
+text = original.decode("utf-8", "replace")
+kept = [l for l in text.split("\n") if l.strip() and not l.lstrip().startswith("#")]
+proposal = "\n".join(kept)
+if not proposal.endswith("\n"):
+    proposal += "\n"
+proposal_bytes = proposal.encode("utf-8")
+# A clean config: no malformed directive, so both sides exit 0 and the exit
+# lineage is LOST at the adjacent point.
+adjacent = b"server 192.168.1.1\n"
+response = {
+    "schema_version": "frf-minimizer-response-v1",
+    "request_id": request_id,
+    "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
+    "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
+    "minimal": True,
+    "minimality": {
+        "kind": "boundary",
+        "domain": "falsify.example_parameter",
+        "ordering": "integer-ascending",
+        "passing_point": "2",
+        "adjacent_nonpassing_point": "1",
+        "adjacent_fixture_sha256": hashlib.sha256(adjacent).hexdigest(),
+        "adjacent_fixture_base64": base64.b64encode(adjacent).decode("ascii"),
+    },
+    "attempts": [],
+    "indeterminate": False,
+    "failure": None,
+}
+json.dump(response, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+"##;
+
+/// Drive one boundary-minimizer court and return (residual id, reduction id).
+fn run_boundary_minimize(work: &Workdir, court: &str) -> (String, String) {
+    let manifest = BOUNDARY_MANIFEST
+        .replace("{COURT}", court)
+        .replace("{PROGRAM}", &format!("{court}.py"));
+    let mpath = work.path(&format!(
+        "frf/courts/falsify-boundary-{court}/manifest.yaml"
+    ));
+    fs::create_dir_all(mpath.parent().unwrap()).unwrap();
+    fs::write(&mpath, manifest).unwrap();
+    let out = frf(
+        work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            &format!("frf/courts/falsify-boundary-{court}/manifest.yaml"),
+        ],
+    );
+    assert_success(&out, &format!("boundary court {court} run"));
+    let run = stdout(&out);
+    let capture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/captures/{run}/capture.json"))).unwrap(),
+    )
+    .unwrap();
+    let residual = capture["residuals"]
+        .as_array()
+        .expect("the capture must record residuals")
+        .iter()
+        .find(|r| r.as_str().unwrap().starts_with("cli-exit-"))
+        .expect("the exit residual must exist")
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = frf(work, &["--root", ROOT, "court", "minimize", &residual]);
+    assert_success(&out, &format!("boundary minimize {court}"));
+    (residual, stdout(&out))
+}
+
+/// The adversarial boundary declaration: a minimizer declares a boundary
+/// whose adjacent non-passing point is actually PRESERVED. The core executes
+/// it and observes the refutation — `proven` must stay false, the refuting
+/// attempt must be recorded as evidence, and the record must remain
+/// identity- and semantically-consistent.
+#[test]
+fn refuted_boundary_declaration_is_never_proven() {
+    let work = Workdir::new("falsify-boundary-refuted");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/refuted.py");
+    fs::write(&program, REFUTED_MINIMIZER).unwrap();
+    set_exec(&program);
+
+    let (_residual, reduction_id) = run_boundary_minimize(&work, "refuted");
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/reductions/{reduction_id}.json"))).unwrap(),
+    )
+    .unwrap();
+    let minimality = &record["derivation"]["minimality"];
+    // The boundary declaration IS recorded — coordinates and all — so a
+    // reader can see exactly what was claimed and refuted.
+    assert_eq!(minimality["kind"], "boundary");
+    assert_eq!(minimality["domain"], "falsify.example_parameter");
+    assert_eq!(minimality["ordering"], "integer-ascending");
+    assert_eq!(minimality["passing_point"], "2");
+    assert_eq!(minimality["adjacent_nonpassing_point"], "1");
+    assert_eq!(minimality["proposal_minimality_claimed"], true);
+    // ...but the core observed the adjacent point SURVIVE: the boundary is
+    // refuted and `proven` must be false. This is the assertion the relay
+    // made impossible.
+    assert_eq!(
+        minimality["proven"], false,
+        "a refuted boundary declaration must NEVER become `proven: true`"
+    );
+    // The refuting execution is recorded as evidence: a boundary_control
+    // attempt with outcome preserved.
+    let control = record["attempts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["role"] == "boundary_control")
+        .expect("the refuting boundary control must be recorded");
+    assert_eq!(control["outcome"], "preserved");
+    assert_eq!(control["accepted"], false);
+    // The record rederives its own content address and passes semantic
+    // conformance (proven=false makes no demand on the control).
+    let store = store_of(&work);
+    let r = store.load_reduction(&reduction_id).expect(
+        "the refuted boundary record must rederive its content address (the boundary coordinates enter the identity)",
+    );
+    r.validate_semantics()
+        .expect("the refuted boundary record is semantically consistent");
+    assert!(!r.derivation.minimality.proven);
+    assert_eq!(
+        r.derivation.minimality.proposal_minimality_claimed,
+        Some(true)
+    );
+    assert_eq!(
+        r.derivation.minimality.domain.as_deref(),
+        Some("falsify.example_parameter")
+    );
+    assert_eq!(
+        r.derivation.minimality.domain.as_deref(),
+        Some("falsify.example_parameter")
+    );
+}
+
+/// The honest boundary: a minimizer declares a boundary whose adjacent
+/// non-passing point genuinely loses the lineage. The core executes BOTH
+/// points itself — the final verification preserves the passing point, the
+/// boundary control loses the adjacent point — and MAY then record
+/// `proven: true`, with the two observations as the record's evidence.
+#[test]
+fn honest_boundary_can_be_established_by_the_core() {
+    let work = Workdir::new("falsify-boundary-honest");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/honest.py");
+    fs::write(&program, HONEST_MINIMIZER).unwrap();
+    set_exec(&program);
+
+    let (_residual, reduction_id) = run_boundary_minimize(&work, "honest");
+    let record: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("{ROOT}/reductions/{reduction_id}.json"))).unwrap(),
+    )
+    .unwrap();
+    let minimality = &record["derivation"]["minimality"];
+    assert_eq!(minimality["kind"], "boundary");
+    assert_eq!(minimality["proposal_minimality_claimed"], true);
+    // The core observed both sides of the boundary itself: the control was
+    // LOST and the final verification preserved, so `proven` is the core's
+    // own statement — not a relayed claim.
+    assert_eq!(
+        minimality["proven"], true,
+        "the core established the boundary pair by executing both points"
+    );
+    let attempts = record["attempts"].as_array().unwrap();
+    let control = attempts
+        .iter()
+        .find(|a| a["role"] == "boundary_control")
+        .expect("the boundary control must be recorded");
+    assert_eq!(control["outcome"], "lost");
+    let last = attempts.last().expect("attempts exist");
+    assert_eq!(last["role"], "final_verification");
+    assert_eq!(last["accepted"], true);
+    // The record rederives and passes semantic conformance (a proven boundary
+    // REQUIRES exactly this evidence).
+    let store = store_of(&work);
+    let r = store
+        .load_reduction(&reduction_id)
+        .expect("the honest boundary record must rederive its content address");
+    r.validate_semantics()
+        .expect("the honest boundary record is semantically consistent");
+    assert!(r.derivation.minimality.proven);
+}

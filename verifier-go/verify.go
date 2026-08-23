@@ -1006,6 +1006,17 @@ func verifyCorpus(dir string) int {
 		if digest != pinned {
 			fail("valid/%s: digest drifted (got %s, pinned %s)", name, digest, pinned)
 		}
+		// The reduction-record family rederives its content address from its
+		// own fields (the domain-aware minimality predicate enters the
+		// identity exactly as it serializes) — the same function the bundle
+		// verifier runs against committed universe members.
+		if strings.HasPrefix(name, "reduction-") {
+			reduction := v.(*jcs.Object)
+			expected, err := reductionIdentity(reduction)
+			if err != nil || expected != str(reduction, "id") {
+				fail("valid/%s: the content address does not rederive from its own fields", name)
+			}
+		}
 		count++
 	}
 	for _, name := range sortedNames(dir + "/invalid") {
@@ -1025,6 +1036,16 @@ func verifyCorpus(dir string) int {
 		if strings.HasPrefix(name, "detached-") {
 			if len(detachedSemanticViolations(v)) == 0 {
 				fail("invalid-semantic/%s: must be semantically refused", name)
+			}
+			count++
+			continue
+		}
+		if strings.HasPrefix(name, "reduction-") {
+			// The reduction-record family (frf-reduction-v4): structurally
+			// valid, semantically refused — the minimality predicate must be
+			// exactly what the record's own attempts establish.
+			if len(reductionSemanticViolations(v)) == 0 {
+				fail("invalid-semantic/%s: must fail reduction semantic conformance", name)
 			}
 			count++
 			continue

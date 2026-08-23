@@ -869,3 +869,58 @@ func detachedSemanticViolations(doc jcs.Value) []string {
 	}
 	return out
 }
+
+// reductionSemanticViolations: reduction-record semantic conformance
+// (frf-reduction-v4). The minimality predicate must be exactly what the
+// record's own attempts establish, and `proven` is never a relayed claim —
+// a proven one-minimal carries no external claim, a proven boundary carries
+// the core's own LOST boundary-control attempt.
+func reductionSemanticViolations(doc jcs.Value) []string {
+	var out []string
+	o := obj(doc)
+	if str(o, "schema_version") != "frf-reduction-v4" {
+		out = append(out, "schema_version must be frf-reduction-v4")
+	}
+	m := obj(recVal(obj(recVal(o, "derivation")), "minimality"))
+	kind := str(m, "kind")
+	coordinates := []string{"domain", "ordering", "passing_point", "adjacent_nonpassing_point"}
+	pushIf := func(cond bool, msg string) {
+		if cond {
+			out = append(out, msg)
+		}
+	}
+	has := func(key string) bool {
+		_, ok := m.Get(key)
+		return ok
+	}
+	switch kind {
+	case "one-minimal":
+		pushIf(!has("granularity"), "one-minimal minimality requires a granularity")
+		for _, key := range coordinates {
+			pushIf(has(key), fmt.Sprintf("one-minimal minimality carries a boundary coordinate %q", key))
+		}
+		pv, _ := m.Get("proven")
+		cv, _ := m.Get("proposal_minimality_claimed")
+		pushIf(pv == true && cv == true, "one-minimal proven=true must never be a relayed external-minimizer claim")
+	case "boundary":
+		pushIf(has("granularity"), "boundary minimality has no removal granularity")
+		for _, key := range coordinates {
+			pushIf(!has(key), fmt.Sprintf("boundary minimality requires %s", key))
+		}
+		pv, _ := m.Get("proven")
+		if pv == true {
+			lost := false
+			av, _ := o.Get("attempts")
+			for _, a := range arr(av) {
+				ao := obj(a)
+				if str(ao, "role") == "boundary_control" && str(ao, "outcome") == "lost" {
+					lost = true
+				}
+			}
+			pushIf(!lost, "boundary proven=true requires the core's lost boundary_control attempt")
+		}
+	default:
+		out = append(out, fmt.Sprintf("unknown minimality kind %q", kind))
+	}
+	return out
+}

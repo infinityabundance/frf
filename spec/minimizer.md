@@ -93,6 +93,15 @@ carries the exact reducer.
   "fixture_sha256": "<SHA-256 of the proposed bytes>",
   "fixture_base64": "<the proposed reduced fixture, base64>",
   "minimal": true,
+  "minimality": {
+    "kind": "boundary",
+    "domain": "heartbeat.claimed_payload_length",
+    "ordering": "integer-ascending",
+    "passing_point": "4073",
+    "adjacent_nonpassing_point": "4072",
+    "adjacent_fixture_sha256": "<SHA-256 of the adjacent non-passing fixture>",
+    "adjacent_fixture_base64": "<the adjacent non-passing fixture, base64>"
+  },
   "attempts": [
     {"attempt": "1", "fixture_sha256": "...", "kept": false},
     {"attempt": "2", "fixture_sha256": "...", "kept": true}
@@ -112,8 +121,22 @@ final proposal's survival is independently court-verified. In the reduction
 record (`frf-reduction-v4`) the claim lands in
 `derivation.minimality.proposal_minimality_claimed` and is NEVER relayed
 into `derivation.minimality.proven`: `proven` is the core's own statement
-(a completed search or a core-checked proof), and an external proposal is
-ever either — the record says `proven: false` and carries the claim.
+(a completed search or a core-executed boundary), and an external proposal
+alone never proves anything — the record says `proven: false` and carries
+the claim.
+
+`minimality` is an optional DOMAIN-AWARE boundary DECLARATION: the proposal
+claims to sit at an observation boundary of a numeric parameter. The
+coordinates (`domain`, `ordering`, `passing_point`,
+`adjacent_nonpassing_point` — all strings) are the minimizer's domain
+interpretation, and `adjacent_fixture_*` names the EXACT bytes of the
+adjacent non-passing point. The declaration is a claim, never proof: the
+core validates the adjacent fixture hashes to its declared sha256 and
+differs from the proposal, then EXECUTES it as a `boundary_control` attempt
+recorded in the reduction. The boundary is proven ONLY when the core itself
+observed both sides — the adjacent control LOST and the final verification
+preserved. A preserved control is a REFUTATION: the record keeps it as
+evidence and `proven` stays false. An unsupported `kind` is refused.
 
 ## 4. Fail-closed interpretation and court verification
 

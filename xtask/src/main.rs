@@ -1781,7 +1781,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                                 &reduction["attempts"],
                                 &reduction["derivation"],
                                 &reduction["transform"],
-                                &reduction["minimizer"],
+                                &minimizer_doc(&reduction),
                             );
                             if expected != rid || committed != rid {
                                 panic!("claim {receipt_id}: committed universe reduction {rid} does not rederive (cid {committed})");
@@ -1843,6 +1843,35 @@ fn verify_corpus(dir: &Path) {
         if digest != pinned.trim() {
             panic!("valid/{name}: digest drifted");
         }
+        // The reduction-record family rederives its content address from its
+        // own fields (the domain-aware minimality predicate enters the
+        // identity exactly as it serializes) — the same function the bundle
+        // verifier runs against committed universe members.
+        if name.starts_with("reduction-") {
+            let expected = rederive::reduction_identity(
+                as_str(&doc["residual_id"]),
+                as_str(&doc["source_run"]),
+                as_str(&doc["axis"]),
+                as_str(&doc["kind"]),
+                as_str(&doc["court_semantic_identity"]),
+                as_str(&doc["authority_artifact_sha256"]),
+                as_str(&doc["candidate_artifact_sha256"]),
+                as_str(&doc["environment_digest"]),
+                as_str(&doc["comparator_semantic_id"]),
+                as_str(&doc["comparator_semantic_hash"]),
+                as_str(&doc["comparator_implementation_hash"]),
+                &doc["argv_template"],
+                as_str(&doc["original_fixture_sha256"]),
+                as_str(&doc["final_fixture_sha256"]),
+                &doc["attempts"],
+                &doc["derivation"],
+                &doc["transform"],
+                &minimizer_doc(&doc),
+            );
+            if expected != as_str(&doc["id"]) {
+                panic!("valid/{name}: the content address does not rederive from its own fields");
+            }
+        }
         count += 1;
     }
     for name in sorted_names(&dir.join("invalid")) {
@@ -1867,6 +1896,16 @@ fn verify_corpus(dir: &Path) {
             // structurally valid, semantically refused.
             if detached_semantic_violations(&doc).is_empty() {
                 panic!("invalid-semantic/{name}: must fail detached-objects semantic conformance");
+            }
+            count += 1;
+            continue;
+        }
+        if name.starts_with("reduction-") {
+            // The reduction-record family (frf-reduction-v4): structurally
+            // valid, semantically refused — the minimality predicate must be
+            // exactly what the record's own attempts establish.
+            if reduction_semantic_violations(&doc).is_empty() {
+                panic!("invalid-semantic/{name}: must fail reduction semantic conformance");
             }
             count += 1;
             continue;
