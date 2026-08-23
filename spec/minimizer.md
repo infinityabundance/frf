@@ -97,7 +97,12 @@ carries the exact reducer.
     "kind": "adjacent-boundary",
     "reduction_domain": {
       "kind": "ordered-integer",
-      "semantic": "tls.heartbeat.claimed_payload_length"
+      "semantic": "tls.heartbeat.claimed_payload_length",
+      "extractor": {
+        "kind": "embedded-integer",
+        "radix": "16",
+        "prefix": "0x"
+      }
     },
     "boundary": {
       "predecessor": "4072",
@@ -152,6 +157,24 @@ LOST and the final verification preserved — and the record's in-band
 preserved control is a REFUTATION: the record keeps it as evidence, the
 refuting observation is recorded in band, and `proven` stays false. An
 unsupported `kind` (either vocabulary) is refused.
+
+For `ordered-integer`, the declaration MUST also carry the DOMAIN
+PROJECTION (`reduction_domain.extractor`): the identity-bound relation that
+re-derives a coordinate from a fixture's exact bytes. `exact-integer`
+(fixture's trimmed bytes ARE the integer, in radix `10`/`16`) and
+`embedded-integer` (the digit token after the first occurrence of the
+declared `prefix`, which must not end in a radix digit) are the closed
+vocabulary of this version. The extension PROPOSES coordinates; the CORE
+DERIVES coordinates: it runs the projection over the exact adjacent and
+proposal fixtures and requires `extract(adjacent) == predecessor`,
+`extract(proposal) == value`, and `predecessor + 1 == value` (both
+coordinates are parsed as canonical integers) before establishing anything
+from the declaration. A declaration without the projection, with
+non-canonical or non-adjacent coordinates, or whose coordinates do not
+project from its own fixtures is REFUSED — never relabelled, never
+accepted as a claim to prove later. In the reduction record the projection
+is part of `reduction_domain` and enters the record's content address
+exactly as it serializes.
 
 ## 4. Fail-closed interpretation and court verification
 

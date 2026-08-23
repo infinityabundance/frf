@@ -880,8 +880,18 @@ pub fn reduction_identity(
         minimality["granularity"] = json!(granularity);
     }
     if let Some(domain) = &derivation.minimality.reduction_domain {
-        minimality["reduction_domain"] =
-            json!({ "kind": domain.kind, "semantic": domain.semantic });
+        // The typed domain enters the identity exactly as it serializes: the
+        // extractor (the domain projection) is part of the preimage when the
+        // record carries it — the projection cannot drift without changing
+        // the record. Records written before the projection existed rederive
+        // identically (absent == the earlier shape).
+        let mut domain_json = json!({ "kind": domain.kind, "semantic": domain.semantic });
+        if let Some(extractor) = &domain.extractor {
+            domain_json["extractor"] = serde_json::to_value(extractor).map_err(|e| {
+                FrfError::new(format!("cannot serialize the domain extractor: {e}"))
+            })?;
+        }
+        minimality["reduction_domain"] = domain_json;
     }
     if let Some(boundary) = &derivation.minimality.boundary {
         minimality["boundary"] = json!({

@@ -1222,10 +1222,52 @@ fn minimize_external(
                 crate::model::ReductionDomain::KINDS.join(" | ")
             )));
         }
-        if declaration.boundary.predecessor == declaration.boundary.value {
-            return Err(FrfError::new(format!(
-                "minimizer {} declared a boundary with a single point (predecessor == value); a boundary needs two distinct points",
+        // The DOMAIN PROJECTION: the core DERIVES the boundary's coordinates
+        // from the exact fixtures it executes. A declaration over
+        // ordered-integer MUST carry the extractor — without it the
+        // coordinates are only labels, and the core cannot establish that
+        // the executed fixtures represent the declared points.
+        let extractor = declaration
+            .reduction_domain
+            .extractor
+            .as_ref()
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "minimizer {} declared an adjacent-boundary over ordered-integer without the domain projection (reduction_domain.extractor): the core derives coordinates from the executed fixtures, it never accepts labels",
+                    semantic.id
+                ))
+            })?;
+        extractor.validate().map_err(|e| {
+            FrfError::new(format!(
+                "minimizer {} declared an invalid domain projection: {e}",
                 semantic.id
+            ))
+        })?;
+        // The declared coordinates are canonical DECIMAL strings; the
+        // extractor reads the fixture in its own declared radix. Both must
+        // agree with the fixtures the core is about to execute, and the pair
+        // must be adjacent in the integer ordering — otherwise the
+        // declaration is self-inconsistent and the core refuses to
+        // establish anything from it.
+        let p = crate::model::parse_canonical_integer(&declaration.boundary.predecessor, 10)
+            .map_err(|e| {
+                FrfError::new(format!(
+                    "minimizer {} declared a non-canonical boundary predecessor {:?}: {e}",
+                    semantic.id, declaration.boundary.predecessor
+                ))
+            })?;
+        let v = crate::model::parse_canonical_integer(&declaration.boundary.value, 10).map_err(
+            |e| {
+                FrfError::new(format!(
+                    "minimizer {} declared a non-canonical boundary value {:?}: {e}",
+                    semantic.id, declaration.boundary.value
+                ))
+            },
+        )?;
+        if p.checked_add(1) != Some(v) {
+            return Err(FrfError::new(format!(
+                "minimizer {} declared non-adjacent boundary coordinates (predecessor {:?} + 1 != value {:?}) — adjacency is a derived relation, never an asserted one",
+                semantic.id, declaration.boundary.predecessor, declaration.boundary.value
             )));
         }
         // A boundary DECLARATION claims exactly: the predecessor does NOT
@@ -1251,6 +1293,29 @@ fn minimize_external(
         if adjacent_bytes == proposal_bytes {
             return Err(FrfError::new(format!(
                 "minimizer {} declared an adjacent non-passing fixture identical to its proposal; a boundary needs two distinct points",
+                semantic.id
+            )));
+        }
+        // The projection check: the coordinates the core is about to
+        // establish must PROJECT from the fixtures themselves —
+        // extract(adjacent fixture) == predecessor and
+        // extract(proposal) == value. The extension proposes coordinates;
+        // the core derives them.
+        let adjacent_coord = extractor.extract(&adjacent_bytes).map_err(|e| {
+            FrfError::new(format!(
+                "minimizer {} declared an adjacent fixture the domain projection cannot read: {e}",
+                semantic.id
+            ))
+        })?;
+        let proposal_coord = extractor.extract(&proposal_bytes).map_err(|e| {
+            FrfError::new(format!(
+                "minimizer {} proposed a fixture the domain projection cannot read: {e}",
+                semantic.id
+            ))
+        })?;
+        if adjacent_coord != p || proposal_coord != v {
+            return Err(FrfError::new(format!(
+                "minimizer {} declared boundary coordinates that do not project from its own fixtures: extract(adjacent)={adjacent_coord} vs predecessor {p}; extract(proposal)={proposal_coord} vs value {v} — the extension proposes coordinates, the core derives them from the exact executed bytes",
                 semantic.id
             )));
         }

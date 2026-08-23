@@ -4161,6 +4161,17 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
                         errors.push(format!("reduction {id}: {e}"));
                         continue;
                     }
+                    // The DOMAIN PROJECTION: for an adjacent-boundary over
+                    // ordered-integer, the record's coordinates must re-derive
+                    // from the exact fixtures the record claims it executed.
+                    // A declared-detached fixture defers this check until a
+                    // reviewer hydrates it (never pretending omitted evidence
+                    // exists); a PRESENT fixture that does not project is a
+                    // graph violation.
+                    if let Err(e) = verify_reduction_boundary_projection(store, &r, &mut detached) {
+                        errors.push(format!("reduction {id}: {e}"));
+                        continue;
+                    }
                     n += 1;
                 }
                 Err(e) => errors.push(format!("reduction {id}: {e}")),
@@ -4252,11 +4263,28 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
                 Ok(c) => {
                     // A challenge with a declared mutation invocation binds
                     // the proposed mutant evidence; the store loader
-                    // cross-verifies the whole chain.
+                    // cross-verifies the whole chain. The mutation REQUEST
+                    // document (which embeds the reference artifact bytes) is
+                    // a content identity the graph REQUIRES: present as an
+                    // object, or as the record at its evidence path (its
+                    // bytes must rehash), or declared detached — a mutation
+                    // request that is neither present nor declared is a graph
+                    // violation, and a policy that withholds one the graph
+                    // does not require is a dead hand-wave.
                     if c.mutation_invocation_id.is_some() {
-                        if let Err(e) = store.load_mutation_evidence(&id) {
-                            errors.push(format!("challenge {id} mutation: {e}"));
-                            continue;
+                        match store.load_mutation_evidence(&id) {
+                            Ok(ev) => {
+                                if let Err(e) =
+                                    check_mutation_request(store, &id, &ev, &mut detached)
+                                {
+                                    errors.push(format!("challenge {id} mutation: {e}"));
+                                    continue;
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!("challenge {id} mutation: {e}"));
+                                continue;
+                            }
                         }
                     }
                     n += 1;
@@ -4400,6 +4428,59 @@ fn push_unique(
     }
 }
 
+/// The mutation-provider REQUEST document of a challenge: a content identity
+/// the graph requires. It is present as an object, or as the record at the
+/// challenge's mutation evidence path (its bytes must rehash to the declared
+/// `request_cid`), or declared detached (the withheld bytes register in the
+/// detached set). Anything else is a graph violation — a mutation request
+/// cannot silently disappear, and a publication cannot withhold one the graph
+/// does not reference.
+fn check_mutation_request(
+    store: &Store,
+    challenge_id: &str,
+    ev: &crate::model::MutationEvidence,
+    detached: &mut Vec<crate::model::DetachedObjectRef>,
+) -> Result<()> {
+    let cid = &ev.invocation.request_cid;
+    match store.object_availability(cid)? {
+        crate::store::ObjectAvailability::Present => Ok(()),
+        crate::store::ObjectAvailability::DeclaredDetached => {
+            if let Some(entry) = store.detached_entry(cid)? {
+                if !detached.contains(&entry) {
+                    detached.push(entry);
+                }
+            }
+            Ok(())
+        }
+        crate::store::ObjectAvailability::Missing => {
+            // The request may live as a record at the challenge's mutation
+            // evidence path (the publication transform withholds it there by
+            // the policy entry's declared path). Its bytes must rehash.
+            let path = store
+                .challenge_mutation_dir(challenge_id)?
+                .join("request.json");
+            if !path.is_file() {
+                return Err(FrfError::new(format!(
+                    "mutation request {} is missing and not declared detached — the evidence tree is incomplete",
+                    &cid[..16]
+                )));
+            }
+            let bytes = fs::read(&path)
+                .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+            let actual = crate::host::sha256_bytes(&bytes);
+            if actual != *cid {
+                return Err(FrfError::new(format!(
+                    "mutation request {} is corrupt: its bytes hash to {} but its invocation names {}; refusing to consume it",
+                    path.display(),
+                    &actual[..16],
+                    &cid[..16]
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// The external-minimizer invocation evidence under `reductions/<id>/minimizer/`
 /// (request.json, response.json, invocation.json, result.json): each file must
 /// be canonical strict JSON, the request cid must hash from the request bytes,
@@ -4532,6 +4613,86 @@ fn verify_reduction_minimizer_evidence(
         return Err(FrfError::new(
             "the preserved minimizer request does not name the bound minimizer/residual",
         ));
+    }
+    Ok(())
+}
+
+/// The DOMAIN PROJECTION re-derivation for an adjacent-boundary reduction
+/// over `ordered-integer`: the record's coordinates must re-derive from the
+/// exact fixtures the record claims it executed. This is the whole-store
+/// form of "the extension proposes coordinates; the core derives
+/// coordinates":
+///
+/// ```text
+/// extract(boundary_control fixture) == boundary.predecessor
+/// extract(final_verification fixture) == boundary.value
+/// predecessor + 1 == value            (already enforced by validate_semantics)
+/// ```
+///
+/// A fixture the publication declared DETACHED defers the byte-level check
+/// until a reviewer hydrates it (the graph stays verified; the closure is
+/// incomplete-by-policy — the verifier never pretends omitted evidence
+/// exists). A PRESENT fixture that does not project is a graph violation.
+fn verify_reduction_boundary_projection(
+    store: &Store,
+    r: &crate::model::ReductionRecord,
+    detached: &mut Vec<crate::model::DetachedObjectRef>,
+) -> Result<()> {
+    use crate::model::ReductionAttemptRole as Role;
+    let m = &r.derivation.minimality;
+    if m.kind != "adjacent-boundary" {
+        return Ok(());
+    }
+    let (Some(domain), Some(boundary)) = (&m.reduction_domain, &m.boundary) else {
+        return Ok(()); // validate_semantics already refused this shape
+    };
+    if domain.kind != "ordered-integer" {
+        return Ok(());
+    }
+    let extractor = domain
+        .extractor
+        .as_ref()
+        .expect("validate_semantics requires it");
+    let control = r
+        .attempts
+        .iter()
+        .find(|a| a.role == Role::BoundaryControl)
+        .ok_or_else(|| {
+            FrfError::new("adjacent-boundary requires the core's boundary_control attempt")
+        })?;
+    let final_attempt = r
+        .attempts
+        .iter()
+        .find(|a| a.role == Role::FinalVerification)
+        .ok_or_else(|| {
+            FrfError::new("adjacent-boundary requires the core's final_verification attempt")
+        })?;
+    let p =
+        crate::model::parse_canonical_integer(&boundary.predecessor, 10).map_err(FrfError::new)?;
+    let v = crate::model::parse_canonical_integer(&boundary.value, 10).map_err(FrfError::new)?;
+    for (label, attempt, expected) in [
+        ("boundary_control", control, p),
+        ("final_verification", final_attempt, v),
+    ] {
+        let sha = &attempt.fixture_sha256;
+        check_object(store, sha, detached)?;
+        if store.object_availability(sha)? == crate::store::ObjectAvailability::DeclaredDetached {
+            // Deferred until hydration: the graph names the identity, the
+            // bytes are intentionally absent by policy.
+            continue;
+        }
+        let bytes = store.verified_object_bytes(sha)?;
+        let coord = extractor.extract(&bytes).map_err(|e| {
+            FrfError::new(format!(
+                "the {label} fixture {} does not project under the declared domain extractor: {e}",
+                &sha[..16]
+            ))
+        })?;
+        if coord != expected {
+            return Err(FrfError::new(format!(
+                "adjacent-boundary coordinates do not project from the executed fixtures: extract({label})={coord} but the record declares {expected} — the extension proposes coordinates, the core derives them from the exact executed bytes"
+            )));
+        }
     }
     Ok(())
 }

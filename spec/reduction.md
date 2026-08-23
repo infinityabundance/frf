@@ -81,7 +81,8 @@ exist:
   true only when the deterministic search completed within the attempt
   budget; a budget-cut search says so honestly.
 - `{kind: adjacent-boundary, reduction_domain: {kind: ordered-integer,
-  semantic: tls.heartbeat.claimed_payload_length}, boundary:
+  semantic: tls.heartbeat.claimed_payload_length, extractor: {kind:
+  embedded-integer, radix: "16", prefix: "0x"}}, boundary:
   {predecessor: "4072", predecessor_preserves: false, value: "4073",
   value_preserves: true}, proven, proposal_minimality_claimed?}` — the
   proposal sits at an OBSERVATION BOUNDARY of a TYPED numeric parameter:
@@ -96,6 +97,32 @@ exist:
   (the canonical JSON value domain has no numbers); the domain KIND is a
   closed vocabulary (`ordered-integer` in this version) with the semantic
   identifier naming the parameter.
+
+  For `ordered-integer` the boundary is additionally governed by two
+  EXECUTABLE SEMANTICS that make `proven` literal rather than asserted:
+
+  1. **Adjacency is derived, never asserted.** Both coordinates are parsed
+     as CANONICAL integers (`0` or a digit-run with no leading zeros) and
+     must satisfy `predecessor + 1 == value` with checked arithmetic.
+     `{predecessor: "1", value: "9999"}` is refused by every verifier —
+     the two points are not adjacent.
+  2. **Coordinates are derived from the executed fixtures.** The domain
+     carries an identity-bound DOMAIN PROJECTION (`extractor`): a
+     deterministic relation that reads a coordinate out of a fixture's
+     exact bytes. `exact-integer` (the fixture's trimmed bytes ARE the
+     integer, in `radix` 10 or 16) and `embedded-integer` (the integer
+     token follows the first occurrence of the declared `prefix`, which
+     must not end in a radix digit) are the closed vocabulary of this
+     version. The extension PROPOSES coordinates; the CORE DERIVES them:
+     at minimize time the core runs the projection over the exact adjacent
+     and proposal fixtures and requires `extract(adjacent) == predecessor`,
+     `extract(proposal) == value` — a declaration whose coordinates do not
+     project from its own fixtures is refused, never relabelled — and the
+     whole-store verifier re-derives the projection from the recorded
+     attempts' fixtures whenever the objects are present (a declared-
+     detached fixture defers the byte-level check until hydration). A
+     proven adjacent-boundary therefore records the projection in the
+     record; a record claiming `proven: true` without it is refused.
 
 `proven` is the CORE's own statement — a completed search, or the two
 boundary observations above — never a relayed claim. An EXTERNAL minimizer

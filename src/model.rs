@@ -1002,7 +1002,12 @@ pub struct MinimizerResponse {
 /// verifies the adjacent fixture hashes to its declared sha256, is not the
 /// proposal itself, and then EXECUTES it: the boundary is proven only when
 /// the adjacent point loses the lineage and the proposal preserves it — the
-/// declaration is a claim, never proof.
+/// declaration is a claim, never proof. For an `ordered-integer` domain the
+/// declaration MUST carry the domain projection ([`DomainExtractor`]): the
+/// core derives both coordinates from the exact fixtures it executes and
+/// requires extract(adjacent) == predecessor, extract(proposal) == value,
+/// and predecessor + 1 == value — the extension proposes coordinates, the
+/// core derives coordinates.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinimizerMinimality {
@@ -1023,10 +1028,11 @@ pub struct MinimizerMinimality {
 }
 
 /// The typed reduction domain of a domain-aware minimality predicate: the
-/// parameter KIND and its SEMANTIC identifier. `ordered-integer` is the one
-/// domain kind in this version (a numeric parameter with an integer
-/// ordering); the vocabulary is closed per version and documented in
-/// spec/reduction.md.
+/// parameter KIND, its SEMANTIC identifier, and the DOMAIN PROJECTION
+/// ([`DomainExtractor`]) that re-derives a coordinate from a fixture's exact
+/// bytes. `ordered-integer` is the one domain kind in this version (a numeric
+/// parameter with an integer ordering); the vocabulary is closed per version
+/// and documented in spec/reduction.md.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionDomain {
@@ -1035,6 +1041,15 @@ pub struct ReductionDomain {
     /// The semantic identifier of the parameter being minimized (e.g.
     /// `tls.heartbeat.claimed_payload_length`).
     pub semantic: String,
+    /// The identity-bound domain projection: the deterministic relation that
+    /// derives a coordinate's value from a fixture's bytes. The extension
+    /// PROPOSES coordinates; the core DERIVES coordinates — an
+    /// adjacent-boundary is proven only when the core's own extraction from
+    /// the executed fixtures equals the declared pair and the pair is
+    /// adjacent in the domain ordering. Absent only on records written before
+    /// the projection existed (additive; such records rederive identically).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extractor: Option<DomainExtractor>,
 }
 
 impl ReductionDomain {
@@ -1043,13 +1058,268 @@ impl ReductionDomain {
     pub const KINDS: &'static [&'static str] = &["ordered-integer"];
 }
 
+/// The deterministic domain projection of an ordered domain: how a
+/// coordinate value is re-derived from a fixture's exact bytes. Closed
+/// vocabulary, identity-bound (it is part of `reduction_domain`, which
+/// enters the reduction record's identity exactly as it serializes — the
+/// projection cannot drift without changing the record). The CORE runs the
+/// projection over the fixtures it actually executed; a declaration whose
+/// coordinates do not project from its own fixtures is refused, never
+/// relabelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainExtractor {
+    /// `exact-integer` — the fixture's trimmed bytes ARE the integer;
+    /// `embedded-integer` — the integer token follows the first occurrence
+    /// of the declared `prefix`.
+    pub kind: String,
+    /// The radix the fixture writes the integer in, as a STRING (the
+    /// canonical JSON value domain has no numbers): `10` or `16`.
+    pub radix: String,
+    /// The literal prefix whose first occurrence introduces the integer
+    /// token (`embedded-integer` only). Must not end in a radix digit, so
+    /// the token boundary is unambiguous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+}
+
+impl DomainExtractor {
+    /// The closed extraction-kind vocabulary (spec/reduction.md).
+    pub const KINDS: &'static [&'static str] = &["exact-integer", "embedded-integer"];
+
+    /// Validate the closed vocabulary + the deterministic extraction
+    /// contract. Fail-closed: anything outside the vocabulary is a refusal.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if !Self::KINDS.contains(&self.kind.as_str()) {
+            return Err(format!(
+                "unknown extractor kind {:?} — the protocol admits {}",
+                self.kind,
+                Self::KINDS.join(" | ")
+            ));
+        }
+        let radix: u32 = self
+            .radix
+            .parse()
+            .map_err(|_| format!("extractor radix {:?} is not a decimal string", self.radix))?;
+        if radix != 10 && radix != 16 {
+            return Err(format!(
+                "unsupported extractor radix {radix} — the protocol admits 10 | 16"
+            ));
+        }
+        match self.kind.as_str() {
+            "exact-integer" => {
+                if self.prefix.is_some() {
+                    return Err("exact-integer extraction carries no prefix".into());
+                }
+            }
+            "embedded-integer" => {
+                let prefix = self
+                    .prefix
+                    .as_deref()
+                    .ok_or("embedded-integer extraction requires a prefix")?;
+                if prefix.is_empty() {
+                    return Err("embedded-integer extraction requires a non-empty prefix".into());
+                }
+                let last = prefix.as_bytes().last().copied().expect("non-empty prefix");
+                if digit_value(last, radix).is_some() {
+                    return Err(
+                        "embedded-integer prefix must not end in a radix digit (the token boundary would be ambiguous)"
+                            .into(),
+                    );
+                }
+            }
+            _ => unreachable!("kind validated above"),
+        }
+        Ok(())
+    }
+
+    /// Derive the coordinate value from a fixture's exact bytes. Fail-closed:
+    /// malformed, ambiguous, or out-of-range fixtures are refusals, never
+    /// guesses.
+    pub fn extract(&self, bytes: &[u8]) -> std::result::Result<i128, String> {
+        self.validate()?;
+        let radix: u32 = self.radix.parse().expect("validated above");
+        match self.kind.as_str() {
+            "exact-integer" => {
+                let text = std::str::from_utf8(bytes)
+                    .map_err(|_| "the fixture is not UTF-8; exact-integer extraction cannot read a coordinate")?
+                    .trim();
+                parse_canonical_integer(text, radix)
+                    .map_err(|e| format!("exact-integer extraction: {e}"))
+            }
+            "embedded-integer" => {
+                let prefix = self.prefix.as_deref().expect("validated above");
+                let start = bytes
+                    .windows(prefix.len())
+                    .position(|w| w == prefix.as_bytes())
+                    .ok_or_else(|| {
+                        format!(
+                            "the fixture contains no occurrence of the declared prefix {:?}",
+                            prefix
+                        )
+                    })?;
+                let mut end = start + prefix.len();
+                while end < bytes.len() && digit_value(bytes[end], radix).is_some() {
+                    end += 1;
+                }
+                if end == start + prefix.len() {
+                    return Err(format!(
+                        "the declared prefix {prefix:?} is not followed by a radix-{radix} digit"
+                    ));
+                }
+                let token = std::str::from_utf8(&bytes[start + prefix.len()..end])
+                    .map_err(|_| "the extracted digit token is not UTF-8")?;
+                i128::from_str_radix(token, radix)
+                    .map_err(|e| format!("embedded-integer extraction: {e}"))
+            }
+            _ => unreachable!("kind validated above"),
+        }
+    }
+}
+
+/// The radix digit value of a byte, or `None` if it is not a digit of the
+/// radix.
+fn digit_value(b: u8, radix: u32) -> Option<u32> {
+    let v = match b {
+        b'0'..=b'9' => u32::from(b - b'0'),
+        b'a'..=b'f' => u32::from(b - b'a') + 10,
+        b'A'..=b'F' => u32::from(b - b'A') + 10,
+        _ => return None,
+    };
+    (v < radix).then_some(v)
+}
+
+/// Parse a coordinate STRING canonically in `radix`: an optional single
+/// leading `-`, then the canonical digit form (`0`, or a digit-run with NO
+/// leading zeros; an `0x`/`0X` prefix is admitted for radix 16), with
+/// checked `i128` range. Fail-closed: a non-canonical or overflowing
+/// coordinate is a refusal, never a guess.
+pub fn parse_canonical_integer(s: &str, radix: u32) -> std::result::Result<i128, String> {
+    let (neg, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    if rest.is_empty() {
+        return Err(format!("{s:?} is not a canonical integer"));
+    }
+    let digits = if radix == 16 {
+        match rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+            Some(d) => d,
+            None => rest,
+        }
+    } else {
+        rest
+    };
+    if digits.is_empty() {
+        return Err(format!("{s:?} is not a canonical integer"));
+    }
+    if digits.len() > 1 && digits.starts_with('0') {
+        return Err(format!("{s:?} is not a canonical integer (leading zeros)"));
+    }
+    if !digits.bytes().all(|b| digit_value(b, radix).is_some()) {
+        return Err(format!("{s:?} is not a canonical radix-{radix} integer"));
+    }
+    let value = i128::from_str_radix(digits, radix)
+        .map_err(|_| format!("{s:?} overflows the coordinate domain"))?;
+    if neg {
+        value
+            .checked_neg()
+            .ok_or_else(|| format!("{s:?} overflows the coordinate domain"))
+    } else {
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod domain_extractor_tests {
+    use super::*;
+
+    fn ex(kind: &str, radix: &str, prefix: Option<&str>) -> DomainExtractor {
+        DomainExtractor {
+            kind: kind.to_string(),
+            radix: radix.to_string(),
+            prefix: prefix.map(|p| p.to_string()),
+        }
+    }
+
+    #[test]
+    fn embedded_hex_extracts_the_declared_coordinates() {
+        // The Heartbleed fixtures: `malformed 0x0FE9\n` and `malformed 0x0FE8\n`.
+        let e = ex("embedded-integer", "16", Some("0x"));
+        assert_eq!(e.extract(b"malformed 0x0FE9\n").unwrap(), 4073);
+        assert_eq!(e.extract(b"malformed 0x0FE8\n").unwrap(), 4072);
+        assert_eq!(e.extract(b"0x0").unwrap(), 0);
+        assert_eq!(e.extract(b"0x0000").unwrap(), 0);
+    }
+
+    #[test]
+    fn exact_integer_extracts_the_whole_trimmed_text() {
+        let e = ex("exact-integer", "10", None);
+        assert_eq!(e.extract(b"4073\n").unwrap(), 4073);
+        assert_eq!(e.extract(b"-1").unwrap(), -1);
+        let e16 = ex("exact-integer", "16", None);
+        assert_eq!(e16.extract(b"0xFE9").unwrap(), 0xfe9);
+    }
+
+    #[test]
+    fn malformed_fixtures_are_refusals_never_guesses() {
+        let e = ex("embedded-integer", "16", Some("0x"));
+        assert!(e.extract(b"no prefix here").is_err());
+        assert!(e.extract(b"0x").is_err()); // prefix but no digits
+        assert!(e.extract(b"0xZZ").is_err()); // no digits after prefix
+        let e10 = ex("exact-integer", "10", None);
+        assert!(e10.extract(b"12abc").is_err());
+        assert!(e10.extract(&[0xff, 0xfe]).is_err()); // not UTF-8
+    }
+
+    #[test]
+    fn vocabulary_is_closed_and_ambiguous_prefixes_refuse() {
+        assert!(ex("mystery", "10", None).validate().is_err());
+        assert!(ex("embedded-integer", "8", Some("0x")).validate().is_err());
+        assert!(ex("embedded-integer", "10", None).validate().is_err());
+        // A prefix ending in a radix digit makes the token boundary ambiguous.
+        assert!(ex("embedded-integer", "16", Some("0x1"))
+            .validate()
+            .is_err());
+        assert!(ex("exact-integer", "10", Some("0x")).validate().is_err());
+        assert!(ex("embedded-integer", "16", Some("0x")).validate().is_ok());
+    }
+
+    #[test]
+    fn canonical_coordinate_parsing_is_fail_closed() {
+        assert_eq!(parse_canonical_integer("4073", 10).unwrap(), 4073);
+        assert_eq!(parse_canonical_integer("0", 10).unwrap(), 0);
+        assert_eq!(parse_canonical_integer("0xFE9", 16).unwrap(), 0xfe9);
+        assert_eq!(parse_canonical_integer("-4072", 10).unwrap(), -4072);
+        assert!(parse_canonical_integer("04073", 10).is_err()); // leading zero
+        assert!(parse_canonical_integer("", 10).is_err());
+        assert!(parse_canonical_integer("abc", 10).is_err());
+        assert!(parse_canonical_integer("40G3", 16).is_err()); // G is not hex
+        assert!(parse_canonical_integer("+", 10).is_err());
+        assert!(parse_canonical_integer("-", 10).is_err());
+    }
+
+    #[test]
+    fn adjacency_is_derived_with_checked_arithmetic() {
+        // The ordered-integer executable semantics: predecessor + 1 == value.
+        let p = parse_canonical_integer("4072", 10).unwrap();
+        let v = parse_canonical_integer("4073", 10).unwrap();
+        assert_eq!(p.checked_add(1), Some(v));
+        let p2 = parse_canonical_integer("4070", 10).unwrap();
+        assert_ne!(p2.checked_add(1), Some(v));
+    }
+}
+
 /// The two observed points of an adjacent-boundary predicate: the `value`
 /// (the passing point) and its `predecessor` in the declared ordering (one
 /// step below). Each carries its OBSERVED preservation — whether the
 /// lineage survived at that point — so a refuted boundary records the
 /// refuting observation IN BAND (`predecessor_preserves=true`), never only
 /// as `proven=false`. Every coordinate is a STRING (the canonical JSON
-/// value domain has no numbers).
+/// value domain has no numbers). For an `ordered-integer` domain the
+/// coordinates are canonical DECIMAL integers and adjacency is a DERIVED
+/// relation (`predecessor + 1 == value`, checked arithmetic) — never an
+/// asserted one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MinimalityBoundary {
@@ -4365,14 +4635,18 @@ pub struct ReductionAttempt {
 /// - `adjacent-boundary` — the proposal sits at an OBSERVATION BOUNDARY of a
 ///   typed numeric parameter: at `boundary.value` the lineage survives, at
 ///   its `boundary.predecessor` (one step below in the domain ordering) it
-///   does not. The `reduction_domain` types the parameter (kind +
-///   semantic identifier); the two points carry their OBSERVED preservation
-///   (a refuted boundary records the refuting observation in band —
-///   `predecessor_preserves=true` — never only as `proven=false`). The core
-///   ESTABLISHES the pair by executing BOTH points itself (the
-///   boundary-control attempt lost, the final verification preserved) before
-///   `proven` can be true; an external minimizer's declaration is a claim,
-///   recorded in `proposal_minimality_claimed`.
+///   does not. The `reduction_domain` types the parameter (kind + semantic
+///   identifier + the identity-bound DOMAIN PROJECTION that re-derives a
+///   coordinate from a fixture's bytes); the two points carry their OBSERVED
+///   preservation (a refuted boundary records the refuting observation in
+///   band — `predecessor_preserves=true` — never only as `proven=false`).
+///   The core ESTABLISHES the pair by executing BOTH points itself (the
+///   boundary-control attempt lost, the final verification preserved) AND by
+///   deriving both coordinates from the exact executed fixtures (the
+///   projection must read predecessor out of the control fixture and value
+///   out of the final fixture, and predecessor + 1 == value in the declared
+///   ordering) before `proven` can be true; an external minimizer's
+///   declaration is a claim, recorded in `proposal_minimality_claimed`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReductionMinimality {
@@ -4564,13 +4838,44 @@ impl ReductionRecord {
                 if domain.semantic.is_empty() {
                     return Err("reduction_domain.semantic must not be empty".into());
                 }
-                // The two points must be distinct in the declared ordering:
-                // a boundary needs two sides, never a single point.
-                if boundary.predecessor == boundary.value {
-                    return Err(
-                        "adjacent-boundary requires two distinct points (predecessor != value)"
-                            .into(),
-                    );
+                match domain.kind.as_str() {
+                    "ordered-integer" => {
+                        // The DOMAIN PROJECTION: the core derives the
+                        // boundary's coordinates from the fixtures it
+                        // executed, so a record that claims the projection
+                        // must carry it. Without an extractor the coordinates
+                        // are only the minimizer's labels — an
+                        // adjacent-boundary with `proven: true` is literal
+                        // only when the projection is in the record and the
+                        // coordinates re-derive from the executed fixtures.
+                        let extractor = domain.extractor.as_ref().ok_or(
+                            "adjacent-boundary over ordered-integer requires the domain projection (reduction_domain.extractor) — without it the coordinates are only the minimizer's labels, not coordinates the core derived",
+                        )?;
+                        extractor
+                            .validate()
+                            .map_err(|e| format!("reduction_domain.extractor: {e}"))?;
+                        // The ordered-integer EXECUTABLE semantics: both
+                        // coordinates are canonical integers and the
+                        // predecessor is EXACTLY one step below the value in
+                        // the domain ordering. Adjacency is a derived
+                        // relation, never an asserted one.
+                        let p = parse_canonical_integer(&boundary.predecessor, 10)
+                            .map_err(|e| format!("boundary.predecessor: {e}"))?;
+                        let v = parse_canonical_integer(&boundary.value, 10)
+                            .map_err(|e| format!("boundary.value: {e}"))?;
+                        if p.checked_add(1) != Some(v) {
+                            return Err(format!(
+                                "adjacent-boundary coordinates are not adjacent in the integer ordering: predecessor {:?} + 1 != value {:?} — adjacency is established by the core, not asserted",
+                                boundary.predecessor, boundary.value
+                            ));
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "unknown reduction domain kind {other:?} — the protocol admits {}",
+                            ReductionDomain::KINDS.join(" | ")
+                        ));
+                    }
                 }
                 // The recorded preservation flags are OBSERVATIONS: they
                 // must match the record's own attempts. The

@@ -1612,6 +1612,60 @@ pub fn detached_semantic_violations(doc: &Value) -> Vec<String> {
     v
 }
 
+/// Parse a coordinate STRING canonically in `radix` (the mirror of the
+/// reference engine's `model::parse_canonical_integer`): an optional single
+/// leading `-`, then the canonical digit form (`0`, or a digit-run with NO
+/// leading zeros; an `0x`/`0X` prefix is admitted for radix 16), with
+/// checked `i128` range. Fail-closed: a non-canonical or overflowing
+/// coordinate is a refusal.
+pub fn parse_canonical_integer(s: &str, radix: u32) -> Result<i128, String> {
+    let (neg, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    if rest.is_empty() {
+        return Err(format!("{s:?} is not a canonical integer"));
+    }
+    let digits = if radix == 16 {
+        match rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X")) {
+            Some(d) => d,
+            None => rest,
+        }
+    } else {
+        rest
+    };
+    if digits.is_empty() {
+        return Err(format!("{s:?} is not a canonical integer"));
+    }
+    if digits.len() > 1 && digits.starts_with('0') {
+        return Err(format!("{s:?} is not a canonical integer (leading zeros)"));
+    }
+    if !digits.bytes().all(|b| digit_value(b, radix).is_some()) {
+        return Err(format!("{s:?} is not a canonical radix-{radix} integer"));
+    }
+    let value = i128::from_str_radix(digits, radix)
+        .map_err(|_| format!("{s:?} overflows the coordinate domain"))?;
+    if neg {
+        value
+            .checked_neg()
+            .ok_or_else(|| format!("{s:?} overflows the coordinate domain"))
+    } else {
+        Ok(value)
+    }
+}
+
+/// The radix digit value of a byte, or `None` if it is not a digit of the
+/// radix.
+fn digit_value(b: u8, radix: u32) -> Option<u32> {
+    let v = match b {
+        b'0'..=b'9' => u32::from(b - b'0'),
+        b'a'..=b'f' => u32::from(b - b'a') + 10,
+        b'A'..=b'F' => u32::from(b - b'A') + 10,
+        _ => return None,
+    };
+    (v < radix).then_some(v)
+}
+
 /// Reduction-record semantic conformance (frf-reduction-v5): the minimality
 /// predicate must be exactly what the record's own attempts establish, and
 /// `proven` is never a relayed claim — a proven one-minimal carries no
@@ -1639,6 +1693,41 @@ pub fn reduction_semantic_violations(doc: &Value) -> Vec<String> {
                 v.push(format!(
                     "unknown reduction domain kind {dkind:?} — the protocol admits ordered-integer"
                 ));
+            } else {
+                // The DOMAIN PROJECTION: the core derives the boundary's
+                // coordinates from the exact fixtures it executed, so a
+                // record that claims the projection must carry it — without
+                // an extractor the coordinates are only the minimizer's
+                // labels, and an adjacent-boundary with `proven: true` is
+                // literal only when the projection is in the record.
+                let ex = &domain["extractor"];
+                if ex.is_null() {
+                    v.push(
+                        "adjacent-boundary over ordered-integer requires the domain projection (reduction_domain.extractor)"
+                            .to_string(),
+                    );
+                } else {
+                    let ek = as_str(&ex["kind"]);
+                    if ek != "exact-integer" && ek != "embedded-integer" {
+                        v.push(format!(
+                            "unknown extractor kind {ek:?} — the protocol admits exact-integer | embedded-integer"
+                        ));
+                    }
+                    let radix = as_str(&ex["radix"]);
+                    if radix != "10" && radix != "16" {
+                        v.push(format!(
+                            "unsupported extractor radix {radix:?} — the protocol admits 10 | 16"
+                        ));
+                    }
+                    if ek == "embedded-integer" && as_str(&ex["prefix"]).is_empty() {
+                        v.push(
+                            "embedded-integer extraction requires a non-empty prefix".to_string(),
+                        );
+                    }
+                    if ek == "exact-integer" && ex.get("prefix").is_some() {
+                        v.push("exact-integer extraction carries no prefix".to_string());
+                    }
+                }
             }
             if as_str(&domain["semantic"]).is_empty() {
                 v.push("reduction_domain.semantic must not be empty".to_string());
@@ -1650,11 +1739,23 @@ pub fn reduction_semantic_violations(doc: &Value) -> Vec<String> {
             let boundary = &minimality["boundary"];
             let predecessor = as_str(&boundary["predecessor"]);
             let value = as_str(&boundary["value"]);
-            if predecessor == value {
-                v.push(
-                    "adjacent-boundary requires two distinct points (predecessor != value)"
-                        .to_string(),
-                );
+            // The ordered-integer EXECUTABLE semantics: both coordinates are
+            // canonical integers and the predecessor is EXACTLY one step
+            // below the value — adjacency is a derived relation, never an
+            // asserted one.
+            match (
+                parse_canonical_integer(predecessor, 10),
+                parse_canonical_integer(value, 10),
+            ) {
+                (Ok(prev), Ok(val)) => {
+                    if prev.checked_add(1) != Some(val) {
+                        v.push(
+                            "adjacent-boundary coordinates are not adjacent in the integer ordering (predecessor + 1 != value)"
+                                .to_string(),
+                        );
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => v.push(format!("adjacent-boundary coordinate: {e}")),
             }
             if boundary["predecessor_preserves"].as_bool().unwrap_or(false)
                 || !boundary["value_preserves"].as_bool().unwrap_or(false)

@@ -803,47 +803,52 @@ minimizers:
     program: falsify-minimizers/{PROGRAM}
 "#;
 
-/// One adversarial minimizer implementation: proposes dropping comment/blank
-/// lines (like the golden minimizer) and DECLARES a boundary whose adjacent
-/// non-passing fixture is the ORIGINAL fixture — which is preserved, so the
-/// boundary is REFUTED by the core's own execution. The minimizer also
-/// shouts `minimal: true`. Neither the claim nor the declaration may become
-/// proof.
+/// One adversarial minimizer implementation: proposes a malformed config
+/// (preserving the divergence) and DECLARES a boundary whose adjacent
+/// non-passing fixture embeds the predecessor coordinate `bad=1` — which is
+/// PRESERVED, so the boundary is REFUTED by the core's own execution. The
+/// minimizer also shouts `minimal: true`. Neither the claim nor the
+/// declaration may become proof. The declared domain projection
+/// (`embedded-integer` over `bad=`) makes the coordinates DERIVABLE from the
+/// exact fixtures — the core derives them, and the refutation lands in band.
 const REFUTED_MINIMIZER: &str = r##"#!/usr/bin/env python3
 import base64, hashlib, json, sys
 raw = sys.stdin.buffer.read()
 req = json.loads(raw.decode("utf-8"))
 request_id = hashlib.sha256(raw).hexdigest()
 original = base64.b64decode(req["fixture"]["raw_base64"])
-text = original.decode("utf-8", "replace")
-kept = [l for l in text.split("\n") if l.strip() and not l.lstrip().startswith("#")]
-proposal = "\n".join(kept)
-if not proposal.endswith("\n"):
-    proposal += "\n"
-proposal_bytes = proposal.encode("utf-8")
-# The declared adjacent non-passing fixture is the ORIGINAL fixture: the core
-# will execute it and observe the lineage SURVIVES -> the boundary is
-# refuted. This is the adversarial declaration.
+# The proposal: a malformed config (the divergence survives). The value
+# coordinate is embedded as `bad=2`.
+proposal = b"server 1.1.1.1\nbad=2\n"
+# The declared adjacent non-passing fixture EMBEDS the predecessor
+# coordinate (`bad=1`): still malformed, so the lineage SURVIVES the core's
+# execution -> the boundary is refuted in band.
+adjacent = b"server 1.1.1.1\nbad=1\n"
 response = {
     "schema_version": "frf-minimizer-response-v2",
     "request_id": request_id,
-    "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
-    "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
+    "fixture_sha256": hashlib.sha256(proposal).hexdigest(),
+    "fixture_base64": base64.b64encode(proposal).decode("ascii"),
     "minimal": True,
     "minimality": {
         "kind": "adjacent-boundary",
         "reduction_domain": {
             "kind": "ordered-integer",
             "semantic": "falsify.example_parameter",
+            "extractor": {
+                "kind": "embedded-integer",
+                "radix": "10",
+                "prefix": "bad=",
+            },
         },
         "boundary": {
             "predecessor": "1",
-            "predecessor_preserves": False,  # claimed: the original is NOT preserved
+            "predecessor_preserves": False,  # claimed: the point below is NOT preserved
             "value": "2",
             "value_preserves": True,
         },
-        "adjacent_fixture_sha256": hashlib.sha256(original).hexdigest(),
-        "adjacent_fixture_base64": base64.b64encode(original).decode("ascii"),
+        "adjacent_fixture_sha256": hashlib.sha256(adjacent).hexdigest(),
+        "adjacent_fixture_base64": base64.b64encode(adjacent).decode("ascii"),
     },
     "attempts": [],
     "indeterminate": False,
@@ -852,37 +857,43 @@ response = {
 json.dump(response, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 "##;
 
-/// The honest minimizer: proposes the same reduction and declares a boundary
-/// whose adjacent non-passing fixture is a CLEAN config — both sides exit 0,
-/// so the lineage is genuinely LOST at the adjacent point. The core's two
-/// observations (final verification preserved, control lost) establish the
-/// boundary: `proven` may be true, and the record's attempts prove it.
+/// The honest minimizer: proposes a malformed config whose value coordinate
+/// (`bad=2`) preserves the divergence, and declares an adjacent non-passing
+/// fixture that is a COMMENT-ONLY config embedding the predecessor
+/// coordinate (`# bad=1`) — both sides exit 0 there, so the lineage is
+/// genuinely LOST at the adjacent point. The core's two observations (final
+/// verification preserved, control lost) AND its own coordinate derivation
+/// establish the boundary: `proven` may be true, and the record's attempts
+/// prove it.
 const HONEST_MINIMIZER: &str = r##"#!/usr/bin/env python3
 import base64, hashlib, json, sys
 raw = sys.stdin.buffer.read()
 req = json.loads(raw.decode("utf-8"))
 request_id = hashlib.sha256(raw).hexdigest()
 original = base64.b64decode(req["fixture"]["raw_base64"])
-text = original.decode("utf-8", "replace")
-kept = [l for l in text.split("\n") if l.strip() and not l.lstrip().startswith("#")]
-proposal = "\n".join(kept)
-if not proposal.endswith("\n"):
-    proposal += "\n"
-proposal_bytes = proposal.encode("utf-8")
-# A clean config: no malformed directive, so both sides exit 0 and the exit
-# lineage is LOST at the adjacent point.
-adjacent = b"server 192.168.1.1\n"
+# The proposal: a malformed config (the divergence survives). The value
+# coordinate is embedded as `bad=2`.
+proposal = b"server 1.1.1.1\nbad=2\n"
+# A comment-only config embedding the predecessor coordinate (`# bad=1`):
+# no directive at all, so both sides exit 0 and the exit lineage is LOST at
+# the adjacent point.
+adjacent = b"# bad=1\n"
 response = {
     "schema_version": "frf-minimizer-response-v2",
     "request_id": request_id,
-    "fixture_sha256": hashlib.sha256(proposal_bytes).hexdigest(),
-    "fixture_base64": base64.b64encode(proposal_bytes).decode("ascii"),
+    "fixture_sha256": hashlib.sha256(proposal).hexdigest(),
+    "fixture_base64": base64.b64encode(proposal).decode("ascii"),
     "minimal": True,
     "minimality": {
         "kind": "adjacent-boundary",
         "reduction_domain": {
             "kind": "ordered-integer",
             "semantic": "falsify.example_parameter",
+            "extractor": {
+                "kind": "embedded-integer",
+                "radix": "10",
+                "prefix": "bad=",
+            },
         },
         "boundary": {
             "predecessor": "1",
@@ -1073,4 +1084,357 @@ fn honest_boundary_can_be_established_by_the_core() {
     r.validate_semantics()
         .expect("the honest boundary record is semantically consistent");
     assert!(r.derivation.minimality.proven);
+}
+
+// ---------------------------------------------------------------------------
+// The domain projection (P0: the extension proposes coordinates, the core
+// derives coordinates)
+// ---------------------------------------------------------------------------
+
+/// A boundary minimizer built from raw parts: the declared coordinates, the
+/// adjacent + proposal fixture TEXTS (which the extractor reads), and the
+/// `extractor` JSON to splice into `reduction_domain` (empty = none). Used to
+/// drive the adversarial declarations below.
+fn boundary_minimizer_source(
+    predecessor: &str,
+    value: &str,
+    adjacent_text: &str,
+    proposal_text: &str,
+    extractor_json: &str,
+) -> String {
+    let adjacent = format!("{adjacent_text:?}");
+    let proposal = format!("{proposal_text:?}");
+    format!(
+        r##"#!/usr/bin/env python3
+import base64, hashlib, json, sys
+raw = sys.stdin.buffer.read()
+req = json.loads(raw.decode("utf-8"))
+request_id = hashlib.sha256(raw).hexdigest()
+adjacent = b{adjacent}
+proposal = b{proposal}
+response = {{
+    "schema_version": "frf-minimizer-response-v2",
+    "request_id": request_id,
+    "fixture_sha256": hashlib.sha256(proposal).hexdigest(),
+    "fixture_base64": base64.b64encode(proposal).decode("ascii"),
+    "minimal": True,
+    "minimality": {{
+        "kind": "adjacent-boundary",
+        "reduction_domain": {{
+            "kind": "ordered-integer",
+            "semantic": "falsify.example_parameter"{extractor_json}
+        }},
+        "boundary": {{
+            "predecessor": "{predecessor}",
+            "predecessor_preserves": False,
+            "value": "{value}",
+            "value_preserves": True,
+        }},
+        "adjacent_fixture_sha256": hashlib.sha256(adjacent).hexdigest(),
+        "adjacent_fixture_base64": base64.b64encode(adjacent).decode("ascii"),
+    }},
+    "attempts": [],
+    "indeterminate": False,
+    "failure": None,
+}}
+json.dump(response, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+"##
+    )
+}
+
+/// The canonical embedded-integer projection used by the adversarial
+/// declarations: the coordinate is the digit token after the first `bad=`.
+const BAD_EXTRACTOR: &str =
+    r#","extractor":{"kind":"embedded-integer","radix":"10","prefix":"bad="}"#;
+
+/// Drive one boundary court and assert `court minimize` REFUSES the
+/// minimizer's declaration, returning the stderr for message assertions.
+fn run_boundary_minimize_refused(work: &Workdir, court: &str, needle: &str) -> String {
+    let manifest = BOUNDARY_MANIFEST
+        .replace("{COURT}", court)
+        .replace("{PROGRAM}", &format!("{court}.py"));
+    let mpath = work.path(&format!(
+        "frf/courts/falsify-boundary-{court}/manifest.yaml"
+    ));
+    fs::create_dir_all(mpath.parent().unwrap()).unwrap();
+    fs::write(&mpath, manifest).unwrap();
+    let out = frf(
+        work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            &format!("frf/courts/falsify-boundary-{court}/manifest.yaml"),
+        ],
+    );
+    assert_success(&out, &format!("boundary court {court} run"));
+    let run = stdout(&out);
+    let residual = residual_id(work, &run, "exit");
+    let out = frf(work, &["--root", ROOT, "court", "minimize", &residual]);
+    assert!(
+        !out.status.success(),
+        "the adversarial declaration must be REFUSED ({court})"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains(needle),
+        "refusal must name the violation; got: {stderr}"
+    );
+    stderr
+}
+
+/// Non-adjacent coordinates: the declaration claims predecessor 1, value 3 —
+/// adjacency is a DERIVED relation (predecessor + 1 == value), never an
+/// asserted one, so the core refuses before executing anything.
+#[test]
+fn non_adjacent_boundary_declaration_is_refused() {
+    let work = Workdir::new("falsify-boundary-non-adjacent");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/nonadjacent.py");
+    fs::write(
+        &program,
+        boundary_minimizer_source(
+            "1",
+            "3",
+            "server 1.1.1.1\nbad=1\n",
+            "server 1.1.1.1\nbad=3\n",
+            BAD_EXTRACTOR,
+        ),
+    )
+    .unwrap();
+    set_exec(&program);
+    run_boundary_minimize_refused(&work, "nonadjacent", "non-adjacent boundary coordinates");
+}
+
+/// Non-integer coordinates: the predecessor is not a canonical integer, so
+/// the ordered-integer executable semantics cannot even parse the pair.
+#[test]
+fn non_integer_boundary_coordinates_are_refused() {
+    let work = Workdir::new("falsify-boundary-non-integer");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/noninteger.py");
+    fs::write(
+        &program,
+        boundary_minimizer_source(
+            "abc",
+            "2",
+            "server 1.1.1.1\nbad=1\n",
+            "server 1.1.1.1\nbad=2\n",
+            BAD_EXTRACTOR,
+        ),
+    )
+    .unwrap();
+    set_exec(&program);
+    run_boundary_minimize_refused(&work, "noninteger", "non-canonical boundary predecessor");
+}
+
+/// No domain projection: a boundary over ordered-integer MUST carry the
+/// extractor — without it the coordinates are only labels, and the core
+/// never accepts labels.
+#[test]
+fn boundary_without_domain_projection_is_refused() {
+    let work = Workdir::new("falsify-boundary-no-projection");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/noprojection.py");
+    fs::write(
+        &program,
+        boundary_minimizer_source(
+            "1",
+            "2",
+            "server 1.1.1.1\nbad=1\n",
+            "server 1.1.1.1\nbad=2\n",
+            "",
+        ),
+    )
+    .unwrap();
+    set_exec(&program);
+    run_boundary_minimize_refused(&work, "noprojection", "without the domain projection");
+}
+
+/// Misprojecting coordinates: the declaration names 5/6 but its own fixtures
+/// embed 1/2. The extension proposes coordinates; the core derives them from
+/// the exact executed bytes — a self-inconsistent declaration is refused.
+#[test]
+fn misprojecting_boundary_declaration_is_refused() {
+    let work = Workdir::new("falsify-boundary-misprojecting");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    fs::create_dir_all(work.path("falsify-minimizers")).unwrap();
+    let program = work.path("falsify-minimizers/misprojecting.py");
+    fs::write(
+        &program,
+        boundary_minimizer_source(
+            "5",
+            "6",
+            "server 1.1.1.1\nbad=1\n",
+            "server 1.1.1.1\nbad=2\n",
+            BAD_EXTRACTOR,
+        ),
+    )
+    .unwrap();
+    set_exec(&program);
+    run_boundary_minimize_refused(
+        &work,
+        "misprojecting",
+        "do not project from its own fixtures",
+    );
+}
+
+/// The whole-store verifier re-derives a boundary's coordinates from the
+/// EXACT fixtures the record claims it executed: a record that is
+/// doc-consistent (identity rederives, adjacency holds, the in-band
+/// preservation flags match its attempts) but whose declared coordinates do
+/// not project from its fixtures is a GRAPH violation — never silently
+/// accepted.
+#[test]
+fn whole_store_refuses_a_boundary_whose_fixtures_do_not_project() {
+    use frf::model::{
+        DomainExtractor, EvidenceTransform, MinimalityBoundary, ReductionAttempt,
+        ReductionAttemptOutcome, ReductionAttemptRole, ReductionDerivation, ReductionDomain,
+        ReductionMinimality, ReductionRecord, ResidualKind,
+    };
+    let work = Workdir::new("falsify-boundary-misprojection-store");
+    work.copy_canonical_tree();
+    let store = store_of(&work);
+
+    // The two fixture objects the record claims it executed: `bad=1` (the
+    // boundary control) and `bad=2` (the final verification).
+    let control_bytes = b"server 1.1.1.1\nbad=1\n";
+    let final_bytes = b"server 1.1.1.1\nbad=2\n";
+    let control_sha = frf::host::sha256_bytes(control_bytes);
+    let final_sha = frf::host::sha256_bytes(final_bytes);
+    let obj_dir = work.path(&format!("{ROOT}/objects/sha256"));
+    fs::create_dir_all(&obj_dir).unwrap();
+    fs::write(obj_dir.join(&control_sha), control_bytes).unwrap();
+    fs::write(obj_dir.join(&final_sha), final_bytes).unwrap();
+
+    // The record: doc-consistent in every way (adjacent pair, extractor
+    // present, control lost + final preserved -> validate_semantics passes)
+    // EXCEPT the coordinates name 5/6 while the fixtures embed 1/2.
+    let attempts = vec![
+        ReductionAttempt {
+            attempt: "1".into(),
+            role: ReductionAttemptRole::Baseline,
+            fixture_sha256: control_sha.clone(),
+            outcome: ReductionAttemptOutcome::Preserved,
+            accepted: false,
+        },
+        ReductionAttempt {
+            attempt: "2".into(),
+            role: ReductionAttemptRole::BoundaryControl,
+            fixture_sha256: control_sha.clone(),
+            outcome: ReductionAttemptOutcome::Lost,
+            accepted: false,
+        },
+        ReductionAttempt {
+            attempt: "3".into(),
+            role: ReductionAttemptRole::FinalVerification,
+            fixture_sha256: final_sha.clone(),
+            outcome: ReductionAttemptOutcome::Preserved,
+            accepted: true,
+        },
+    ];
+    let derivation = ReductionDerivation {
+        strategy: "external:falsify".into(),
+        original_lines: "1".into(),
+        final_lines: "1".into(),
+        minimality: ReductionMinimality {
+            kind: "adjacent-boundary".into(),
+            granularity: None,
+            reduction_domain: Some(ReductionDomain {
+                kind: "ordered-integer".into(),
+                semantic: "falsify.example_parameter".into(),
+                extractor: Some(DomainExtractor {
+                    kind: "embedded-integer".into(),
+                    radix: "10".into(),
+                    prefix: Some("bad=".into()),
+                }),
+            }),
+            boundary: Some(MinimalityBoundary {
+                predecessor: "5".into(),
+                predecessor_preserves: false,
+                value: "6".into(),
+                value_preserves: true,
+            }),
+            proven: true,
+            proposal_minimality_claimed: Some(true),
+        },
+    };
+    let transform = EvidenceTransform::reduction("falsify-residual", "eq(exit)");
+    let record = ReductionRecord {
+        schema_version: frf::model::SCHEMA_REDUCTION.to_string(),
+        id: String::new(),
+        residual_id: "falsify-residual".into(),
+        source_run: "run-falsify-deadbeef".into(),
+        axis: "exit".into(),
+        kind: ResidualKind::exit(),
+        court_semantic_identity: "0".repeat(64),
+        authority_artifact_sha256: "a".repeat(64),
+        candidate_artifact_sha256: "b".repeat(64),
+        environment_digest: "c".repeat(64),
+        comparator_semantic_id: "exit".into(),
+        comparator_semantic_hash: "d".repeat(64),
+        comparator_implementation_hash: "e".repeat(64),
+        argv_template: vec!["--strict".into(), "{fixture}".into()],
+        original_fixture_sha256: control_sha.clone(),
+        final_fixture_sha256: final_sha.clone(),
+        attempts,
+        derivation,
+        transform,
+        minimizer_semantic_id: Some("falsify-min".into()),
+        minimizer_semantic_hash: Some("f".repeat(64)),
+        minimizer_implementation_hash: Some("0".repeat(64)),
+        minimizer_implementation_artifact: None,
+        minimizer_invocation_id: None,
+        minimizer_result_id: None,
+    };
+    let id = frf::semantics::reduction_identity(
+        &record.residual_id,
+        &record.source_run,
+        &record.axis,
+        record.kind.clone(),
+        &record.court_semantic_identity,
+        &record.authority_artifact_sha256,
+        &record.candidate_artifact_sha256,
+        &record.environment_digest,
+        &record.comparator_semantic_id,
+        &record.comparator_semantic_hash,
+        &record.comparator_implementation_hash,
+        &record.argv_template,
+        &record.original_fixture_sha256,
+        &record.final_fixture_sha256,
+        &record.attempts,
+        &record.derivation,
+        &record.transform,
+        None, // no minimizer binding in the record (all six fields absent)
+    )
+    .unwrap();
+    let mut record = record;
+    record.id = id.clone();
+    let json = store.to_evidence(&record).unwrap();
+    fs::create_dir_all(work.path(&format!("{ROOT}/reductions"))).unwrap();
+    store
+        .commit_content_addressed(&store.reduction_path(&id).unwrap(), &json)
+        .unwrap();
+
+    // The record is doc-consistent: it rederives and passes the semantic
+    // validator.
+    let loaded = store.load_reduction(&id).unwrap();
+    loaded.validate_semantics().unwrap();
+
+    // But the WHOLE-STORE verifier derives the coordinates from the exact
+    // executed fixtures and refuses the mismatch.
+    let report = frf::verify::verify_whole_store(&store).unwrap();
+    let joined = report.errors.join("\n");
+    assert!(
+        joined.contains("do not project from the executed fixtures"),
+        "whole-store must refuse the misprojection; got: {joined}"
+    );
 }

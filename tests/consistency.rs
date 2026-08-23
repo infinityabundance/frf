@@ -93,6 +93,55 @@ fn reduction_attempt_roles_match_the_spec() {
     assert_eq!(Role::FinalVerification.as_str(), "final_verification");
 }
 
+/// The domain-projection (extractor) vocabulary is exactly the documented
+/// closed set, and the ordered-integer semantics accept only the documented
+/// radices.
+#[test]
+fn domain_extractor_vocabulary_matches_the_spec() {
+    use frf::model::DomainExtractor;
+    assert_eq!(
+        DomainExtractor::KINDS.to_vec(),
+        vec!["exact-integer", "embedded-integer"],
+        "spec/reduction.md documents exactly these two extractor kinds"
+    );
+    // The closed radix vocabulary: 10 | 16, as strings (the canonical JSON
+    // value domain has no numbers).
+    for radix in ["10", "16"] {
+        let ex = DomainExtractor {
+            kind: "exact-integer".into(),
+            radix: radix.into(),
+            prefix: None,
+        };
+        ex.validate()
+            .unwrap_or_else(|e| panic!("radix {radix} must be admitted: {e}"));
+    }
+    for radix in ["8", "2", "0", "10x"] {
+        let ex = DomainExtractor {
+            kind: "exact-integer".into(),
+            radix: radix.into(),
+            prefix: None,
+        };
+        assert!(
+            ex.validate().is_err(),
+            "radix {radix} is outside the closed vocabulary"
+        );
+    }
+    // The embedded-integer prefix boundary rule: a prefix ending in a radix
+    // digit would make the token boundary ambiguous.
+    let ambiguous = DomainExtractor {
+        kind: "embedded-integer".into(),
+        radix: "16".into(),
+        prefix: Some("0x1".into()),
+    };
+    assert!(ambiguous.validate().is_err());
+    let fine = DomainExtractor {
+        kind: "embedded-integer".into(),
+        radix: "16".into(),
+        prefix: Some("0x".into()),
+    };
+    fine.validate().expect("0x is an unambiguous prefix");
+}
+
 /// The claim admission policies the engine implements are exactly the
 /// registry's `policies`.
 #[test]

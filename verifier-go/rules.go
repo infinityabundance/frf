@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 
 	"frf-verifier-go/jcs"
@@ -986,7 +987,39 @@ func reductionSemanticViolations(doc jcs.Value) []string {
 		} else {
 			d, _ := m.Get("reduction_domain")
 			do := obj(d)
-			pushIf(str(do, "kind") != "ordered-integer", "unknown reduction domain kind (the protocol admits ordered-integer)")
+			dkind := str(do, "kind")
+			if dkind != "ordered-integer" {
+				pushIf(true, fmt.Sprintf("unknown reduction domain kind %q (the protocol admits ordered-integer)", dkind))
+			} else {
+				// The DOMAIN PROJECTION: the core derives the boundary's
+				// coordinates from the exact fixtures it executed, so a record
+				// that claims the projection must carry it — without an
+				// extractor the coordinates are only the minimizer's labels,
+				// and an adjacent-boundary with proven=true is literal only
+				// when the projection is in the record.
+				ex, exOk := do.Get("extractor")
+				if !exOk || ex == nil {
+					pushIf(true, "adjacent-boundary over ordered-integer requires the domain projection (reduction_domain.extractor)")
+				} else {
+					eo := obj(ex)
+					ek := str(eo, "kind")
+					if ek != "exact-integer" && ek != "embedded-integer" {
+						pushIf(true, fmt.Sprintf("unknown extractor kind %q (the protocol admits exact-integer | embedded-integer)", ek))
+					}
+					radix := str(eo, "radix")
+					if radix != "10" && radix != "16" {
+						pushIf(true, fmt.Sprintf("unsupported extractor radix %q (the protocol admits 10 | 16)", radix))
+					}
+					if ek == "embedded-integer" && str(eo, "prefix") == "" {
+						pushIf(true, "embedded-integer extraction requires a non-empty prefix")
+					}
+					if ek == "exact-integer" {
+						if _, ok := eo.Get("prefix"); ok {
+							pushIf(true, "exact-integer extraction carries no prefix")
+						}
+					}
+				}
+			}
 			pushIf(str(do, "semantic") == "", "reduction_domain.semantic must not be empty")
 		}
 		if !has("boundary") {
@@ -994,7 +1027,17 @@ func reductionSemanticViolations(doc jcs.Value) []string {
 		} else {
 			bv, _ := m.Get("boundary")
 			bo := obj(bv)
-			pushIf(str(bo, "predecessor") == str(bo, "value"), "adjacent-boundary requires two distinct points (predecessor != value)")
+			// The ordered-integer EXECUTABLE semantics: both coordinates are
+			// canonical integers and the predecessor is EXACTLY one step below
+			// the value — adjacency is a derived relation, never an asserted
+			// one.
+			p, pErr := parseCanonicalInteger(str(bo, "predecessor"), 10)
+			v, vErr := parseCanonicalInteger(str(bo, "value"), 10)
+			if pErr != nil || vErr != nil {
+				pushIf(true, fmt.Sprintf("adjacent-boundary coordinate: %v", firstErr(pErr, vErr)))
+			} else if p.Cmp(new(big.Int).Add(v, big.NewInt(-1))) != 0 {
+				pushIf(true, "adjacent-boundary coordinates are not adjacent in the integer ordering (predecessor + 1 != value)")
+			}
 			pp, _ := bo.Get("predecessor_preserves")
 			vp, _ := bo.Get("value_preserves")
 			pushIf(pp == true || vp != true, "adjacent-boundary must claim predecessor_preserves=false and value_preserves=true")
@@ -1038,4 +1081,84 @@ func reductionSemanticViolations(doc jcs.Value) []string {
 		out = append(out, fmt.Sprintf("unknown minimality kind %q", kind))
 	}
 	return out
+}
+
+// parseCanonicalInteger — the coordinate-string parse shared with the
+// reference engine: an optional single leading `-`, then the canonical digit
+// form (`0`, or a digit-run with NO leading zeros; an `0x`/`0X` prefix is
+// admitted for radix 16), with an explicit signed-128-bit range check.
+// Fail-closed: a non-canonical or overflowing coordinate is a refusal, never
+// a guess.
+func parseCanonicalInteger(s string, radix int) (*big.Int, error) {
+	neg := false
+	rest := s
+	if strings.HasPrefix(rest, "-") {
+		neg = true
+		rest = rest[1:]
+	}
+	if rest == "" {
+		return nil, fmt.Errorf("%q is not a canonical integer", s)
+	}
+	digits := rest
+	if radix == 16 {
+		if d, ok := strings.CutPrefix(rest, "0x"); ok {
+			digits = d
+		} else if d, ok := strings.CutPrefix(rest, "0X"); ok {
+			digits = d
+		}
+	}
+	if digits == "" {
+		return nil, fmt.Errorf("%q is not a canonical integer", s)
+	}
+	if len(digits) > 1 && digits[0] == '0' {
+		return nil, fmt.Errorf("%q is not a canonical integer (leading zeros)", s)
+	}
+	for i := 0; i < len(digits); i++ {
+		if digitValue(digits[i], radix) < 0 {
+			return nil, fmt.Errorf("%q is not a canonical radix-%d integer", s, radix)
+		}
+	}
+	v, ok := new(big.Int).SetString(digits, radix)
+	if !ok {
+		return nil, fmt.Errorf("%q overflows the coordinate domain", s)
+	}
+	if neg {
+		v.Neg(v)
+	}
+	// The reference engine's coordinate domain is signed 128-bit; a
+	// coordinate beyond it is refused on both implementations identically.
+	i128max := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	i128min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 127))
+	if v.Cmp(i128max) > 0 || v.Cmp(i128min) < 0 {
+		return nil, fmt.Errorf("%q overflows the coordinate domain", s)
+	}
+	return v, nil
+}
+
+// digitValue — the radix digit value of a byte, or -1 when it is not a digit
+// of the radix.
+func digitValue(b byte, radix int) int {
+	var v int
+	switch {
+	case b >= '0' && b <= '9':
+		v = int(b - '0')
+	case b >= 'a' && b <= 'f':
+		v = int(b-'a') + 10
+	case b >= 'A' && b <= 'F':
+		v = int(b-'A') + 10
+	default:
+		return -1
+	}
+	if v < radix {
+		return v
+	}
+	return -1
+}
+
+// firstErr — the first non-nil error of a pair (for two-parse diagnostics).
+func firstErr(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
