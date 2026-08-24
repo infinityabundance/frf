@@ -1438,3 +1438,82 @@ fn whole_store_refuses_a_boundary_whose_fixtures_do_not_project() {
         "whole-store must refuse the misprojection; got: {joined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Content-addressed run reuse (P1: exists ≠ trusted; exists + rederived =
+// reusable)
+// ---------------------------------------------------------------------------
+
+/// An existing run directory whose pathname equals the expected content
+/// address is NOT yet verified evidence. A series court that would REUSE the
+/// identical evidence must first VERIFY it: a tampered, truncated, or
+/// half-written run at the same path is a refusal — the name is a claim
+/// until recomputed, and `exists` alone never licenses reuse.
+#[test]
+fn a_tampered_run_is_never_reused_even_with_reuse() {
+    let work = Workdir::new("falsify-tampered-reuse");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let run = run_court(&work);
+
+    // Tamper with a side file: the run directory keeps its PATHNAME, but the
+    // capture no longer rederives (the side files must rehash to the
+    // recorded stream hashes).
+    let side = work.path(&format!("{ROOT}/captures/{run}/candidate.stdout"));
+    force_write(&side, b"tampered\n");
+
+    // A `--repeat` series court would REUSE the identical evidence on the
+    // second point; the tampered run must be REFUSED, never silently reused.
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST, "--repeat", "2"],
+    );
+    assert!(!out.status.success(), "a tampered run must never be reused");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("does not VERIFY") && stderr.contains("name is a claim"),
+        "the refusal must name the unverified run: {stderr}"
+    );
+    // The tampered run was NOT overwritten (nothing is ever overwritten).
+    assert_eq!(
+        fs::read(work.path(&format!("{ROOT}/captures/{run}/candidate.stdout"))).unwrap(),
+        b"tampered\n"
+    );
+}
+
+/// The positive case: a VERIFIED run IS reusable — the series re-observation
+/// shares the content-addressed run and the repeat points accumulate.
+#[test]
+fn a_verified_run_is_reused_across_repeat_points() {
+    let work = Workdir::new("falsify-verified-reuse");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let out = frf(
+        &work,
+        &["--root", ROOT, "court", "run", MANIFEST, "--repeat", "2"],
+    );
+    assert_success(&out, "repeat court run");
+    // The repeat series accumulated: one content-addressed run (the
+    // identical evidence was verified and reused) and two series points.
+    let series_dir = work.path(&format!("{ROOT}/series"));
+    let series_files: Vec<String> = fs::read_dir(&series_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".json"))
+        .collect();
+    assert_eq!(
+        series_files.len(),
+        1,
+        "one series experiment: {series_files:?}"
+    );
+    let series = frf::store::Store::new(work.path(ROOT));
+    let rec = series
+        .load_series(series_files[0].trim_end_matches(".json"))
+        .unwrap();
+    assert_eq!(rec.points.len(), 2, "two repeat points");
+    assert_eq!(
+        rec.points[0].run, rec.points[1].run,
+        "identical evidence shares the content-addressed run"
+    );
+}

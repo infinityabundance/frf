@@ -2965,16 +2965,35 @@ pub fn run_once(
     let run = format!("run-{}-{}", spec.id, run_hash);
     let run_dir = store.run_dir(&run)?;
     if run_dir.exists() {
+        // The NAME is a claim until recomputed. An existing directory whose
+        // pathname equals the expected content address is NOT yet verified
+        // evidence: exists ≠ trusted; exists + rederived = reusable. The
+        // verified loader re-derives the run identity from the capture's own
+        // recorded fields, rehashes every side file, and cross-checks every
+        // residual — a tampered, truncated, or half-written run at the same
+        // path is a REFUSAL, never silently reused.
+        let verified = crate::verify::load_capture_verified(store, &run).map_err(|e| {
+            FrfError::new(format!(
+                "run '{run}' already exists but does not VERIFY ({e}); the name is a claim until recomputed — refusing to reuse or overwrite it (remove the corrupt directory to re-observe)"
+            ))
+        })?;
+        if verified.run != run {
+            return Err(FrfError::new(format!(
+                "run '{run}' already exists but its capture verifies as {} — the name is a claim; refusing to reuse",
+                verified.run
+            )));
+        }
         if reuse {
             // A series court re-observed identical evidence: the
-            // content-addressed run IS the same run. Reuse it — raw captures
-            // are immutable, and identical evidence is captured once however
-            // often it is asked for; the series point references the run.
-            eprintln!("identical evidence already captured as {run}; reusing");
+            // content-addressed run IS the same run, and it VERIFIES. Reuse
+            // it — raw captures are immutable, and identical evidence is
+            // captured once however often it is asked for; the series point
+            // references the run.
+            eprintln!("identical evidence already captured as {run}; verified and reusing");
             return Ok(run);
         }
         return Err(FrfError::new(format!(
-            "run '{run}' already exists (identical evidence was already captured); raw captures are immutable — refusing to re-capture (use a series axis to re-observe deliberately)"
+            "run '{run}' already exists and verifies (identical evidence was already captured); raw captures are immutable — refusing to re-capture (use a series axis to re-observe deliberately)"
         )));
     }
 
