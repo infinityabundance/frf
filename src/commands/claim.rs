@@ -373,7 +373,7 @@ pub fn cell_proposition(cell: &ClaimScope) -> String {
 }
 
 /// The machine-readable MOVEMENT clause of a claim's trajectory premises
-/// (frf-claim-v12) — a pure function of the premises, shared by the claim
+/// (frf-claim-v13) — a pure function of the premises, shared by the claim
 /// compiler and the verified loader (the claim's stored proposition must
 /// rederive). Each cell carries the premise's SUBJECT BINDING (the anchored
 /// receipt + its run) so two claims whose movements differ only in their
@@ -910,7 +910,7 @@ pub fn run(
         proposition.push_str(&movement_proposition(&trajectory_premises));
     }
     // The movement prose is attributed to EACH premise's OWN anchored
-    // receipt (frf-claim-v12) — never to the first receipt's authority: the
+    // receipt (frf-claim-v13) — never to the first receipt's authority: the
     // authority a movement sentence names is derived from the receipt the
     // movement is bound to.
     let authority_of: std::collections::HashMap<String, String> = receipt_ids
@@ -967,7 +967,10 @@ pub fn run(
         excluded_evidence,
         requires: receipt_ids.to_vec(),
         trajectory_premises,
-        transform: crate::model::EvidenceTransform::claim(&receipt_ids[0], "parity"),
+        // The transform is completed below: its source_set is the ClaimInputs
+        // content address, computable only once the record is whole (the
+        // placeholder is immediately replaced).
+        transform: crate::model::EvidenceTransform::claim("", "parity"),
         knowledge_snapshot,
         policy: policy.to_string(),
         mutation_profile: required_profile,
@@ -977,6 +980,14 @@ pub fn run(
         replay_profile,
         required_capabilities,
     };
+    // The claim's transform names its COMPLETE canonical dependency set
+    // (frf-claim-v13): the ClaimInputs content address — receipts, the
+    // observations they bound, the trajectory documents, the challenge
+    // records, the witness attestations, the independence evidence, and the
+    // committed universe — so the transform graph is compositional: the
+    // claim says exactly what it consumed, never merely its first premise.
+    let inputs = crate::verify::claim_inputs(&claim, &verified)?;
+    claim.transform = crate::model::EvidenceTransform::claim(&inputs.cid, "parity");
     claim.id = crate::semantics::claim_identity(&claim)?;
 
     if json {

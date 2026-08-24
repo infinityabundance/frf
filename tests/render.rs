@@ -89,7 +89,7 @@ fn the_claim_renders_into_every_presentation_without_new_meaning() {
     );
     assert_success(&out, "render json");
     let ir: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(ir["schema_version"], "frf-claim-v12");
+    assert_eq!(ir["schema_version"], "frf-claim-v13");
     assert_eq!(ir["receipt"], receipt);
 
     // sarif: a 2.1.0 document — the claim as a none-level result, the
@@ -333,4 +333,63 @@ fn the_sarif_document_is_deterministic() {
     );
     assert_success(&b, "render b");
     assert_eq!(stdout(&a), stdout(&b), "SARIF is deterministic");
+}
+
+/// The claim transform names its COMPLETE canonical dependency set
+/// (frf-claim-v13): a SELF-CONSISTENT forged claim whose transform's
+/// source_set lies — a valid-looking ClaimInputs cid that is not the
+/// rederived content address of the claim's actual inputs — is REFUSED, even
+/// though the forged document's id rederives from its own bytes.
+#[test]
+fn a_forged_claim_whose_transform_source_set_lies_is_refused() {
+    let work = Workdir::new("render-forged-source-set");
+    work.copy_canonical_tree();
+    let receipt = compiled_claim(&work);
+    let genuine: serde_json::Value = claim_json(&work, &receipt);
+
+    // Forge: replace the transform's source_set with a valid-looking but
+    // WRONG content address (e.g. the inputs of a hypothetical different
+    // claim — here, a digest of all-zero hashes), recompute the claim id for
+    // the tampered document, and place it with its by-receipt index marker.
+    let mut forged = genuine.clone();
+    forged["transform"]["source_set"] =
+        serde_json::json!("0000000000000000000000000000000000000000000000000000000000000000");
+    let mut doc = forged.clone();
+    doc.as_object_mut().unwrap().remove("id");
+    let canonical = frf::canon::canonical(&doc).unwrap();
+    let forged_id = frf::host::sha256_bytes(format!("FRF/CLAIM/v1\n{canonical}").as_bytes());
+    forged["id"] = serde_json::json!(forged_id);
+    let forged_bytes = frf::canon::canonical(&forged).unwrap();
+    std::fs::write(
+        work.path(&format!("{ROOT}/claims/{forged_id}.json")),
+        &forged_bytes,
+    )
+    .unwrap();
+    std::fs::create_dir_all(work.path(&format!("{ROOT}/claims/by-receipt/{receipt}"))).unwrap();
+    std::fs::write(
+        work.path(&format!("{ROOT}/claims/by-receipt/{receipt}/{forged_id}")),
+        &receipt,
+    )
+    .unwrap();
+
+    // The forged claim's id rederives (it is canonical and content-
+    // addressed), yet every renderer REFUSES it: its transform names a
+    // source_set that is not the rederived ClaimInputs content address.
+    for format in ["prose", "json", "sarif", "ci", "badge"] {
+        let out = frf(
+            &work,
+            &[
+                "--root", ROOT, "claim", "render", &forged_id, "--format", format,
+            ],
+        );
+        assert!(
+            !out.status.success(),
+            "render {format} accepted the forged source_set"
+        );
+        assert!(
+            stderr(&out).contains("source_set"),
+            "render {format} refused for the wrong reason: {}",
+            stderr(&out)
+        );
+    }
 }

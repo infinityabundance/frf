@@ -259,7 +259,7 @@ pub enum ClaimCmd {
         /// receipt it is evidence about —
         /// `LINEAGE.COORDINATE_SYSTEM.SERIES@RECEIPT`. Each premise is
         /// verified (the trajectory rederives from its pinned series) and
-        /// BOUND TO ITS SUBJECT (frf-claim-v12): the receipt is a premise of
+        /// BOUND TO ITS SUBJECT (frf-claim-v13): the receipt is a premise of
         /// this claim, its run is a point of the series, the axis is a clean
         /// declared observable of that receipt, and the lineage rederives
         /// from the receipt's authority/fixture-family/fixture semantics —

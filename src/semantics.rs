@@ -782,7 +782,7 @@ pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Res
 }
 
 /// The lineage a trajectory premise's movement is about, REDERIVED from the
-/// anchored premise receipt's subject semantics (frf-claim-v12). The
+/// anchored premise receipt's subject semantics (frf-claim-v13). The
 /// movement's own first observed residual record names how the divergence
 /// was observed (kind, surface — the anchored receipt may be a CLEAN run
 /// whose run is the trajectory's non-observed point, so it cannot supply
@@ -1039,6 +1039,28 @@ pub fn knowledge_snapshot_identity(snapshot: &KnowledgeSnapshot) -> Result<Strin
             .collect::<Vec<_>>(),
     });
     hash_preimage("FRF/KNOWLEDGE/v2", &doc)
+}
+
+/// The CLAIM INPUTS identity (frf-claim-v13): SHA-256 of
+/// `FRF/CLAIM-INPUTS/v1` over the canonical document of the claim's complete
+/// canonical dependency set — the sorted, deduplicated lists of
+/// observations (runs), premise receipts, trajectory documents, challenge
+/// records, witness attestations, and independence evidence, plus the
+/// committed universe's content address. Every list is sorted and
+/// deduplicated, so the same dependency set hashes identically in every
+/// implementation; the claim's transform names this content address as its
+/// `source_set`, making the transform graph compositional.
+pub fn claim_inputs_identity(inputs: &ClaimInputs) -> Result<String> {
+    let doc = json!({
+        "observations": inputs.observations,
+        "receipts": inputs.receipts,
+        "trajectories": inputs.trajectories,
+        "challenges": inputs.challenges,
+        "witnesses": inputs.witnesses,
+        "independence": inputs.independence,
+        "universe": inputs.universe,
+    });
+    hash_preimage("FRF/CLAIM-INPUTS/v1", &doc)
 }
 
 /// The content address of a COMPILED CLAIM: `FRF/CLAIM/v1` over the

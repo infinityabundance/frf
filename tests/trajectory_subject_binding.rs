@@ -1,4 +1,4 @@
-//! The TRAJECTORY SUBJECT BINDING (frf-claim-v12, P0): a trajectory premise
+//! The TRAJECTORY SUBJECT BINDING (frf-claim-v13, P0): a trajectory premise
 //! is evidence ABOUT the claim's subject — the anchored premise receipt —
 //! never merely a valid graph on a matching axis. The premise carries
 //! `receipt` (∈ claim.requires) and `anchor_run` (== receipt.run, a point of

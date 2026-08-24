@@ -19,8 +19,15 @@ kind of evidence without changing its identity.
 EvidenceTransform {
     kind                  observation | resolution | replay | reduction |
                           trajectory | claim
-    source                the content address / id of the evidence consumed
-                          (run id, residual id, series id, premise receipt id)
+    source                the SINGLE content address / id of the evidence
+                          consumed (run id, residual id, series id) — absent
+                          when the transform consumes a SET
+    source_set            the content address of the COMPLETE canonical
+                          dependency set (frf-claim-v13): the claim transform
+                          names its full input set — observations, receipts,
+                          trajectories, challenges, witnesses, independence,
+                          universe — as the ClaimInputs identity
+                          (FRF/CLAIM-INPUTS/v1)
     varying_dimensions    what MAY change under this transform
                           (e.g. fixture for a reduction, coordinate for a
                           trajectory, candidate for a resolution)
@@ -42,7 +49,7 @@ The six instances:
 | `replay` | run | — | — | the court's relation | `observation-reproduces` |
 | `reduction` | residual | `fixture` | candidate, authority, comparator, environment | the court's relation | `lineage-survives` |
 | `trajectory` | series | `coordinate` | lineage, axis, question, authority, comparator | the axis's relation | `movement-classified` |
-| `claim` | premise receipt | — | candidate, authority | `parity` | `scope-admitted` |
+| `claim` | `source_set` = ClaimInputs cid (FRF/CLAIM-INPUTS/v1) | — | candidate, authority | `parity` | `scope-admitted` |
 
 ## 2. The commitment rule
 
@@ -111,8 +118,25 @@ it a first-class derived protocol object like the reduction.
 
 ### 4.6 claim
 The compilation of premise receipts against the committed knowledge
-universe under an admission policy. The source is the first premise
-receipt; nothing varies — the claim is the scope algebra over exactly the
+universe under an admission policy (frf-claim-v13). The SOURCE is the
+COMPLETE canonical dependency set, not a first premise receipt: the claim
+transform's `source_set` is the `ClaimInputs` content address
+(`FRF/CLAIM-INPUTS/v1` over the sorted, deduplicated lists of
+observations — the runs the premises bound — premise receipts, trajectory
+documents, challenge records, witness attestations, independence evidence,
+and the committed universe's content address). The claim's inputs flow
+through ONE canonical set into the claim:
+
+```text
+observations ─┐
+receipts     ─┤
+trajectories ─┼─> ClaimInputs (FRF/CLAIM-INPUTS/v1) ─> Claim
+challenges   ─┤
+witnesses    ─┤
+universe     ─┘
+```
+
+Nothing varies — the claim is the scope algebra over exactly the
 premises, the universe, and the policy. Success is `scope-admitted`:
 `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)`, the absence scan over U is empty, and the
 policy evidence (challenge coverage, witness statements, independence,
@@ -122,7 +146,7 @@ content-addressed (`FRF/CLAIM/v1`).
 ## 5. Protocol status
 
 - Schema: the transform is a structural declaration inside the producing
-  records (`frf-reduction-v5`, `frf-trajectory-v6`, `frf-claim-v10`); it has
+  records (`frf-reduction-v5`, `frf-trajectory-v6`, `frf-claim-v13`); it has
   no standalone schema version.
 - Identity domain: `FRF/TRAJECTORY/v1` (trajectory content address).
 - The transform declaration is rederived by all three implementations

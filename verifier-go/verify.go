@@ -418,20 +418,36 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v12" {
+			if str(obj(claim), "schema_version") != "frf-claim-v13" {
 				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
 			}
-			// The transform declaration is the CLAIM transform: nothing varies
-			// — parity over the premises, committed by the content address. A
-			// relabeled claim is refused.
+			// The transform declaration is the CLAIM transform
+			// (frf-claim-v13): nothing varies — parity over the premises,
+			// committed by the content address — and its SOURCE is the
+			// COMPLETE canonical dependency set (source_set = the ClaimInputs
+			// content address), which must REDERIVE from the claim + its
+			// premise receipts in the bundle. A relabeled or
+			// under-describing claim is refused.
 			ct := obj(recVal(obj(claim), "transform"))
 			cvarying := arrStr(recVal(ct, "varying_dimensions"))
 			if str(ct, "kind") != "claim" ||
-				str(ct, "source") != str(obj(claim), "receipt") ||
+				str(ct, "source") != "" ||
+				str(ct, "source_set") == "" ||
 				len(cvarying) != 0 ||
 				str(ct, "observation_relation") != "parity" ||
 				str(ct, "success_predicate") != "scope-admitted" {
-				fail("claim %s: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted)", claimID)
+				fail("claim %s: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted; source_set = the ClaimInputs content address)", claimID)
+			}
+			// The source_set rederives: the observations are the runs the
+			// premise receipts bound (from the bundle's receipt documents).
+			var observations []string
+			for _, rid := range arr(recVal(obj(claim), "requires")) {
+				rec := obj(loadEvidence(safeJoin(bundle, "receipts/"+rid.(string)+".json")))
+				observations = append(observations, str(rec, "run"))
+			}
+			expectedInputs, err := claimInputsIdentity(obj(claim), observations)
+			if err != nil || str(ct, "source_set") != expectedInputs {
+				fail("claim %s: its transform's source_set %s is not the rederived ClaimInputs content address %s — the claim transform must name its COMPLETE canonical dependency set", claimID, str(ct, "source_set")[:16], expectedInputs[:16])
 			}
 			snapshot := obj(recVal(obj(claim), "knowledge_snapshot"))
 			expectedCID, err := knowledgeSnapshotIdentity(snapshot)
@@ -516,7 +532,7 @@ func verifyBundle(bundle string) ClaimIR {
 					fail("claim %s: the knowledge universe names an unknown object kind %s", claimID, kind)
 				}
 			}
-			// The TRAJECTORY PREMISES (frf-claim-v12): every premise's
+			// The TRAJECTORY PREMISES (frf-claim-v13): every premise's
 			// trajectory document must exist in the bundle, its content address
 			// must rederive (FRF/TRAJECTORY/v1), the copied classification must
 			// match the re-derived document, its axis must be a claimed
@@ -563,7 +579,7 @@ func verifyBundle(bundle string) ClaimIR {
 					str(t, "axis") != axis {
 					fail("claim %s: trajectory premise %s.%s.%s does not match its re-derived document", claimID, lineage, coord, sid)
 				}
-				// THE SUBJECT BINDING (frf-claim-v12).
+				// THE SUBJECT BINDING (frf-claim-v13).
 				if !containsString(requires, receiptID) {
 					fail("claim %s: trajectory premise %s.%s.%s anchors receipt %s, which is not a premise of this claim", claimID, lineage, coord, sid, receiptID)
 				}

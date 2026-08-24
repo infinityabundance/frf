@@ -298,7 +298,7 @@ fn both_verifiers_agree_on_a_multi_premise_claim_bundle() {
                 .unwrap_or(false)
         })
         .expect("the multi-premise claim");
-    assert_eq!(claim["schema_version"], "frf-claim-v12");
+    assert_eq!(claim["schema_version"], "frf-claim-v13");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt_final, receipt2])

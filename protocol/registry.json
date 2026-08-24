@@ -195,14 +195,14 @@
   {
    "id": "knowledge-snapshot",
    "meaning": "The committed evidence universe U a claim's absence scan ran over",
-   "schema": "frf-claim-v12",
+   "schema": "frf-claim-v13",
    "identity": "FRF/KNOWLEDGE/v2",
    "status": "active"
   },
   {
    "id": "claim",
-   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so \"onset in the vulnerable release, cessation in the fixed release\" is a compiled claim (movement clause) under the scope algebra. v12 BINDS every trajectory premise to its SUBJECT: the premise names the anchored premise receipt (∈ requires) whose run is a point of the series, the axis is a clean declared observable of that receipt, and the lineage rederives from the receipt's authority/fixture-family/fixture semantics — an unrelated same-axis trajectory is never a movement premise",
-   "schema": "frf-claim-v12",
+   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so \"onset in the vulnerable release, cessation in the fixed release\" is a compiled claim (movement clause) under the scope algebra. v12 BINDS every trajectory premise to its SUBJECT: the premise names the anchored premise receipt (∈ requires) whose run is a point of the series, the axis is a clean declared observable of that receipt, and the lineage rederives from the receipt's authority/fixture-family/fixture semantics — an unrelated same-axis trajectory is never a movement premise. v13 makes the claim transform COMPOSITIONAL: its source_set is the ClaimInputs content address (FRF/CLAIM-INPUTS/v1) — the complete canonical dependency set (observations, receipts, trajectories, challenges, witnesses, independence, universe) — so the claim names every input its derivation consumed, never merely its first premise",
+   "schema": "frf-claim-v13",
    "identity": "FRF/CLAIM/v1",
    "status": "active"
   },
@@ -509,6 +509,11 @@
    "status": "active"
   },
   {
+   "domain": "FRF/CLAIM-INPUTS/v1",
+   "meaning": "The complete canonical dependency set of a claim's derivation (frf-claim-v13): the sorted, deduplicated lists of observations (runs), premise receipts, trajectory documents, challenge records, witness attestations, independence evidence, and the committed universe's content address — the claim transform's source_set",
+   "status": "active"
+  },
+  {
    "domain": "FRF/CLAIM/v1",
    "meaning": "Compiled claim identity (over the canonical document minus the id)",
    "status": "active"
@@ -601,6 +606,10 @@
   },
   {
    "id": "frf-claim-v12",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-claim-v13",
    "status": "active"
   },
   {

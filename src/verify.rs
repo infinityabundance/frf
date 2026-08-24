@@ -2419,7 +2419,7 @@ pub fn verify_knowledge_universe(store: &Store, universe: &KnowledgeSnapshot) ->
 /// 7. the derived projections (`observable_scope`, `excluded_evidence`)
 ///    rederive.
 ///
-/// THE SUBJECT BINDING of a trajectory premise (frf-claim-v12): the premise
+/// THE SUBJECT BINDING of a trajectory premise (frf-claim-v13): the premise
 /// names the anchored premise receipt the movement is evidence about. This
 /// is the check that makes a movement premise about the SAME subject as the
 /// claim — two independently valid trajectories on the same axis about
@@ -2530,21 +2530,80 @@ pub fn verify_trajectory_premise_binding(
     Ok(())
 }
 
+/// The COMPLETE canonical dependency set of a claim's derivation
+/// (frf-claim-v13): sorted, deduplicated content-identity lists derived from
+/// the claim and its verified premise receipts — the observations (the runs
+/// the premises bound), the premise receipts, the trajectory documents, the
+/// challenge records, the witness attestations, the independence evidence,
+/// and the committed universe. The claim's transform names this set's
+/// content address as its `source_set`, so the transform graph is genuinely
+/// compositional — a claim whose transform names a different set is not the
+/// derivation it claims to be.
+pub fn claim_inputs(
+    claim: &crate::model::ClaimRecord,
+    premises: &[ReceiptVerified],
+) -> Result<crate::model::ClaimInputs> {
+    use crate::model::ClaimInputs;
+    let mut observations: Vec<String> = premises.iter().map(|p| p.body().run.clone()).collect();
+    observations.sort();
+    observations.dedup();
+    let mut receipts = claim.requires.clone();
+    receipts.sort();
+    receipts.dedup();
+    let mut trajectories: Vec<String> = claim
+        .trajectory_premises
+        .iter()
+        .map(|p| p.trajectory.clone())
+        .collect();
+    trajectories.sort();
+    trajectories.dedup();
+    let mut challenges: Vec<String> = claim
+        .capability
+        .iter()
+        .flat_map(|c| c.challenge_ids.clone())
+        .collect();
+    challenges.sort();
+    challenges.dedup();
+    let mut witnesses = claim.witness_statements.clone();
+    witnesses.sort();
+    witnesses.dedup();
+    let mut independence = claim.independence_evidence.clone();
+    independence.sort();
+    independence.dedup();
+    let mut inputs = ClaimInputs {
+        cid: String::new(),
+        observations,
+        receipts,
+        trajectories,
+        challenges,
+        witnesses,
+        independence,
+        universe: claim.knowledge_snapshot.cid.clone(),
+    };
+    inputs.cid = crate::semantics::claim_inputs_identity(&inputs)?;
+    Ok(inputs)
+}
+
 pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     let claim = store.load_claim(id)?;
 
-    // 1.5 The transform declaration is the CLAIM transform: nothing varies
-    //     — parity over the premises, committed by the content address. A
-    //     claim whose declaration was relabeled is not evidence.
+    // 1.5 The transform declaration is the CLAIM transform (frf-claim-v13):
+    //     nothing varies — parity over the premises, committed by the content
+    //     address — and its SOURCE is the complete canonical dependency set
+    //     (source_set = the ClaimInputs content address), never a single
+    //     first premise. A claim whose declaration was relabeled is not
+    //     evidence. The full source_set rederivation happens after the
+    //     premises load (step 1.6).
     let claim_transform_ok = claim.transform.kind == "claim"
-        && claim.transform.source == claim.receipt
+        && claim.transform.source.is_none()
+        && claim.transform.source_set.is_some()
         && claim.transform.varying_dimensions.is_empty()
         && claim.transform.invariant_dimensions == ["candidate", "authority"]
         && claim.transform.observation_relation == "parity"
         && claim.transform.success_predicate == "scope-admitted";
     if !claim_transform_ok {
         return Err(FrfError::new(format!(
-            "claim {id}: its transform declaration is not the claim transform (nothing varies; parity over the premises; scope-admitted) — a relabeled claim is not evidence"
+            "claim {id}: its transform declaration is not the claim transform (nothing varies; parity over the premises; scope-admitted; source_set = the ClaimInputs content address) — a relabeled claim is not evidence"
         )));
     }
 
@@ -2556,6 +2615,22 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     if premises.is_empty() {
         return Err(FrfError::new(format!(
             "claim {id} names no premise receipts"
+        )));
+    }
+
+    // 1.6 The transform's source_set REDERIVES: the claim transform names
+    //     the ClaimInputs content address — the complete canonical
+    //     dependency set (observations, receipts, trajectories, challenges,
+    //     witnesses, independence, universe) — and the set must rederive
+    //     from the claim and its verified premises. A claim whose transform
+    //     names a different set under-describes (or mis-describes) its own
+    //     derivation.
+    let inputs = claim_inputs(&claim, &premises)?;
+    if claim.transform.source_set.as_deref() != Some(&inputs.cid) {
+        return Err(FrfError::new(format!(
+            "claim {id}: its transform's source_set {} is not the rederived ClaimInputs content address {} — the claim transform must name its COMPLETE canonical dependency set",
+            claim.transform.source_set.as_deref().unwrap_or("<absent>"),
+            &inputs.cid[..16]
         )));
     }
     let bodies: Vec<&Receipt> = premises.iter().map(|p| p.body()).collect();
@@ -2631,7 +2706,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     //     re-derived document, its axis is a claimed observable, the
     //     movement endpoints derive from the document's observations — never
     //     from a caller-supplied label — and the premise is BOUND to its
-    //     subject (the anchored premise receipt, frf-claim-v12): an
+    //     subject (the anchored premise receipt, frf-claim-v13): an
     //     unrelated same-axis trajectory can never become a movement premise
     //     of this claim.
     for p in &claim.trajectory_premises {
@@ -2662,7 +2737,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
                 p.lineage, p.coordinate_system, p.series, p.axis
             )));
         }
-        // THE SUBJECT BINDING (frf-claim-v12): the premise names the
+        // THE SUBJECT BINDING (frf-claim-v13): the premise names the
         // anchored premise receipt whose run is a point of the series, the
         // axis is a clean declared observable of that receipt, and the
         // lineage rederives from the anchored receipt's subject semantics.

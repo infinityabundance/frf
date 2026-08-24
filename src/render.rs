@@ -47,7 +47,7 @@ impl<'a> RenderView<'a> {
         let claim = verified.claim();
         let premises = verified.premises();
         // The movement prose attributes each movement to its OWN anchored
-        // receipt's authority (frf-claim-v12), never to the first premise's.
+        // receipt's authority (frf-claim-v13), never to the first premise's.
         let authority_of: std::collections::HashMap<String, String> = premises
             .iter()
             .map(|p| {

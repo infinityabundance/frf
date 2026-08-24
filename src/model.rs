@@ -219,7 +219,7 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v20";
 /// `claimed observables(K) ⊆ demonstrated-sensitive observables(C)` is
 /// policy-checkable per family — and still bounded (a demonstrated family is
 /// never a universal-correctness claim).
-pub const SCHEMA_CLAIM: &str = "frf-claim-v12";
+pub const SCHEMA_CLAIM: &str = "frf-claim-v13";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -4435,8 +4435,23 @@ pub struct EvidenceTransform {
     /// `observation` | `resolution` | `replay` | `trajectory` | `reduction`
     /// | `claim`.
     pub kind: String,
-    /// The source evidence this transform consumes (run id / residual id).
-    pub source: String,
+    /// The SINGLE source evidence this transform consumes (run id / residual
+    /// id / series id): the observation/resolution/replay/reduction/
+    /// trajectory transforms each consume ONE source. The CLAIM transform
+    /// consumes a SET instead — see [`EvidenceTransform::source_set`] — so
+    /// `source` is absent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The COMPLETE canonical dependency SET of a set-consuming transform
+    /// (frf-claim-v13): the claim transform names its full input set as a
+    /// content address — `ClaimInputs` (receipts, the observations they
+    /// bound, the trajectory documents, the challenge records, the witness
+    /// attestations, the independence evidence, and the committed universe),
+    /// canonically sorted and deduplicated — so the transform graph is
+    /// genuinely compositional: the claim names EVERY input its derivation
+    /// consumed, not merely its first premise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_set: Option<String>,
     /// Dimensions that MAY change under this transform (e.g. `fixture` for a
     /// reduction, `candidate` for a resolution).
     pub varying_dimensions: Vec<String>,
@@ -4457,7 +4472,8 @@ impl EvidenceTransform {
     pub fn observation(run: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "observation".to_string(),
-            source: run.to_string(),
+            source: Some(run.to_string()),
+            source_set: None,
             varying_dimensions: vec![],
             invariant_dimensions: vec![],
             observation_relation: relation.to_string(),
@@ -4469,7 +4485,8 @@ impl EvidenceTransform {
     pub fn resolution(run: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "resolution".to_string(),
-            source: run.to_string(),
+            source: Some(run.to_string()),
+            source_set: None,
             varying_dimensions: vec!["candidate".to_string()],
             invariant_dimensions: vec![
                 "question".to_string(),
@@ -4488,7 +4505,8 @@ impl EvidenceTransform {
     pub fn replay(run: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "replay".to_string(),
-            source: run.to_string(),
+            source: Some(run.to_string()),
+            source_set: None,
             varying_dimensions: vec![],
             invariant_dimensions: vec![],
             observation_relation: relation.to_string(),
@@ -4501,7 +4519,8 @@ impl EvidenceTransform {
     pub fn reduction(residual: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "reduction".to_string(),
-            source: residual.to_string(),
+            source: Some(residual.to_string()),
+            source_set: None,
             varying_dimensions: vec!["fixture".to_string()],
             invariant_dimensions: vec![
                 "candidate".to_string(),
@@ -4523,7 +4542,8 @@ impl EvidenceTransform {
     pub fn trajectory(series: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "trajectory".to_string(),
-            source: series.to_string(),
+            source: Some(series.to_string()),
+            source_set: None,
             varying_dimensions: vec!["coordinate".to_string()],
             invariant_dimensions: vec![
                 "lineage".to_string(),
@@ -4537,20 +4557,62 @@ impl EvidenceTransform {
         }
     }
 
-    /// The transform a CLAIM is: nothing varies — the claim is the scope
-    /// algebra over exactly the premises, the committed universe, and the
-    /// admission policy. The claim record declares this transform and is
-    /// content-addressed (`FRF/CLAIM/v1`).
-    pub fn claim(receipt: &str, relation: &str) -> EvidenceTransform {
+    /// The transform a CLAIM is (frf-claim-v13): nothing varies — the claim
+    /// is the scope algebra over exactly the premises, the committed
+    /// universe, and the admission policy — and its SOURCE is the COMPLETE
+    /// canonical dependency set: `source_set` is the content address of the
+    /// [`ClaimInputs`] (receipts, observations, trajectories, challenges,
+    /// witnesses, independence, universe). The claim record declares this
+    /// transform and is content-addressed (`FRF/CLAIM/v1`).
+    pub fn claim(inputs_cid: &str, relation: &str) -> EvidenceTransform {
         EvidenceTransform {
             kind: "claim".to_string(),
-            source: receipt.to_string(),
+            source: None,
+            source_set: Some(inputs_cid.to_string()),
             varying_dimensions: vec![],
             invariant_dimensions: vec!["candidate".to_string(), "authority".to_string()],
             observation_relation: relation.to_string(),
             success_predicate: "scope-admitted".to_string(),
         }
     }
+}
+
+/// THE COMPLETE CANONICAL DEPENDENCY SET of a claim's derivation
+/// (frf-claim-v13): every direct input the claim transform consumed, as
+/// sorted, deduplicated content-identity lists — receipts, the observations
+/// (runs) they bound, the trajectory documents, the challenge records, the
+/// witness attestations, the independence evidence, and the committed
+/// universe. `cid` is `FRF/CLAIM-INPUTS/v1` over the canonical document of
+/// the lists, so the claim's transform names its ENTIRE input set by
+/// content: the transform graph is compositional — observations, receipts,
+/// trajectories, challenges, witnesses, and the universe flow into ONE
+/// canonical set that flows into the claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimInputs {
+    /// Content address: `FRF/CLAIM-INPUTS/v1` over the canonical document of
+    /// the sorted dependency lists below.
+    pub cid: String,
+    /// The OBSERVATIONS: the runs the premise receipts bound (each receipt's
+    /// run, sorted and deduplicated — identical evidence shares the run).
+    pub observations: Vec<String>,
+    /// The premise receipts (the claim's `requires`, sorted).
+    pub receipts: Vec<String>,
+    /// The trajectory documents the movement premises derive from (their
+    /// content addresses, sorted).
+    pub trajectories: Vec<String>,
+    /// The challenge records a sensitivity-bearing policy demanded (the union
+    /// of the capability entries' challenge ids, sorted).
+    pub challenges: Vec<String>,
+    /// The witness attestations an independently-witnessed policy demanded
+    /// (sorted).
+    pub witnesses: Vec<String>,
+    /// The declared independence evidence bound to those attestations
+    /// (sorted).
+    pub independence: Vec<String>,
+    /// The committed evidence universe the absence scan ran over (the
+    /// knowledge snapshot's content address).
+    pub universe: String,
 }
 
 /// One series snapshot: the ordered points of ONE experiment at ONE moment
@@ -6016,7 +6078,7 @@ pub struct ClaimRecord {
 // Knowledge snapshot — the evidence universe of a claim's absence search
 // ---------------------------------------------------------------------------
 
-/// ONE trajectory premise of a compiled claim (frf-claim-v12): a verified
+/// ONE trajectory premise of a compiled claim (frf-claim-v13): a verified
 /// MOVEMENT of one lineage over one coordinate system, bound to the claim's
 /// SUBJECT. The trajectory document is content-addressed
 /// (`FRF/TRAJECTORY/v1`) and re-derives from its pinned series; the premise

@@ -1843,18 +1843,23 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v12" {
+            if as_str(&claim["schema_version"]) != "frf-claim-v13" {
                 panic!(
                     "claim {claim_id}: unexpected schema version {}",
                     as_str(&claim["schema_version"])
                 );
             }
-            // The transform declaration is the CLAIM transform: nothing
-            // varies — parity over the premises, committed by the content
-            // address. A relabeled claim is refused.
+            // The transform declaration is the CLAIM transform
+            // (frf-claim-v13): nothing varies — parity over the premises,
+            // committed by the content address — and its SOURCE is the
+            // COMPLETE canonical dependency set (source_set = the ClaimInputs
+            // content address), which must REDERIVE from the claim + its
+            // premise receipts in the bundle. A relabeled or under-describing
+            // claim is refused.
             let ct = &claim["transform"];
             if as_str(&ct["kind"]) != "claim"
-                || as_str(&ct["source"]) != as_str(&claim["receipt"])
+                || ct.get("source").is_some()
+                || as_str(&ct["source_set"]).is_empty()
                 || !ct["varying_dimensions"]
                     .as_array()
                     .map(|a| a.is_empty())
@@ -1863,7 +1868,25 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                 || as_str(&ct["success_predicate"]) != "scope-admitted"
             {
                 panic!(
-                    "claim {claim_id}: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted)"
+                    "claim {claim_id}: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted; source_set = the ClaimInputs content address)"
+                );
+            }
+            // The source_set rederives: the observations are the runs the
+            // premise receipts bound (from the bundle's receipt documents).
+            let mut observations: Vec<String> = Vec::new();
+            if let Some(requires) = claim["requires"].as_array() {
+                for rid in requires {
+                    let rec =
+                        load_evidence(&safe_rel(bundle, &format!("receipts/{}.json", as_str(rid))));
+                    observations.push(as_str(&rec["run"]).to_string());
+                }
+            }
+            let expected_inputs = rederive::claim_inputs_identity(&claim, &observations);
+            if as_str(&ct["source_set"]) != expected_inputs {
+                panic!(
+                    "claim {claim_id}: its transform's source_set {} is not the rederived ClaimInputs content address {} — the claim transform must name its COMPLETE canonical dependency set",
+                    &as_str(&ct["source_set"])[..16],
+                    &expected_inputs[..16]
                 );
             }
             let snapshot = &claim["knowledge_snapshot"];
@@ -2073,7 +2096,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     }
                 }
             }
-            // 7b. The TRAJECTORY PREMISES (frf-claim-v12): every premise's
+            // 7b. The TRAJECTORY PREMISES (frf-claim-v13): every premise's
             //     trajectory document must exist in the bundle, its content
             //     address must rederive (FRF/TRAJECTORY/v1), the copied
             //     classification must match the re-derived document, its
@@ -2137,7 +2160,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                             "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} does not match its re-derived document"
                         );
                     }
-                    // THE SUBJECT BINDING (frf-claim-v12).
+                    // THE SUBJECT BINDING (frf-claim-v13).
                     if !requires.contains(&receipt_id) {
                         panic!(
                             "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchors receipt {receipt_id}, which is not a premise of this claim"

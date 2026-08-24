@@ -854,6 +854,48 @@ pub fn knowledge_snapshot_identity(snapshot: &Value) -> String {
     preimage("FRF/KNOWLEDGE/v2", &doc)
 }
 
+/// The claim's COMPLETE canonical dependency set identity (frf-claim-v13):
+/// `FRF/CLAIM-INPUTS/v1` over the sorted, deduplicated lists of
+/// observations (the runs the premise receipts bound — passed in, since the
+/// runs live in the receipt documents), premise receipts, trajectory
+/// documents, challenge records, witness attestations, independence
+/// evidence, and the committed universe's content address. Mirrors the
+/// reference engine's `semantics::claim_inputs_identity`; the claim
+/// transform names this as its `source_set`.
+pub fn claim_inputs_identity(claim: &Value, observations: &[String]) -> String {
+    let sorted = |mut v: Vec<String>| {
+        v.sort();
+        v.dedup();
+        v
+    };
+    let strings = |a: Option<&Vec<Value>>| -> Vec<String> {
+        a.map(|v| v.iter().map(|x| s(x).to_string()).collect())
+            .unwrap_or_default()
+    };
+    let mut trajectories: Vec<String> = Vec::new();
+    for p in claim["trajectory_premises"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        trajectories.push(s(&p["trajectory"]).to_string());
+    }
+    let mut challenges: Vec<String> = Vec::new();
+    for cap in claim["capability"].as_array().cloned().unwrap_or_default() {
+        challenges.extend(strings(cap["challenge_ids"].as_array()));
+    }
+    let doc = json!({
+        "observations": sorted(observations.to_vec()),
+        "receipts": sorted(strings(claim["requires"].as_array())),
+        "trajectories": sorted(trajectories),
+        "challenges": sorted(challenges),
+        "witnesses": sorted(strings(claim["witness_statements"].as_array())),
+        "independence": sorted(strings(claim["independence_evidence"].as_array())),
+        "universe": s(&claim["knowledge_snapshot"]["cid"]),
+    });
+    preimage("FRF/CLAIM-INPUTS/v1", &doc)
+}
+
 /// The deterministic ordered-axis classification: drift, slew, localization,
 /// bands, trend, and magnitude kind. Mirrors the reference engine's
 /// trajectory::classify (frf-trajectory-v4): the stratified axes get

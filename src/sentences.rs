@@ -96,7 +96,7 @@ pub fn non_claims(fixture_family: &str) -> Vec<String> {
     ]
 }
 
-/// The MOVEMENT sentences of a claim's trajectory premises (frf-claim-v12):
+/// The MOVEMENT sentences of a claim's trajectory premises (frf-claim-v13):
 /// one per premise, rendering the compiled movement — "onset in the
 /// vulnerable release, cessation in the fixed release" — from the premise's
 /// DERIVED endpoints, attributed to the exact candidate artifact series the

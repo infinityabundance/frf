@@ -7,14 +7,16 @@ sentence — and written to `claims/<claim-id>.json` with a by-receipt index at
 `claims/by-receipt/<first-premise-receipt>/<claim-id>` (or rendered canonically
 with `--json`).
 
-The claim schema is `frf-claim-v12` (v9 added the sensitivity mutation
+The claim schema is `frf-claim-v13` (v9 added the sensitivity mutation
 profile; v10 declared the claim's EVIDENCE TRANSFORM — nothing varies,
 parity over the premises, `scope-admitted` — committed by the content
 address, spec/transform.md; v11 admits TRAJECTORY PREMISES: verified
 movements of lineages over coordinate systems, so "onset in the vulnerable
 release, cessation in the fixed release" is a COMPILED claim under the
 scope algebra, not prose; v12 BINDS every trajectory premise to its
-SUBJECT). The core of the protocol is the paper's
+SUBJECT; v13 makes the claim transform COMPOSITIONAL — its source_set is
+the ClaimInputs content address, the complete canonical dependency set).
+The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of
 knowledge:
 
@@ -89,7 +91,7 @@ the admission from the claim alone (the independent verifiers do).
 ClaimRecord {
     id                 content address: FRF/CLAIM/v1 over the canonical
                        document minus the id (Section 0)
-    schema_version     frf-claim-v12
+    schema_version     frf-claim-v13
     receipt            the FIRST premise receipt (the claim's root into the
                        evidence graph; the by-receipt index maps it)
     authority          prose id of the admitted reference (all premises bind
@@ -130,10 +132,13 @@ ClaimRecord {
                        parity claim is about. The proposition renders the
                        movement ("onset in …, cessation in …")
     transform          the EVIDENCE TRANSFORM declaration (v10): kind=claim,
-                       source=the first premise receipt, nothing varies,
-                       invariant={candidate, authority}, relation=parity,
-                       success=scope-admitted — committed by the claim's
-                       content address (spec/transform.md)
+                       source_set=the ClaimInputs content address
+                       (FRF/CLAIM-INPUTS/v1 — the complete canonical
+                       dependency set: observations, receipts, trajectories,
+                       challenges, witnesses, independence, universe), nothing
+                       varies, invariant={candidate, authority},
+                       relation=parity, success=scope-admitted — committed
+                       by the claim's content address (spec/transform.md)
     knowledge_snapshot U — the evidence universe the absence search ran over
     policy             the admission policy (Section 0)
     mutation_profile   the REQUIRED sensitivity mutation profile: the
@@ -171,7 +176,7 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v12
+    schema_version     frf-claim-v13
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

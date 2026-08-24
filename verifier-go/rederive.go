@@ -968,6 +968,65 @@ func knowledgeSnapshotIdentity(snapshot *jcs.Object) (string, error) {
 	return hashPreimage("FRF/KNOWLEDGE/v2", doc)
 }
 
+// claimInputsIdentity — the claim's COMPLETE canonical dependency set
+// identity (frf-claim-v13): FRF/CLAIM-INPUTS/v1 over the sorted, deduplicated
+// lists of observations (the runs the premise receipts bound — passed in,
+// since the runs live in the receipt documents), premise receipts,
+// trajectory documents, challenge records, witness attestations, independence
+// evidence, and the committed universe's content address. Mirrors the
+// reference engine's semantics::claim_inputs_identity; the claim transform
+// names this as its source_set.
+func claimInputsIdentity(claim *jcs.Object, observations []string) (string, error) {
+	sorted := func(v []string) []jcs.Value {
+		sort.Strings(v)
+		var out []jcs.Value
+		var prev string
+		for i, x := range v {
+			if i > 0 && x == prev {
+				continue
+			}
+			out = append(out, x)
+			prev = x
+		}
+		return out
+	}
+	stringsOf := func(key string) []string {
+		var out []string
+		for _, v := range arr(recVal(claim, key)) {
+			if s, ok := v.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	var trajectories []string
+	for _, p := range arr(recVal(claim, "trajectory_premises")) {
+		trajectories = append(trajectories, str(obj(p), "trajectory"))
+	}
+	var challenges []string
+	for _, c := range arr(recVal(claim, "capability")) {
+		co := obj(c)
+		for _, cid := range arr(recVal(co, "challenge_ids")) {
+			if s, ok := cid.(string); ok {
+				challenges = append(challenges, s)
+			}
+		}
+	}
+	doc := &jcs.Object{
+		Keys: []string{"observations", "receipts", "trajectories", "challenges", "witnesses", "independence", "universe"},
+		Values: []jcs.Value{
+			sorted(observations),
+			sorted(stringsOf("requires")),
+			sorted(trajectories),
+			sorted(challenges),
+			sorted(stringsOf("witness_statements")),
+			sorted(stringsOf("independence_evidence")),
+			str(obj(recVal(claim, "knowledge_snapshot")), "cid"),
+		},
+	}
+	return hashPreimage("FRF/CLAIM-INPUTS/v1", doc)
+}
+
 // The κ routing table (spec/kappa.md): the surface/magnitude/next-court of a
 // divergence, per axis. The semantic-domain axes (external-corpus/v3) are
 // routed rows like the built-ins, mirroring the reference engine's table.
