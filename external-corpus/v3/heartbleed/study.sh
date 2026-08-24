@@ -73,8 +73,26 @@ RECEIPT_G=$("$FRF" --root ev receipt emit "$RUN_G" | tail -1)
 echo "receipt (vulnerable f): $RECEIPT_F"
 echo "receipt (fixed g):      $RECEIPT_G"
 
-step "claim: sensitivity-backed 'no leak' for the fixed release"
-"$FRF" --root ev claim compile "$RECEIPT_G" --policy sensitivity-backed
+step "claim: sensitivity-backed 'no leak' for the fixed release, compiled WITH the trajectory movement"
+# The trajectory premises (v11): the leak-observable movements over the
+# candidate_revision series — onset in 1.0.1a, cessation in 1.0.1g — are
+# COMPILED claim clauses, not prose.
+TRAJS=$(python3 - "$RUN_F" "$RUN_G" <<'PY'
+import json, os, sys
+run_f, run_g = sys.argv[1], sys.argv[2]
+root = "ev/trajectories"
+for name in sorted(os.listdir(root)):
+    if "candidate_revision" not in name:
+        continue
+    t = json.load(open(os.path.join(root, name)))
+    runs = {o["run"] for o in t["observations"]}
+    if run_f in runs and run_g in runs:
+        print(name[:-5])
+PY
+)
+TRAJ_ARGS=""
+for t in $TRAJS; do echo "trajectory premise: $t"; TRAJ_ARGS="$TRAJ_ARGS --trajectory $t"; done
+"$FRF" --root ev claim compile "$RECEIPT_G" --policy sensitivity-backed $TRAJ_ARGS
 
 step "summary"
 echo "run_f=$RUN_F"

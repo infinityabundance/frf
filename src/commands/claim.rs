@@ -372,6 +372,34 @@ pub fn cell_proposition(cell: &ClaimScope) -> String {
     )
 }
 
+/// The machine-readable MOVEMENT clause of a claim's trajectory premises
+/// (frf-claim-v11) — a pure function of the premises, shared by the claim
+/// compiler and the verified loader (the claim's stored proposition must
+/// rederive).
+pub fn movement_proposition(premises: &[crate::model::TrajectoryPremise]) -> String {
+    format!(
+        "movement(cells=[{}])",
+        premises
+            .iter()
+            .map(|p| format!(
+                "{{lineage={},axis={},coordinate_system={},series={},trajectory={},drift={},slew={},localization={},bands={},onset={},cessation={}}}",
+                p.lineage,
+                p.axis,
+                p.coordinate_system,
+                p.series,
+                p.trajectory,
+                p.drift,
+                p.slew,
+                p.localization,
+                p.bands,
+                p.onset.clone().unwrap_or_default(),
+                p.cessation.clone().unwrap_or_default()
+            ))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
 /// The resolution-run hint for a premise that observed only divergences.
 fn resolution_hint(receipt: &Receipt) -> String {
     receipt
@@ -392,6 +420,7 @@ pub fn run(
     json: bool,
     policy: &str,
     mutation_profile: &str,
+    trajectory_keys: &[String],
 ) -> Result<()> {
     // The admission policy is one of the declared tiers (baseline through
     // high-assurance); a tier the engine does not know is refused, never
@@ -747,17 +776,82 @@ pub fn run(
             }
         }
     }
-    let proposition = format!(
-        "parity(cells=[{}])",
-        k_region
-            .cells
-            .iter()
-            .map(cell_proposition)
-            .collect::<Vec<_>>()
-            .join(",")
-    );
     let observable_scope = scope::region_observables(&k_region);
     let excluded_evidence = scope::region_excluded_evidence(&receipts, &k_region);
+
+    // 5b. The TRAJECTORY PREMISES (v11): every `--trajectory` key is a
+    //     verified MOVEMENT of one lineage over one coordinate system — the
+    //     trajectory document rederives from its pinned series (id +
+    //     classification + transform), its axis must be a CLAIMED observable,
+    //     and the movement endpoints (onset/cessation) are derived from the
+    //     document's observations, never read from a caller-supplied label.
+    //     "Onset in the vulnerable release, cessation in the fixed release"
+    //     is then a COMPILED claim under the scope algebra, not prose.
+    let mut trajectory_premises: Vec<crate::model::TrajectoryPremise> = Vec::new();
+    for key in trajectory_keys {
+        let mut parts = key.splitn(3, '.');
+        let (lineage, coordinate, series) = (
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+            parts.next().unwrap_or(""),
+        );
+        if lineage.is_empty() || coordinate.is_empty() || series.is_empty() {
+            return Err(FrfError::new(format!(
+                "--trajectory must be the document key {{lineage}}.{{coordinate-system}}.{{series}}, not {key:?}"
+            )));
+        }
+        crate::verify::verify_trajectory_document(store, lineage, coordinate, series).map_err(
+            |e| {
+                FrfError::new(format!(
+                    "claim refused: trajectory premise {key} is not verified evidence: {e}"
+                ))
+            },
+        )?;
+        let doc = store.load_trajectory(lineage, coordinate, series)?;
+        if !observable_scope.contains(&doc.axis) {
+            return Err(FrfError::new(format!(
+                "claim refused: trajectory premise {key} is about axis {}, which this claim does not cover ({}) — a movement premise must be about a claimed observable",
+                doc.axis,
+                observable_scope.join(", ")
+            )));
+        }
+        // The movement endpoints, derived from the document's observations:
+        // onset = the first observed coordinate; cessation = the first
+        // non-observation AFTER the last observed one (absent while the
+        // divergence is still present at the series' end).
+        let mut onset: Option<String> = None;
+        let mut last_observed: Option<usize> = None;
+        for (i, o) in doc.observations.iter().enumerate() {
+            if o.observed {
+                if onset.is_none() {
+                    onset = Some(o.coordinate.clone());
+                }
+                last_observed = Some(i);
+            }
+        }
+        let cessation = last_observed.and_then(|last| {
+            doc.observations[last + 1..]
+                .iter()
+                .find(|o| !o.observed)
+                .map(|o| o.coordinate.clone())
+        });
+        trajectory_premises.push(crate::model::TrajectoryPremise {
+            lineage: lineage.to_string(),
+            axis: doc.axis.clone(),
+            coordinate_system: doc.coordinate_system.clone(),
+            series: doc.series.clone(),
+            trajectory: doc.id.clone(),
+            drift: doc.derivation.drift.as_str().to_string(),
+            slew: doc.derivation.slew.as_str().to_string(),
+            localization: doc.derivation.localization.as_str().to_string(),
+            bands: doc.derivation.bands.clone(),
+            onset,
+            cessation,
+        });
+    }
+    trajectory_premises.sort_by(|a, b| a.lineage.cmp(&b.lineage));
+    trajectory_premises.dedup_by(|a, b| a.lineage == b.lineage && a.trajectory == b.trajectory);
+
     let positive: Vec<String> = receipts
         .iter()
         .filter_map(|r| sentences::positive_claim(r))
@@ -766,6 +860,26 @@ pub fn run(
         !positive.is_empty(),
         "validated: every premise has a clean axis"
     );
+
+    // The proposition: parity over the observed surface, PLUS the compiled
+    // movement of every trajectory premise (v11).
+    let mut proposition = format!(
+        "parity(cells=[{}])",
+        k_region
+            .cells
+            .iter()
+            .map(cell_proposition)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    if !trajectory_premises.is_empty() {
+        proposition.push_str(" + ");
+        proposition.push_str(&movement_proposition(&trajectory_premises));
+    }
+    let positive: Vec<String> = positive
+        .into_iter()
+        .chain(sentences::movement_claims(&trajectory_premises, first))
+        .collect();
 
     // The required capability set: what the admission policy demanded. The
     // claim records it, so the requirement re-derives from the claim alone.
@@ -802,6 +916,7 @@ pub fn run(
         blockers: blockers.iter().map(|(id, _, _)| id.clone()).collect(),
         excluded_evidence,
         requires: receipt_ids.to_vec(),
+        trajectory_premises,
         transform: crate::model::EvidenceTransform::claim(&receipt_ids[0], "parity"),
         knowledge_snapshot,
         policy: policy.to_string(),

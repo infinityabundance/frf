@@ -2394,6 +2394,65 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         )));
     }
 
+    // 5b. The TRAJECTORY PREMISES (v11) re-verify: every premise's trajectory
+    //     document rederives from its pinned series (id + classification +
+    //     transform), the copied fields match the re-derived document, its
+    //     axis is a claimed observable, and the movement endpoints derive
+    //     from the document's observations — never from a caller-supplied
+    //     label.
+    for p in &claim.trajectory_premises {
+        verify_trajectory_document(store, &p.lineage, &p.coordinate_system, &p.series).map_err(
+            |e| {
+                FrfError::new(format!(
+                    "claim {id}: trajectory premise {} is not verified evidence: {e}",
+                    format_args!("{}.{}.{}", p.lineage, p.coordinate_system, p.series)
+                ))
+            },
+        )?;
+        let doc = store.load_trajectory(&p.lineage, &p.coordinate_system, &p.series)?;
+        if p.trajectory != doc.id
+            || p.axis != doc.axis
+            || p.drift != doc.derivation.drift.as_str()
+            || p.slew != doc.derivation.slew.as_str()
+            || p.localization != doc.derivation.localization.as_str()
+            || p.bands != doc.derivation.bands
+        {
+            return Err(FrfError::new(format!(
+                "claim {id}: trajectory premise {}.{}.{} does not match its re-derived document — a hand-edited premise is not evidence",
+                p.lineage, p.coordinate_system, p.series
+            )));
+        }
+        if !claim.observable_scope.iter().any(|a| a == &p.axis) {
+            return Err(FrfError::new(format!(
+                "claim {id}: trajectory premise {}.{}.{} is about axis {}, which the claim does not cover — a movement premise must be about a claimed observable",
+                p.lineage, p.coordinate_system, p.series, p.axis
+            )));
+        }
+        // The movement endpoints re-derive from the observations.
+        let mut onset: Option<String> = None;
+        let mut last_observed: Option<usize> = None;
+        for (i, o) in doc.observations.iter().enumerate() {
+            if o.observed {
+                if onset.is_none() {
+                    onset = Some(o.coordinate.clone());
+                }
+                last_observed = Some(i);
+            }
+        }
+        let cessation = last_observed.and_then(|last| {
+            doc.observations[last + 1..]
+                .iter()
+                .find(|o| !o.observed)
+                .map(|o| o.coordinate.clone())
+        });
+        if p.onset != onset || p.cessation != cessation {
+            return Err(FrfError::new(format!(
+                "claim {id}: trajectory premise {}.{}.{} does not derive its movement endpoints from the document's observations — onset/cessation are derived relations, never asserted ones",
+                p.lineage, p.coordinate_system, p.series
+            )));
+        }
+    }
+
     // 6. The admission policy's evidence re-verifies (per premise).
     if claim.policy != "baseline" {
         // Capability: every claimed axis of every premise has a verified
@@ -2569,7 +2628,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     // environment label is the first premise's arch-os + digest prefix, and
     // the court + fixture family are the first premise's. A tampered
     // proposition or label is a tampered claim, not a rendering of it.
-    let expected_proposition = format!(
+    let mut expected_proposition = format!(
         "parity(cells=[{}])",
         k.cells
             .iter()
@@ -2577,6 +2636,12 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
             .collect::<Vec<_>>()
             .join(",")
     );
+    if !claim.trajectory_premises.is_empty() {
+        expected_proposition.push_str(" + ");
+        expected_proposition.push_str(&crate::commands::claim::movement_proposition(
+            &claim.trajectory_premises,
+        ));
+    }
     if claim.proposition != expected_proposition {
         return Err(FrfError::new(format!(
             "claim {id}: its proposition does not rederive from its scope — the claim does not say what its evidence says"

@@ -254,6 +254,14 @@ pub enum ClaimCmd {
         /// family, never a universal-correctness claim
         #[arg(long, value_name = "AXIS:FAMILY,…", default_value = "")]
         mutation_profile: String,
+        /// A TRAJECTORY PREMISE (repeatable): the trajectory document key
+        /// `LINEAGE.COORDINATE_SYSTEM.SERIES`. Each premise is verified (the
+        /// trajectory rederives from its pinned series) and its axis must be
+        /// a claimed observable; the claim then COMPILES the movement —
+        /// "onset in the vulnerable release, cessation in the fixed release"
+        /// — under the scope algebra instead of prose
+        #[arg(long, value_name = "LINEAGE.COORD.SERIES")]
+        trajectory: Vec<String>,
     },
     /// Render a COMPILED claim into a presentation format (prose, json,
     /// sarif, ci, badge). The target is a CLAIM id (content address) or a

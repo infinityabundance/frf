@@ -73,8 +73,29 @@ RECEIPT_CLEAN=$("$FRF" --root ev receipt emit "$RUN_CLEAN" | tail -1)
 echo "receipt (buggy): $RECEIPT_BUGGY"
 echo "receipt (clean): $RECEIPT_CLEAN"
 
-step "claim: sensitivity-backed 'no acceptance of tampered records' for the fixed verifier"
-"$FRF" --root ev claim compile "$RECEIPT_CLEAN" --policy sensitivity-backed
+step "claim: sensitivity-backed 'no acceptance of tampered records' for the fixed verifier, compiled WITH the trajectory movement"
+# The trajectory premise (v11): the tls.verdict movement over the
+# candidate_revision series — onset in the buggy build, cessation in the
+# fixed build — is a COMPILED claim clause, not prose.
+TRAJ=$(python3 - "$RUN_BUGGY" "$RUN_CLEAN" <<'PY'
+import json, os, sys
+run_buggy, run_clean = sys.argv[1], sys.argv[2]
+root = "ev/trajectories"
+for name in sorted(os.listdir(root)):
+    # lineage.coordinate_system.series.json — pick the candidate_revision
+    # trajectory whose series spans both runs.
+    if "candidate_revision" not in name:
+        continue
+    t = json.load(open(os.path.join(root, name)))
+    runs = {o["run"] for o in t["observations"]}
+    if run_buggy in runs and run_clean in runs:
+        print(name[:-5])
+        sys.exit(0)
+sys.exit(1)
+PY
+)
+echo "trajectory premise: $TRAJ"
+"$FRF" --root ev claim compile "$RECEIPT_CLEAN" --policy sensitivity-backed --trajectory "$TRAJ"
 
 step "summary"
 echo "run_buggy=$RUN_BUGGY"

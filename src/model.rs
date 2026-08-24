@@ -219,7 +219,7 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v20";
 /// `claimed observables(K) ⊆ demonstrated-sensitive observables(C)` is
 /// policy-checkable per family — and still bounded (a demonstrated family is
 /// never a universal-correctness claim).
-pub const SCHEMA_CLAIM: &str = "frf-claim-v10";
+pub const SCHEMA_CLAIM: &str = "frf-claim-v11";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -5941,6 +5941,15 @@ pub struct ClaimRecord {
     /// Claim IR — the premise receipts: admission is
     /// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` over these.
     pub requires: Vec<String>,
+    /// Claim IR (v11) — the TRAJECTORY PREMISES: each is a verified movement
+    /// of one lineage over one coordinate system (the trajectory content
+    /// address + the derived classification), so "onset in the vulnerable
+    /// release, cessation in the fixed release" is a COMPILED claim under
+    /// the scope algebra, not prose. Every premise re-verifies on read (the
+    /// trajectory document rederives from its pinned series) and its axis
+    /// must be a claimed observable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trajectory_premises: Vec<TrajectoryPremise>,
     /// The transform declaration: nothing varies — the claim is the scope
     /// algebra over exactly the premises, the committed universe, and the
     /// admission policy (`parity` / `scope-admitted`). Committed by the
@@ -6002,6 +6011,42 @@ pub struct ClaimRecord {
 // ---------------------------------------------------------------------------
 // Knowledge snapshot — the evidence universe of a claim's absence search
 // ---------------------------------------------------------------------------
+
+/// ONE trajectory premise of a compiled claim (frf-claim-v11): a verified
+/// MOVEMENT of one lineage over one coordinate system. The trajectory
+/// document is content-addressed (`FRF/TRAJECTORY/v1`) and re-derives from
+/// its pinned series; the premise copies the derived classification so the
+/// claim's proposition renders the movement (onset/cessation) without
+/// re-reading prose — verification checks every copied field against the
+/// re-derived document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrajectoryPremise {
+    /// The residual lineage identity — the stable subject of the movement.
+    pub lineage: String,
+    /// The observable axis the movement is about (a claimed observable).
+    pub axis: String,
+    /// The coordinate system the movement is over (`repeat_index`,
+    /// `candidate_revision`, `authority_version`, `environment`, `time`).
+    pub coordinate_system: String,
+    /// The pinned ExecutionSeries the movement was derived from.
+    pub series: String,
+    /// The trajectory content address (`FRF/TRAJECTORY/v1`).
+    pub trajectory: String,
+    /// The derived classification (copied from the re-derived document).
+    pub drift: String,
+    pub slew: String,
+    pub localization: String,
+    pub bands: String,
+    /// The movement ENDPOINTS, DERIVED from the document's observations: the
+    /// coordinate of the FIRST observed divergence (onset), and the
+    /// coordinate of the first non-observation AFTER the last observed one
+    /// (cessation — absent while the divergence is still present at the
+    /// series' end). "Onset in the vulnerable release, cessation in the
+    /// fixed release" is this pair, rendered from the verified premise.
+    pub onset: Option<String>,
+    pub cessation: Option<String>,
+}
 
 /// One residual head in the knowledge universe: the residual id, its
 /// RECORD CONTENT ADDRESS (the canonical hash of the immutable residual

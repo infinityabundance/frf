@@ -1663,7 +1663,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v10" {
+            if as_str(&claim["schema_version"]) != "frf-claim-v11" {
                 panic!(
                     "claim {claim_id}: unexpected schema version {}",
                     as_str(&claim["schema_version"])
@@ -1890,6 +1890,59 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                         other => {
                             panic!("claim {receipt_id}: the knowledge universe names an unknown object kind {other:?}");
                         }
+                    }
+                }
+            }
+            // 7b. The TRAJECTORY PREMISES (frf-claim-v11): every premise's
+            //     trajectory document must exist in the bundle, its content
+            //     address must rederive (FRF/TRAJECTORY/v1), the copied
+            //     classification must match the re-derived document, and its
+            //     axis must be a claimed observable.
+            if let Some(premises) = claim["trajectory_premises"].as_array() {
+                let scope: Vec<&str> = claim["observable_scope"]
+                    .as_array()
+                    .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect())
+                    .unwrap_or_default();
+                for p in premises {
+                    let lineage = as_str(&p["lineage"]);
+                    let coord = as_str(&p["coordinate_system"]);
+                    let sid = as_str(&p["series"]);
+                    let t = load_evidence(&safe_rel(
+                        bundle,
+                        &format!("trajectories/{lineage}.{coord}.{sid}.json"),
+                    ));
+                    if !scope.iter().any(|a| *a == as_str(&p["axis"])) {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} is about axis {}, which the claim does not cover",
+                            as_str(&p["axis"])
+                        );
+                    }
+                    if as_str(&t["id"]) != as_str(&p["trajectory"]) {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} does not name its re-derived trajectory document"
+                        );
+                    }
+                    let mut tdoc = t.clone();
+                    if let Some(obj) = tdoc.as_object_mut() {
+                        obj.remove("id");
+                    }
+                    let tcanon = encode(&tdoc).unwrap_or_else(|e| {
+                        panic!("claim {receipt_id}: cannot canonicalize trajectory: {e}")
+                    });
+                    let trederived =
+                        sha256_bytes(format!("FRF/TRAJECTORY/v1\n{tcanon}").as_bytes());
+                    if as_str(&t["id"]) != trederived {
+                        panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} is not content-addressed");
+                    }
+                    if as_str(&t["derivation"]["drift"]) != as_str(&p["drift"])
+                        || as_str(&t["derivation"]["slew"]) != as_str(&p["slew"])
+                        || as_str(&t["derivation"]["localization"]) != as_str(&p["localization"])
+                        || as_str(&t["derivation"]["bands"]) != as_str(&p["bands"])
+                        || as_str(&t["axis"]) != as_str(&p["axis"])
+                    {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} does not match its re-derived document"
+                        );
                     }
                 }
             }

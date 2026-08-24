@@ -204,7 +204,7 @@ fn sensitivity_backed_requires_challenge_coverage_per_claimed_axis() {
         .iter()
         .find(|c| c["policy"] == "sensitivity-backed")
         .expect("the sensitivity-backed claim");
-    assert_eq!(claim["schema_version"], "frf-claim-v10");
+    assert_eq!(claim["schema_version"], "frf-claim-v11");
     assert_eq!(claim["policy"], "sensitivity-backed");
     assert_eq!(claim["observable_scope"], serde_json::json!(["exit"]));
     let capability = claim["capability"].as_array().unwrap();
@@ -370,7 +370,7 @@ fn sensitivity_backed_mutation_profile_names_the_demonstrated_families() {
                 && c["mutation_profile"] == serde_json::json!(["exit:exit-class"])
         })
         .expect("the profile-bound claim");
-    assert_eq!(claim["schema_version"], "frf-claim-v10");
+    assert_eq!(claim["schema_version"], "frf-claim-v11");
     assert_eq!(
         claim["mutation_profile"],
         serde_json::json!(["exit:exit-class"])
@@ -637,7 +637,7 @@ fn multi_premise_claim_compiles_under_the_region_algebra() {
     assert_success(&out, "multi-premise claim");
     let claim: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(claim_path(&work, &receipt)).unwrap()).unwrap();
-    assert_eq!(claim["schema_version"], "frf-claim-v10");
+    assert_eq!(claim["schema_version"], "frf-claim-v11");
     assert_eq!(
         claim["requires"],
         serde_json::json!([receipt, receipt2]),

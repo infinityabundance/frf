@@ -49,6 +49,10 @@ impl<'a> RenderView<'a> {
         let positive: Vec<String> = premises
             .iter()
             .filter_map(|p| crate::sentences::positive_claim(p.body()))
+            .chain(crate::sentences::movement_claims(
+                &claim.trajectory_premises,
+                premises[0].body(),
+            ))
             .collect();
         if positive.is_empty() {
             return Err(FrfError::new(format!(
@@ -246,6 +250,7 @@ mod tests {
             blockers: Vec::new(),
             excluded_evidence: vec!["cli-text-0001".to_string()],
             requires: vec!["receipt-run-x-abc".to_string()],
+            trajectory_premises: Vec::new(),
             transform: EvidenceTransform::claim("receipt-run-x-abc", "parity"),
             knowledge_snapshot: KnowledgeSnapshot {
                 schema_version: SCHEMA_CLAIM.to_string(),

@@ -195,14 +195,14 @@
   {
    "id": "knowledge-snapshot",
    "meaning": "The committed evidence universe U a claim's absence scan ran over",
-   "schema": "frf-claim-v10",
+   "schema": "frf-claim-v11",
    "identity": "FRF/KNOWLEDGE/v2",
    "status": "active"
   },
   {
    "id": "claim",
-   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address",
-   "schema": "frf-claim-v10",
+   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so \"onset in the vulnerable release, cessation in the fixed release\" is a compiled claim (movement clause) under the scope algebra",
+   "schema": "frf-claim-v11",
    "identity": "FRF/CLAIM/v1",
    "status": "active"
   },
@@ -593,6 +593,10 @@
   },
   {
    "id": "frf-claim-v10",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-claim-v11",
    "status": "active"
   },
   {

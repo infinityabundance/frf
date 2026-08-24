@@ -121,8 +121,8 @@ not these tables.
 | challenge | Court capability evidence: a seeded defect the court demonstrated it can see | frf-challenge-v1 · FRF/CHALLENGE/v1 | active |
 | witness-statement | Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence — independence is the separate `independence` object | frf-witness-statement-v3 · FRF/WITNESS-STATEMENT/v1 | active |
 | independence | Declared independence relation about a witness attestation, with its basis | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
-| knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v10 · FRF/KNOWLEDGE/v2 | active |
-| claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address | frf-claim-v10 · FRF/CLAIM/v1 | active |
+| knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v11 · FRF/KNOWLEDGE/v2 | active |
+| claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so "onset in the vulnerable release, cessation in the fixed release" is a compiled claim (movement clause) under the scope algebra | frf-claim-v11 · FRF/CLAIM/v1 | active |
 | receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds) | frf-receipt-v20 | active |
 | runtime-closure | The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment | frf-runtime-closure-v1 · FRF/RUNTIME-CLOSURE/v1 | active |
 | bundle | Portable closure of referenced evidence (directory or single tar) | frf-bundle-v3 | active |
@@ -207,7 +207,8 @@ not these tables.
 | frf-capture-v15 | active |  |
 | frf-challenge-v1 | active |  |
 | frf-ci-status-v1 | active |  |
-| frf-claim-v10 | active |  |
+| frf-claim-v10 | superseded |  |
+| frf-claim-v11 | active |  |
 | frf-claim-v7 | superseded |  |
 | frf-claim-v8 | superseded |  |
 | frf-claim-v9 | superseded |  |

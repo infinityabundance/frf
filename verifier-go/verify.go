@@ -328,7 +328,7 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v10" {
+			if str(obj(claim), "schema_version") != "frf-claim-v11" {
 				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
 			}
 			// The transform declaration is the CLAIM transform: nothing varies
@@ -424,6 +424,45 @@ func verifyBundle(bundle string) ClaimIR {
 					}
 				default:
 					fail("claim %s: the knowledge universe names an unknown object kind %s", claimID, kind)
+				}
+			}
+			// The TRAJECTORY PREMISES (frf-claim-v11): every premise's
+			// trajectory document must exist in the bundle, its content address
+			// must rederive (FRF/TRAJECTORY/v1), the copied classification must
+			// match the re-derived document, and its axis must be a claimed
+			// observable.
+			co := obj(claim)
+			scope := []string{}
+			for _, a := range arr(recVal(co, "observable_scope")) {
+				scope = append(scope, a.(string))
+			}
+			for _, pv := range arr(recVal(co, "trajectory_premises")) {
+				p := obj(pv)
+				lineage := str(p, "lineage")
+				coord := str(p, "coordinate_system")
+				sid := str(p, "series")
+				axis := str(p, "axis")
+				covered := false
+				for _, a := range scope {
+					if a == axis {
+						covered = true
+						break
+					}
+				}
+				if !covered {
+					fail("claim %s: trajectory premise %s.%s.%s is about axis %s, which the claim does not cover", claimID, lineage, coord, sid, axis)
+				}
+				t := obj(loadEvidence(safeJoin(bundle, "trajectories/"+lineage+"."+coord+"."+sid+".json")))
+				if str(t, "id") != str(p, "trajectory") || str(t, "id") != trajectoryIdentity(t) {
+					fail("claim %s: trajectory premise %s.%s.%s is not content-addressed or does not name its re-derived document", claimID, lineage, coord, sid)
+				}
+				der := obj(recVal(t, "derivation"))
+				if str(der, "drift") != str(p, "drift") ||
+					str(der, "slew") != str(p, "slew") ||
+					str(der, "localization") != str(p, "localization") ||
+					str(der, "bands") != str(p, "bands") ||
+					str(t, "axis") != axis {
+					fail("claim %s: trajectory premise %s.%s.%s does not match its re-derived document", claimID, lineage, coord, sid)
 				}
 			}
 			// The claim's admission policy re-derives from the bundle alone:

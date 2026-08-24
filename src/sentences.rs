@@ -96,6 +96,42 @@ pub fn non_claims(fixture_family: &str) -> Vec<String> {
     ]
 }
 
+/// The MOVEMENT sentences of a claim's trajectory premises (frf-claim-v11):
+/// one per premise, rendering the compiled movement — "onset in the
+/// vulnerable release, cessation in the fixed release" — from the premise's
+/// DERIVED endpoints, attributed to the exact candidate artifact series the
+/// movement was observed over. Prose is a renderer of the verified IR, never
+/// stored as authoritative claim content.
+pub fn movement_claims(
+    premises: &[crate::model::TrajectoryPremise],
+    first: &Receipt,
+) -> Vec<String> {
+    let authority = format!("{}-{}", first.authority.name, first.authority.version);
+    premises
+        .iter()
+        .map(|p| {
+            let mut sentence = format!(
+                "For reference {authority}, the {} divergence is {}/{} over the {} series (localization {}, {} band(s)): it first appears at {},",
+                p.axis,
+                p.drift,
+                p.slew,
+                p.coordinate_system,
+                p.localization,
+                p.bands,
+                p.onset.clone().unwrap_or_else(|| "(none)".to_string()),
+            );
+            match &p.cessation {
+                Some(c) => sentence.push_str(&format!(
+                    " and is no longer observed from {}.",
+                    c
+                )),
+                None => sentence.push_str(" and remains present at the end of the series."),
+            }
+            sentence
+        })
+        .collect()
+}
+
 /// Refusal lines, split by level:
 ///
 /// - [`harness_refusal_lines`]: run-level — harness invalidates the evidence
