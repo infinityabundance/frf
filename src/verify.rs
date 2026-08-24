@@ -154,14 +154,81 @@ pub fn load_stream_publication_verified(
     Ok(record)
 }
 
+/// The publication manifest is a PROOF-DERIVED TRANSFORM RECORD, not merely
+/// a valid document: derive the expected manifest from (a) every VERIFIED
+/// capture in this store, (b) every capture-surface declaration, and (c) the
+/// ACTUAL publication tree — a stream's `published` flag is the tree's own
+/// state (its bytes exist, or a withholding disposition record took their
+/// place; the verified capture loader has already proved that combination is
+/// exactly the declared policy's — a missing stream without a declared
+/// withholding policy, or a withheld stream without its disposition record,
+/// refuses the capture). Exact equality with the recorded manifest is then
+/// the transform's truth: an entry whose policy, hash, or publication state
+/// lies is refused.
+pub fn derive_publication_manifest(store: &Store) -> Result<crate::model::PublicationManifest> {
+    use crate::model::{PublicationManifest, StreamDisposition};
+    let mut streams: Vec<StreamDisposition> = Vec::new();
+    let captures_dir = store.root.join("captures");
+    if captures_dir.is_dir() {
+        let mut runs: Vec<String> = std::fs::read_dir(&captures_dir)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", captures_dir.display())))?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            // Dot-prefixed entries are staging trees, not runs.
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        runs.sort();
+        for run in runs {
+            let capture = &load_capture_verified(store, &run)?.capture;
+            let dir = store.run_dir(&run)?;
+            let policy_for = |side: &str, stream: &str| -> String {
+                capture
+                    .publication_surface
+                    .as_ref()
+                    .and_then(|v| {
+                        v.iter()
+                            .find(|p| p.side == side && p.stream == stream)
+                            .map(|p| p.policy.clone())
+                    })
+                    .unwrap_or_else(|| "inline".to_string())
+            };
+            for (side, s) in [
+                ("reference", &capture.reference),
+                ("candidate", &capture.candidate),
+            ] {
+                for (stream, sha) in [("stdout", &s.stdout_sha256), ("stderr", &s.stderr_sha256)] {
+                    let published = dir.join(format!("{side}.{stream}")).is_file();
+                    streams.push(StreamDisposition {
+                        run: run.clone(),
+                        side: side.to_string(),
+                        stream: stream.to_string(),
+                        policy: policy_for(side, stream),
+                        sha256: sha.clone(),
+                        published,
+                    });
+                }
+            }
+        }
+    }
+    streams.sort_by(|a, b| (&a.run, &a.side, &a.stream).cmp(&(&b.run, &b.side, &b.stream)));
+    Ok(PublicationManifest {
+        schema_version: crate::model::SCHEMA_PUBLICATION_MANIFEST.to_string(),
+        streams,
+    })
+}
+
 /// Load + verify the publication manifest (`publication-manifest.json`, written
 /// by `publish-detached`): strict canonical JSON (duplicate property names and
 /// non-canonical bytes refused — the same discipline as every evidence
-/// document), the closed schema, and the cross-references: every stream
+/// document), the closed schema, the cross-references (every stream
 /// disposition must name a run that EXISTS in this store, and the
-/// (run, side, stream) triple is unique — a manifest cannot invent an
-/// observation and cannot record a stream twice. Absent when the store is not
-/// a publication.
+/// (run, side, stream) triple is unique), AND the EXACT DERIVATION: the
+/// recorded manifest must EQUAL the manifest rederived from all verified
+/// captures, all capture-surface declarations, and the actual publication
+/// tree ([`derive_publication_manifest`]) — a manifest that is valid but
+/// lies about a stream's policy, hash, or publication state is not the
+/// transform's record. Absent when the store is not a publication.
 pub fn load_publication_manifest_verified(
     store: &Store,
 ) -> Result<Option<crate::model::PublicationManifest>> {
@@ -200,6 +267,58 @@ pub fn load_publication_manifest_verified(
                 &d.run[..16.min(d.run.len())]
             )));
         }
+    }
+    // THE EXACT DERIVATION: the recorded manifest must be the transform's
+    // proof-derived record — exact equality with the rederived manifest, and
+    // a first-difference report that names the lying entry.
+    let expected = derive_publication_manifest(store)?;
+    if expected != manifest {
+        let mut i = 0;
+        let detail = loop {
+            let recorded = manifest.streams.get(i);
+            let derived = expected.streams.get(i);
+            if recorded != derived {
+                break match (recorded, derived) {
+                    (Some(r), Some(d))
+                        if r.run == d.run && r.side == d.side && r.stream == d.stream =>
+                    {
+                        format!(
+                            "stream {}:{} of run {}: recorded {{policy={},sha256={},published={}}} but the transform derives {{policy={},sha256={},published={}}}",
+                            r.side,
+                            r.stream,
+                            &r.run[..16.min(r.run.len())],
+                            r.policy,
+                            &r.sha256[..16],
+                            r.published,
+                            d.policy,
+                            &d.sha256[..16],
+                            d.published
+                        )
+                    }
+                    (Some(r), None) => format!(
+                        "stream {}:{} of run {} is recorded but the transform derives no such stream — the manifest invents an observation",
+                        r.side, r.stream, &r.run[..16.min(r.run.len())]
+                    ),
+                    (None, Some(d)) => format!(
+                        "stream {}:{} of run {} is MISSING from the manifest — the transform derived it from the captures",
+                        d.side, d.stream, &d.run[..16.min(d.run.len())]
+                    ),
+                    (Some(r), Some(d)) => format!(
+                        "the recorded manifest and the derived transform disagree at the stream {}:{} of run {} (recorded run {}) vs (derived run {})",
+                        r.side,
+                        r.stream,
+                        &r.run[..16.min(r.run.len())],
+                        &r.run[..16.min(r.run.len())],
+                        &d.run[..16.min(d.run.len())]
+                    ),
+                    (None, None) => unreachable!(),
+                };
+            }
+            i += 1;
+        };
+        return Err(FrfError::new(format!(
+            "the publication manifest is not the proof-derived transform record: {detail} — the manifest must EQUAL the rederived record of every verified capture's streams, declared surface policies, and actual publication state"
+        )));
     }
     Ok(Some(manifest))
 }

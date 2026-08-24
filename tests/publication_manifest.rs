@@ -323,3 +323,136 @@ fn noncanonical_whitespace_in_the_publication_manifest_is_refused() {
         "the refusal must name the canonicality violation: {err}"
     );
 }
+
+/// The publication manifest is a PROOF-DERIVED TRANSFORM RECORD (P1): it must
+/// EQUAL the manifest rederived from all verified captures, all capture-
+/// surface declarations, and the actual publication tree — a manifest that is
+/// structurally valid but LIES about a stream's policy, hash, or publication
+/// state is refused, exactly like one that invents or drops an entry.
+#[test]
+fn manifest_entry_with_a_lying_policy_is_refused() {
+    let work = Workdir::new("pubmanifest-lying-policy");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let (pub_dir, _run) = setup_publication(&work, "liepolicy");
+    let path = pub_dir.join("publication-manifest.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    // The surface declared candidate.stdout hash-only; the manifest records
+    // that policy. Rewrite it as inline: the record no longer tells the
+    // truth about the stream's disposition.
+    let entry = doc["streams"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|s| s["side"] == "candidate" && s["stream"] == "stdout")
+        .unwrap();
+    entry["policy"] = serde_json::json!("inline");
+    fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+    let pub_store = Store::new(pub_dir.clone());
+    let err = frf::verify::load_publication_manifest_verified(&pub_store)
+        .expect_err("a manifest whose policy lies must be refused")
+        .to_string();
+    assert!(
+        err.contains("not the proof-derived transform record") && err.contains("policy="),
+        "the refusal must name the derivation mismatch: {err}"
+    );
+}
+
+/// A manifest entry whose recorded stream hash lies is refused: the sha256
+/// is the observation's identity, and it rederives from the capture.
+#[test]
+fn manifest_entry_with_a_lying_hash_is_refused() {
+    let work = Workdir::new("pubmanifest-lying-hash");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let (pub_dir, _run) = setup_publication(&work, "liehash");
+    let path = pub_dir.join("publication-manifest.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let entry = doc["streams"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|s| s["side"] == "candidate" && s["stream"] == "stdout")
+        .unwrap();
+    let sha = entry["sha256"].as_str().unwrap().to_string();
+    // Flip the FIRST hex digit (the last one may already be 0).
+    let lying = format!(
+        "{}{}",
+        if sha.starts_with('0') { "1" } else { "0" },
+        &sha[1..]
+    );
+    entry["sha256"] = serde_json::json!(lying);
+    fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+    let pub_store = Store::new(pub_dir.clone());
+    let err = frf::verify::load_publication_manifest_verified(&pub_store)
+        .expect_err("a manifest whose hash lies must be refused")
+        .to_string();
+    assert!(
+        err.contains("not the proof-derived transform record") && err.contains("sha256="),
+        "the refusal must name the derivation mismatch: {err}"
+    );
+}
+
+/// A manifest entry whose publication-state flag lies is refused: whether the
+/// bytes travel is the ACTUAL publication tree's state, and the record must
+/// tell the truth about it.
+#[test]
+fn manifest_entry_with_a_lying_publication_state_is_refused() {
+    let work = Workdir::new("pubmanifest-lying-published");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let (pub_dir, _run) = setup_publication(&work, "liepublished");
+    let path = pub_dir.join("publication-manifest.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let entry = doc["streams"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|s| s["side"] == "candidate" && s["stream"] == "stdout")
+        .unwrap();
+    // The stream is withheld (hash-only) — the record says published=false.
+    // Flip it: the record now claims bytes travel that do not.
+    assert_eq!(entry["published"], serde_json::json!(false));
+    entry["published"] = serde_json::json!(true);
+    fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+    let pub_store = Store::new(pub_dir.clone());
+    let err = frf::verify::load_publication_manifest_verified(&pub_store)
+        .expect_err("a manifest whose publication state lies must be refused")
+        .to_string();
+    assert!(
+        err.contains("not the proof-derived transform record") && err.contains("published="),
+        "the refusal must name the derivation mismatch: {err}"
+    );
+}
+
+/// A manifest that drops a real stream's disposition is refused: the
+/// transform derived the entry from the captures, and the recorded manifest
+/// must carry every one.
+#[test]
+fn manifest_missing_a_stream_entry_is_refused() {
+    let work = Workdir::new("pubmanifest-missing-entry");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let (pub_dir, _run) = setup_publication(&work, "missingentry");
+    let path = pub_dir.join("publication-manifest.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let streams = doc["streams"].as_array().unwrap().clone();
+    let kept: Vec<serde_json::Value> = streams
+        .into_iter()
+        .filter(|s| !(s["side"] == "candidate" && s["stream"] == "stdout"))
+        .collect();
+    doc["streams"] = serde_json::json!(kept);
+    fs::write(&path, serde_json::to_string(&doc).unwrap()).unwrap();
+    let pub_store = Store::new(pub_dir.clone());
+    let err = frf::verify::load_publication_manifest_verified(&pub_store)
+        .expect_err("a manifest missing a stream's disposition must be refused")
+        .to_string();
+    assert!(
+        err.contains("not the proof-derived transform record"),
+        "the refusal must name the derivation mismatch: {err}"
+    );
+}

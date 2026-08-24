@@ -72,9 +72,29 @@ capture surfaces:
 - every stream of every run is recorded in `publication-manifest.json`
   (`frf-publication-manifest-v1`, sorted, deterministic): side, stream,
   effective policy, SHA-256, and whether the bytes traveled. The manifest is
-  the EXPLICIT record of the transform — nothing is silently altered, and
-  `evidence status` cross-checks the manifest's withheld count against the
-  verified captures' declared surfaces.
+  the EXPLICIT record of the transform — nothing is silently altered.
+
+## 3.1 The manifest is a proof-derived transform record
+
+The publication manifest is not merely valid — it is the transform's
+PROOF-DERIVED RECORD. Verification (`load_publication_manifest_verified`,
+run by `evidence status` and the whole-store walk) rederives the expected
+manifest as a pure function of
+
+1. every VERIFIED capture in the publication (the run's streams and their
+   recorded SHA-256s);
+2. every capture-surface declaration (each stream's effective policy, or
+   `inline` when none is declared);
+3. the ACTUAL publication tree (a stream's `published` flag is the tree's
+   own state: its bytes exist, or a withholding disposition record took
+   their place — the verified capture loader has already proved that
+   combination is exactly the declared policy's),
+
+and requires EXACT EQUALITY with the recorded manifest, reporting the
+first differing stream. A manifest entry whose policy, hash, or
+publication state lies — or that invents or drops a stream — is refused:
+the manifest is a projection of the evidence, not a document that may say
+whatever its writer wished.
 
 ## 4. Verification
 
