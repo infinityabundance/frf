@@ -46,12 +46,23 @@ impl<'a> RenderView<'a> {
     pub fn from_verified(verified: &'a crate::verify::ClaimVerified) -> Result<RenderView<'a>> {
         let claim = verified.claim();
         let premises = verified.premises();
+        // The movement prose attributes each movement to its OWN anchored
+        // receipt's authority (frf-claim-v12), never to the first premise's.
+        let authority_of: std::collections::HashMap<String, String> = premises
+            .iter()
+            .map(|p| {
+                (
+                    p.id().to_string(),
+                    format!("{}-{}", p.body().authority.name, p.body().authority.version),
+                )
+            })
+            .collect();
         let positive: Vec<String> = premises
             .iter()
             .filter_map(|p| crate::sentences::positive_claim(p.body()))
             .chain(crate::sentences::movement_claims(
                 &claim.trajectory_premises,
-                premises[0].body(),
+                &authority_of,
             ))
             .collect();
         if positive.is_empty() {

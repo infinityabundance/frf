@@ -89,7 +89,7 @@ fn the_claim_renders_into_every_presentation_without_new_meaning() {
     );
     assert_success(&out, "render json");
     let ir: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(ir["schema_version"], "frf-claim-v11");
+    assert_eq!(ir["schema_version"], "frf-claim-v12");
     assert_eq!(ir["receipt"], receipt);
 
     // sarif: a 2.1.0 document — the claim as a none-level result, the

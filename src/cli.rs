@@ -255,12 +255,19 @@ pub enum ClaimCmd {
         #[arg(long, value_name = "AXIS:FAMILY,…", default_value = "")]
         mutation_profile: String,
         /// A TRAJECTORY PREMISE (repeatable): the trajectory document key
-        /// `LINEAGE.COORDINATE_SYSTEM.SERIES`. Each premise is verified (the
-        /// trajectory rederives from its pinned series) and its axis must be
-        /// a claimed observable; the claim then COMPILES the movement —
-        /// "onset in the vulnerable release, cessation in the fixed release"
-        /// — under the scope algebra instead of prose
-        #[arg(long, value_name = "LINEAGE.COORD.SERIES")]
+        /// `LINEAGE.COORDINATE_SYSTEM.SERIES` BOUND to the anchored premise
+        /// receipt it is evidence about —
+        /// `LINEAGE.COORDINATE_SYSTEM.SERIES@RECEIPT`. Each premise is
+        /// verified (the trajectory rederives from its pinned series) and
+        /// BOUND TO ITS SUBJECT (frf-claim-v12): the receipt is a premise of
+        /// this claim, its run is a point of the series, the axis is a clean
+        /// declared observable of that receipt, and the lineage rederives
+        /// from the receipt's authority/fixture-family/fixture semantics —
+        /// an unrelated same-axis trajectory is never a movement premise.
+        /// The claim then COMPILES the movement — "onset in the vulnerable
+        /// release, cessation in the fixed release" — under the scope
+        /// algebra instead of prose
+        #[arg(long, value_name = "LINEAGE.COORD.SERIES@RECEIPT")]
         trajectory: Vec<String>,
     },
     /// Render a COMPILED claim into a presentation format (prose, json,

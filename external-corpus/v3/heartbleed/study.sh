@@ -74,9 +74,12 @@ echo "receipt (vulnerable f): $RECEIPT_F"
 echo "receipt (fixed g):      $RECEIPT_G"
 
 step "claim: sensitivity-backed 'no leak' for the fixed release, compiled WITH the trajectory movement"
-# The trajectory premises (v11): the leak-observable movements over the
+# The trajectory premises (v12): the leak-observable movements over the
 # candidate_revision series — onset in 1.0.1a, cessation in 1.0.1g — are
-# COMPILED claim clauses, not prose.
+# COMPILED claim clauses BOUND TO THEIR SUBJECT: each premise names the
+# anchored premise receipt (RECEIPT_G) whose run is the clean point of the
+# series, so the movements are compiled about the claim's own subject, not
+# merely valid graphs on a matching axis.
 TRAJS=$(python3 - "$RUN_F" "$RUN_G" <<'PY'
 import json, os, sys
 run_f, run_g = sys.argv[1], sys.argv[2]
@@ -91,7 +94,7 @@ for name in sorted(os.listdir(root)):
 PY
 )
 TRAJ_ARGS=""
-for t in $TRAJS; do echo "trajectory premise: $t"; TRAJ_ARGS="$TRAJ_ARGS --trajectory $t"; done
+for t in $TRAJS; do echo "trajectory premise: $t"; TRAJ_ARGS="$TRAJ_ARGS --trajectory $t@$RECEIPT_G"; done
 "$FRF" --root ev claim compile "$RECEIPT_G" --policy sensitivity-backed $TRAJ_ARGS
 
 step "summary"

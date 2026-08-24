@@ -328,7 +328,7 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v11" {
+			if str(obj(claim), "schema_version") != "frf-claim-v12" {
 				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
 			}
 			// The transform declaration is the CLAIM transform: nothing varies
@@ -426,22 +426,31 @@ func verifyBundle(bundle string) ClaimIR {
 					fail("claim %s: the knowledge universe names an unknown object kind %s", claimID, kind)
 				}
 			}
-			// The TRAJECTORY PREMISES (frf-claim-v11): every premise's
+			// The TRAJECTORY PREMISES (frf-claim-v12): every premise's
 			// trajectory document must exist in the bundle, its content address
 			// must rederive (FRF/TRAJECTORY/v1), the copied classification must
-			// match the re-derived document, and its axis must be a claimed
-			// observable.
+			// match the re-derived document, its axis must be a claimed
+			// observable — AND the premise must be BOUND TO ITS SUBJECT: the
+			// premise names the anchored premise receipt (∈ claim.requires)
+			// whose run is a point of the series, the axis is a clean declared
+			// observable of that receipt, and the lineage rederives from the
+			// receipt's authority/fixture-family/fixture semantics — an
+			// unrelated same-axis trajectory is never a movement premise.
 			co := obj(claim)
 			scope := []string{}
 			for _, a := range arr(recVal(co, "observable_scope")) {
 				scope = append(scope, a.(string))
 			}
+			requires := arrStr(recVal(co, "requires"))
+			claimCandidate := str(obj(recVal(co, "candidate")), "identity_hash")
 			for _, pv := range arr(recVal(co, "trajectory_premises")) {
 				p := obj(pv)
 				lineage := str(p, "lineage")
 				coord := str(p, "coordinate_system")
 				sid := str(p, "series")
 				axis := str(p, "axis")
+				receiptID := str(p, "receipt")
+				anchorRun := str(p, "anchor_run")
 				covered := false
 				for _, a := range scope {
 					if a == axis {
@@ -463,6 +472,98 @@ func verifyBundle(bundle string) ClaimIR {
 					str(der, "bands") != str(p, "bands") ||
 					str(t, "axis") != axis {
 					fail("claim %s: trajectory premise %s.%s.%s does not match its re-derived document", claimID, lineage, coord, sid)
+				}
+				// THE SUBJECT BINDING (frf-claim-v12).
+				if !containsString(requires, receiptID) {
+					fail("claim %s: trajectory premise %s.%s.%s anchors receipt %s, which is not a premise of this claim", claimID, lineage, coord, sid, receiptID)
+				}
+				anchored := obj(loadEvidence(safeJoin(bundle, "receipts/"+receiptID+".json")))
+				if str(anchored, "run") != anchorRun {
+					fail("claim %s: trajectory premise %s.%s.%s anchor run %s is not the anchored receipt's run (%s)", claimID, lineage, coord, sid, anchorRun, str(anchored, "run"))
+				}
+				series := obj(loadEvidence(safeJoin(bundle, "series/"+sid+".json")))
+				if str(series, "court") != str(obj(recVal(anchored, "court")), "id") {
+					fail("claim %s: trajectory premise %s.%s.%s series belongs to court %s, not the anchored receipt's court %s", claimID, lineage, coord, sid, str(series, "court"), str(obj(recVal(anchored, "court")), "id"))
+				}
+				pointInSeries := false
+				for _, pt := range arr(recVal(series, "points")) {
+					if str(obj(pt), "run") == anchorRun {
+						pointInSeries = true
+						break
+					}
+				}
+				if !pointInSeries {
+					fail("claim %s: trajectory premise %s.%s.%s anchor run %s is not a point of its series", claimID, lineage, coord, sid, anchorRun)
+				}
+				// The axis is a clean declared observable of the anchored
+				// receipt (declared passing; no residual on the axis).
+				declaredClean := false
+				for _, ov := range arr(recVal(anchored, "observables")) {
+					o := obj(ov)
+					if str(o, "axis") == axis && str(o, "verdict") == "pass" {
+						declaredClean = true
+					}
+				}
+				for _, rv := range arr(recVal(anchored, "residuals")) {
+					if str(obj(rv), "axis") == axis {
+						declaredClean = false
+					}
+				}
+				if !declaredClean {
+					fail("claim %s: trajectory premise %s.%s.%s is about axis %s, which is not a clean declared observable of its anchored receipt %s", claimID, lineage, coord, sid, axis, receiptID)
+				}
+				// The lineage rederives from the anchored receipt's subject
+				// semantics: the movement's own first observed residual record
+				// names kind/surface; the anchored receipt names
+				// authority/fixture-family/fixture.
+				var observedResidual string
+				for _, ov := range arr(recVal(t, "observations")) {
+					o := obj(ov)
+					if b, ok := recVal(o, "observed").(bool); ok && b {
+						observedResidual = str(o, "residual")
+						break
+					}
+				}
+				if observedResidual == "" {
+					fail("claim %s: trajectory premise %s.%s.%s has no observed point", claimID, lineage, coord, sid)
+				}
+				residual := obj(loadEvidence(safeJoin(bundle, "residuals/"+observedResidual+".json")))
+				if str(residual, "axis") != axis {
+					fail("claim %s: trajectory premise %s.%s.%s own observed residual %s is about axis %s, not the premise's axis", claimID, lineage, coord, sid, observedResidual, str(residual, "axis"))
+				}
+				fixture := ""
+				if fs := arr(recVal(anchored, "fixtures")); len(fs) > 0 {
+					fixture = str(obj(fs[0]), "id")
+				}
+				if fixture == "" {
+					fail("claim %s: trajectory premise %s.%s.%s anchored receipt %s carries no fixture", claimID, lineage, coord, sid, receiptID)
+				}
+				var surface *string
+				if s, ok := recVal(residual, "surface").(string); ok {
+					surface = &s
+				}
+				rederived, err := residualLineage(
+					str(residual, "kind"),
+					axis,
+					surface,
+					str(obj(recVal(obj(recVal(anchored, "court")), "admissibility_envelope")), "fixture_family"),
+					str(obj(recVal(anchored, "authority")), "name"),
+					fixture,
+				)
+				if err != nil {
+					fail("claim %s: trajectory premise %s.%s.%s cannot rederive its lineage: %v", claimID, lineage, coord, sid, err)
+				}
+				if rederived != lineage {
+					fail("claim %s: trajectory premise %s.%s.%s is NOT about the anchored receipt's subject: its lineage rederives to %s from the receipt's authority/fixture-family/fixture semantics", claimID, lineage, coord, sid, rederived[:16])
+				}
+				// On candidate_revision the candidate varies by design: the
+				// anchored point must be the point that corresponds to the
+				// candidate the parity claim is about.
+				if coord == "candidate_revision" {
+					capture := obj(loadEvidence(safeJoin(bundle, "captures/"+anchorRun+"/capture.json")))
+					if str(obj(recVal(capture, "candidate_artifact")), "sha256") != claimCandidate {
+						fail("claim %s: trajectory premise %s.%s.%s anchored point %s executed candidate %s, not the claim's candidate %s", claimID, lineage, coord, sid, anchorRun, str(obj(recVal(capture, "candidate_artifact")), "sha256")[:16], claimCandidate[:16])
+					}
 				}
 			}
 			// The claim's admission policy re-derives from the bundle alone:

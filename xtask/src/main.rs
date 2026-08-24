@@ -1663,7 +1663,7 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v11" {
+            if as_str(&claim["schema_version"]) != "frf-claim-v12" {
                 panic!(
                     "claim {claim_id}: unexpected schema version {}",
                     as_str(&claim["schema_version"])
@@ -1893,20 +1893,33 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     }
                 }
             }
-            // 7b. The TRAJECTORY PREMISES (frf-claim-v11): every premise's
+            // 7b. The TRAJECTORY PREMISES (frf-claim-v12): every premise's
             //     trajectory document must exist in the bundle, its content
             //     address must rederive (FRF/TRAJECTORY/v1), the copied
-            //     classification must match the re-derived document, and its
-            //     axis must be a claimed observable.
+            //     classification must match the re-derived document, its
+            //     axis must be a claimed observable — AND the premise must be
+            //     BOUND TO ITS SUBJECT: the premise names the anchored
+            //     premise receipt (∈ claim.requires) whose run is a point of
+            //     the series, the axis is a clean declared observable of that
+            //     receipt, and the lineage rederives from the receipt's
+            //     authority/fixture-family/fixture semantics — an unrelated
+            //     same-axis trajectory is never a movement premise.
             if let Some(premises) = claim["trajectory_premises"].as_array() {
                 let scope: Vec<&str> = claim["observable_scope"]
                     .as_array()
                     .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect())
                     .unwrap_or_default();
+                let requires: Vec<&str> = claim["requires"]
+                    .as_array()
+                    .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect())
+                    .unwrap_or_default();
+                let claim_candidate = as_str(&claim["candidate"]["identity_hash"]);
                 for p in premises {
                     let lineage = as_str(&p["lineage"]);
                     let coord = as_str(&p["coordinate_system"]);
                     let sid = as_str(&p["series"]);
+                    let receipt_id = as_str(&p["receipt"]);
+                    let anchor_run = as_str(&p["anchor_run"]);
                     let t = load_evidence(&safe_rel(
                         bundle,
                         &format!("trajectories/{lineage}.{coord}.{sid}.json"),
@@ -1943,6 +1956,117 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                         panic!(
                             "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} does not match its re-derived document"
                         );
+                    }
+                    // THE SUBJECT BINDING (frf-claim-v12).
+                    if !requires.contains(&receipt_id) {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchors receipt {receipt_id}, which is not a premise of this claim"
+                        );
+                    }
+                    let anchored =
+                        load_evidence(&safe_rel(bundle, &format!("receipts/{receipt_id}.json")));
+                    if as_str(&anchored["run"]) != anchor_run {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchor run {anchor_run} is not the anchored receipt's run ({})",
+                            as_str(&anchored["run"])
+                        );
+                    }
+                    let series = load_evidence(&safe_rel(bundle, &format!("series/{sid}.json")));
+                    if as_str(&series["court"]) != as_str(&anchored["court"]["id"]) {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} series belongs to court {}, not the anchored receipt's court {}",
+                            as_str(&series["court"]),
+                            as_str(&anchored["court"]["id"])
+                        );
+                    }
+                    let point_in_series = series["points"]
+                        .as_array()
+                        .map(|pts| pts.iter().any(|pt| as_str(&pt["run"]) == anchor_run))
+                        .unwrap_or(false);
+                    if !point_in_series {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchor run {anchor_run} is not a point of its series"
+                        );
+                    }
+                    // The axis is a clean declared observable of the anchored
+                    // receipt (declared passing; no residual on the axis).
+                    let declared_clean = anchored["observables"]
+                        .as_array()
+                        .map(|obs| {
+                            obs.iter().any(|o| {
+                                as_str(&o["axis"]) == as_str(&p["axis"])
+                                    && as_str(&o["verdict"]) == "pass"
+                            })
+                        })
+                        .unwrap_or(false)
+                        && !anchored["residuals"]
+                            .as_array()
+                            .map(|res| res.iter().any(|r| as_str(&r["axis"]) == as_str(&p["axis"])))
+                            .unwrap_or(false);
+                    if !declared_clean {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} is about axis {}, which is not a clean declared observable of its anchored receipt {receipt_id}",
+                            as_str(&p["axis"])
+                        );
+                    }
+                    // The lineage rederives from the anchored receipt's
+                    // subject semantics: the movement's own first observed
+                    // residual record names kind/surface; the anchored
+                    // receipt names authority/fixture-family/fixture.
+                    let observed = t["observations"]
+                        .as_array()
+                        .and_then(|obs| {
+                            obs.iter().find(|o| {
+                                o.get("observed")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or_else(|| {
+                            panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} has no observed point")
+                        });
+                    let obs_residual = as_str(&observed["residual"]);
+                    if obs_residual.is_empty() {
+                        panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} observed point names no residual");
+                    }
+                    let residual =
+                        load_evidence(&safe_rel(bundle, &format!("residuals/{obs_residual}.json")));
+                    if as_str(&residual["axis"]) != as_str(&p["axis"]) {
+                        panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} own observed residual {obs_residual} is about axis {}, not the premise's axis", as_str(&residual["axis"]));
+                    }
+                    let fixture = anchored["fixtures"]
+                        .as_array()
+                        .and_then(|f| f.first())
+                        .map(|f| as_str(&f["id"]))
+                        .unwrap_or("");
+                    if fixture.is_empty() {
+                        panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchored receipt {receipt_id} carries no fixture");
+                    }
+                    let rederived = rederive::residual_lineage(
+                        as_str(&residual["kind"]),
+                        as_str(&p["axis"]),
+                        residual.get("surface").and_then(|s| s.as_str()),
+                        as_str(&anchored["court"]["admissibility_envelope"]["fixture_family"]),
+                        as_str(&anchored["authority"]["name"]),
+                        fixture,
+                    );
+                    if rederived != lineage {
+                        panic!(
+                            "claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} is NOT about the anchored receipt's subject: its lineage rederives to {} from the receipt's authority/fixture-family/fixture semantics",
+                            &rederived[..16]
+                        );
+                    }
+                    // On candidate_revision the candidate varies by design:
+                    // the anchored point must be the point that corresponds
+                    // to the candidate the parity claim is about.
+                    if coord == "candidate_revision" {
+                        let capture = load_evidence(&safe_rel(
+                            bundle,
+                            &format!("captures/{anchor_run}/capture.json"),
+                        ));
+                        if as_str(&capture["candidate_artifact"]["sha256"]) != claim_candidate {
+                            panic!("claim {receipt_id}: trajectory premise {lineage}.{coord}.{sid} anchored point {anchor_run} executed candidate {}, not the claim's candidate {}", &as_str(&capture["candidate_artifact"]["sha256"])[..16], &claim_candidate[..16]);
+                        }
                     }
                 }
             }

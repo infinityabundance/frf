@@ -96,20 +96,30 @@ pub fn non_claims(fixture_family: &str) -> Vec<String> {
     ]
 }
 
-/// The MOVEMENT sentences of a claim's trajectory premises (frf-claim-v11):
+/// The MOVEMENT sentences of a claim's trajectory premises (frf-claim-v12):
 /// one per premise, rendering the compiled movement — "onset in the
 /// vulnerable release, cessation in the fixed release" — from the premise's
 /// DERIVED endpoints, attributed to the exact candidate artifact series the
 /// movement was observed over. Prose is a renderer of the verified IR, never
-/// stored as authoritative claim content.
+/// stored as authoritative claim content. The authority each sentence names
+/// is derived from the premise's OWN anchored receipt (`premise.receipt` —
+/// the subject binding), never from the claim's first receipt.
 pub fn movement_claims(
     premises: &[crate::model::TrajectoryPremise],
-    first: &Receipt,
+    authority_of: &std::collections::HashMap<String, String>,
 ) -> Vec<String> {
-    let authority = format!("{}-{}", first.authority.name, first.authority.version);
     premises
         .iter()
         .map(|p| {
+            // The movement is bound to its anchored receipt; a premise whose
+            // receipt is not among the claim's premises cannot render (the
+            // verified loader refuses such a claim).
+            let authority = authority_of.get(&p.receipt).unwrap_or_else(|| {
+                panic!(
+                    "movement premise {}.{}.{} anchors receipt {} which is not a premise of the claim",
+                    p.lineage, p.coordinate_system, p.series, p.receipt
+                )
+            });
             let mut sentence = format!(
                 "For reference {authority}, the {} divergence is {}/{} over the {} series (localization {}, {} band(s)): it first appears at {},",
                 p.axis,

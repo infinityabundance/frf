@@ -7,13 +7,14 @@ sentence — and written to `claims/<claim-id>.json` with a by-receipt index at
 `claims/by-receipt/<first-premise-receipt>/<claim-id>` (or rendered canonically
 with `--json`).
 
-The claim schema is `frf-claim-v11` (v9 added the sensitivity mutation
+The claim schema is `frf-claim-v12` (v9 added the sensitivity mutation
 profile; v10 declared the claim's EVIDENCE TRANSFORM — nothing varies,
 parity over the premises, `scope-admitted` — committed by the content
 address, spec/transform.md; v11 admits TRAJECTORY PREMISES: verified
 movements of lineages over coordinate systems, so "onset in the vulnerable
 release, cessation in the fixed release" is a COMPILED claim under the
-scope algebra, not prose). The core of the protocol is the paper's
+scope algebra, not prose; v12 BINDS every trajectory premise to its
+SUBJECT). The core of the protocol is the paper's
 admission rule, made RELATIVE to an explicitly committed state of
 knowledge:
 
@@ -88,7 +89,7 @@ the admission from the claim alone (the independent verifiers do).
 ClaimRecord {
     id                 content address: FRF/CLAIM/v1 over the canonical
                        document minus the id (Section 0)
-    schema_version     frf-claim-v11
+    schema_version     frf-claim-v12
     receipt            the FIRST premise receipt (the claim's root into the
                        evidence graph; the by-receipt index maps it)
     authority          prose id of the admitted reference (all premises bind
@@ -110,13 +111,23 @@ ClaimRecord {
     blockers           residuals that refuse this claim
     excluded_evidence  observed divergences outside K's cells
     requires           ALL premise receipt ids
-    trajectory_premises (v11) each is a verified MOVEMENT: { lineage, axis,
-                       coordinate_system, series, trajectory (the content
-                       address), drift, slew, localization, bands, onset,
-                       cessation } — the trajectory document rederives from
-                       its pinned series on read, its axis must be a claimed
-                       observable, and the endpoints derive from the
-                       document's observations. The proposition renders the
+    trajectory_premises (v12) each is a verified MOVEMENT bound to its
+                       SUBJECT: { lineage, receipt (the anchored premise
+                       receipt, ∈ requires), anchor_run (== receipt.run, a
+                       point of the series), axis, coordinate_system,
+                       series, trajectory (the content address), drift,
+                       slew, localization, bands, onset, cessation } — the
+                       trajectory document rederives from its pinned series
+                       on read, the anchored receipt's run is a point of the
+                       series, the axis is a clean declared observable of
+                       that receipt, the lineage REDERIVES from the anchored
+                       receipt's authority/fixture-family/fixture semantics
+                       (an unrelated same-axis trajectory is never a
+                       movement premise), and the endpoints derive from the
+                       document's observations. On `candidate_revision` the
+                       anchored point is proven to be the point of the
+                       trajectory that corresponds to the candidate the
+                       parity claim is about. The proposition renders the
                        movement ("onset in …, cessation in …")
     transform          the EVIDENCE TRANSFORM declaration (v10): kind=claim,
                        source=the first premise receipt, nothing varies,
@@ -160,7 +171,7 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v11
+    schema_version     frf-claim-v12
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

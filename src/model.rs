@@ -219,7 +219,7 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v20";
 /// `claimed observables(K) ⊆ demonstrated-sensitive observables(C)` is
 /// policy-checkable per family — and still bounded (a demonstrated family is
 /// never a universal-correctness claim).
-pub const SCHEMA_CLAIM: &str = "frf-claim-v11";
+pub const SCHEMA_CLAIM: &str = "frf-claim-v12";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -5941,13 +5941,17 @@ pub struct ClaimRecord {
     /// Claim IR — the premise receipts: admission is
     /// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` over these.
     pub requires: Vec<String>,
-    /// Claim IR (v11) — the TRAJECTORY PREMISES: each is a verified movement
+    /// Claim IR (v12) — the TRAJECTORY PREMISES: each is a verified movement
     /// of one lineage over one coordinate system (the trajectory content
     /// address + the derived classification), so "onset in the vulnerable
     /// release, cessation in the fixed release" is a COMPILED claim under
     /// the scope algebra, not prose. Every premise re-verifies on read (the
-    /// trajectory document rederives from its pinned series) and its axis
-    /// must be a claimed observable.
+    /// trajectory document rederives from its pinned series) and is bound to
+    /// its SUBJECT: the premise names the anchored premise receipt whose run
+    /// is a point of the series, its axis must be a clean declared
+    /// observable of that receipt, and the lineage rederives from the
+    /// anchored receipt's authority/family/fixture semantics — an unrelated
+    /// same-axis trajectory can never become a movement premise.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trajectory_premises: Vec<TrajectoryPremise>,
     /// The transform declaration: nothing varies — the claim is the scope
@@ -6012,18 +6016,33 @@ pub struct ClaimRecord {
 // Knowledge snapshot — the evidence universe of a claim's absence search
 // ---------------------------------------------------------------------------
 
-/// ONE trajectory premise of a compiled claim (frf-claim-v11): a verified
-/// MOVEMENT of one lineage over one coordinate system. The trajectory
-/// document is content-addressed (`FRF/TRAJECTORY/v1`) and re-derives from
-/// its pinned series; the premise copies the derived classification so the
-/// claim's proposition renders the movement (onset/cessation) without
-/// re-reading prose — verification checks every copied field against the
-/// re-derived document.
+/// ONE trajectory premise of a compiled claim (frf-claim-v12): a verified
+/// MOVEMENT of one lineage over one coordinate system, bound to the claim's
+/// SUBJECT. The trajectory document is content-addressed
+/// (`FRF/TRAJECTORY/v1`) and re-derives from its pinned series; the premise
+/// copies the derived classification so the claim's proposition renders the
+/// movement (onset/cessation) without re-reading prose — verification
+/// checks every copied field against the re-derived document. v12 makes the
+/// SUBJECT BINDING explicit: the premise names the anchored premise receipt
+/// (`receipt`, ∈ `claim.requires`) whose run is a point of the series
+/// (`anchor_run`), the axis is a clean declared observable of that receipt,
+/// and the lineage REDERIVES from the anchored receipt's authority/family/
+/// fixture semantics — a trajectory is evidence about the receipt it
+/// anchors, never merely a valid graph on a matching axis.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryPremise {
     /// The residual lineage identity — the stable subject of the movement.
     pub lineage: String,
+    /// THE ANCHORED PREMISE RECEIPT (∈ `claim.requires`) the movement is
+    /// evidence ABOUT: the trajectory lineage rederives from this receipt's
+    /// subject semantics (authority name, fixture family, fixture), so a
+    /// trajectory about a different authority or family — however valid on
+    /// the same axis — is refused as a premise of this claim.
+    pub receipt: String,
+    /// The anchored receipt's run — the point of the trajectory's series
+    /// where the subject was observed (== `receipt.run`; ∈ `series.points`).
+    pub anchor_run: String,
     /// The observable axis the movement is about (a claimed observable).
     pub axis: String,
     /// The coordinate system the movement is over (`repeat_index`,

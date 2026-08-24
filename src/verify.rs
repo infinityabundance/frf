@@ -2299,6 +2299,118 @@ pub fn verify_knowledge_universe(store: &Store, universe: &KnowledgeSnapshot) ->
 ///    contract for `high-assurance`;
 /// 7. the derived projections (`observable_scope`, `excluded_evidence`)
 ///    rederive.
+///
+/// THE SUBJECT BINDING of a trajectory premise (frf-claim-v12): the premise
+/// names the anchored premise receipt the movement is evidence about. This
+/// is the check that makes a movement premise about the SAME subject as the
+/// claim — two independently valid trajectories on the same axis about
+/// different authorities cannot become premises of one claim:
+///
+/// 1. `receipt ∈ claim.requires` — the movement anchors a premise of THIS
+///    claim;
+/// 2. `anchor_run == receipt.run`, and that run is a point of the
+///    trajectory's series, which belongs to the anchored receipt's court;
+/// 3. the axis is a CLEAN DECLARED OBSERVABLE of the anchored receipt (the
+///    anchored premise observed the axis, and observed it passing);
+/// 4. the trajectory's lineage REDERIVES from the anchored receipt's
+///    authority / fixture-family / fixture semantics (kind and surface come
+///    from the movement's own first observed residual record — the anchored
+///    receipt may be the clean point where the divergence ceases);
+/// 5. on `candidate_revision`, the anchored point's run executed the
+///    claim's candidate artifact — the point of the trajectory that
+///    corresponds to the candidate the parity claim is about (the other
+///    points vary by design).
+///
+/// The claim compiler and the verified loader share this one function: a
+/// compiled claim passes its own loader by construction.
+pub fn verify_trajectory_premise_binding(
+    store: &Store,
+    p: &crate::model::TrajectoryPremise,
+    requires: &[String],
+    claim_candidate_identity: &str,
+) -> Result<()> {
+    // 1. The anchored receipt is a premise of this claim.
+    if !requires.iter().any(|r| r == &p.receipt) {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{} anchors receipt {}, which is not a premise of this claim — a movement premise must bind a receipt the claim requires",
+            p.lineage, p.coordinate_system, p.series, p.receipt
+        )));
+    }
+    let anchored = load_receipt_verified(store, &p.receipt)?;
+    let anchored = anchored.body();
+    // 2. The anchor run IS the anchored receipt's run, and it is a point of
+    //    the trajectory's series — which belongs to the anchored receipt's
+    //    court (the movement was observed over the anchored premise's own
+    //    experiment).
+    if p.anchor_run != anchored.run {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{}: its anchor run {} is not the anchored receipt {}'s run ({}) — the anchor is a derived relation, never an asserted one",
+            p.lineage, p.coordinate_system, p.series, p.anchor_run, p.receipt, anchored.run
+        )));
+    }
+    let series = store.load_series(&p.series)?;
+    if series.court != anchored.court.id {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{}: its series belongs to court {}, not the anchored receipt {}'s court {} — the movement was not observed over the anchored premise's experiment",
+            p.lineage, p.coordinate_system, p.series, series.court, p.receipt, anchored.court.id
+        )));
+    }
+    if !series.points.iter().any(|pt| pt.run == p.anchor_run) {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{}: its anchor run {} is not a point of the series — the anchored receipt was not observed over this movement's experiment",
+            p.lineage, p.coordinate_system, p.series, p.anchor_run
+        )));
+    }
+    // 3. The axis is a clean declared observable of the anchored receipt.
+    let declared_clean = anchored
+        .observables
+        .iter()
+        .any(|o| o.axis == p.axis && o.verdict == crate::model::ObservableVerdict::Pass)
+        && !anchored.residuals.iter().any(|res| res.axis == p.axis);
+    if !declared_clean {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{} is about axis {}, which is not a clean declared observable of its anchored receipt {} — a movement premise must be about a surface the anchored premise observed, and observed passing",
+            p.lineage, p.coordinate_system, p.series, p.axis, p.receipt
+        )));
+    }
+    // 4. The lineage rederives from the anchored receipt's subject
+    //    semantics (the movement's own first observed residual record names
+    //    kind/surface; the anchored receipt names authority/family/fixture).
+    let doc = store.load_trajectory(&p.lineage, &p.coordinate_system, &p.series)?;
+    let rederived =
+        crate::semantics::trajectory_lineage_from_receipt(store, anchored, &p.axis, &doc)?;
+    if rederived != p.lineage {
+        return Err(FrfError::new(format!(
+            "trajectory premise {}.{}.{} is NOT about the anchored receipt {}'s subject: its lineage rederives to {} from the receipt's authority/fixture-family/fixture semantics, not {} — a trajectory about a different reference or family is not a movement premise of this claim, however valid its graph",
+            p.lineage,
+            p.coordinate_system,
+            p.series,
+            p.receipt,
+            &rederived[..16],
+            &p.lineage[..16]
+        )));
+    }
+    // 5. On candidate_revision the candidate varies by design — prove WHICH
+    //    point of the trajectory corresponds to the candidate the parity
+    //    claim is about: the anchored point's run must have executed the
+    //    claim's candidate artifact.
+    if p.coordinate_system == "candidate_revision" {
+        let capture = load_capture_verified(store, &p.anchor_run)?;
+        if capture.capture.candidate_artifact.sha256 != claim_candidate_identity {
+            return Err(FrfError::new(format!(
+                "trajectory premise {}.{}.{}: its anchored point {} executed candidate {}, not the claim's candidate {} — the point of the trajectory that corresponds to the claimed candidate must be the anchored one",
+                p.lineage,
+                p.coordinate_system,
+                p.series,
+                p.anchor_run,
+                &capture.capture.candidate_artifact.sha256[..16],
+                &claim_candidate_identity[..16]
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     let claim = store.load_claim(id)?;
 
@@ -2394,12 +2506,15 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         )));
     }
 
-    // 5b. The TRAJECTORY PREMISES (v11) re-verify: every premise's trajectory
-    //     document rederives from its pinned series (id + classification +
-    //     transform), the copied fields match the re-derived document, its
-    //     axis is a claimed observable, and the movement endpoints derive
-    //     from the document's observations — never from a caller-supplied
-    //     label.
+    // 5b. The TRAJECTORY PREMISES (v12) re-verify: every premise's
+    //     trajectory document rederives from its pinned series (id +
+    //     classification + transform), the copied fields match the
+    //     re-derived document, its axis is a claimed observable, the
+    //     movement endpoints derive from the document's observations — never
+    //     from a caller-supplied label — and the premise is BOUND to its
+    //     subject (the anchored premise receipt, frf-claim-v12): an
+    //     unrelated same-axis trajectory can never become a movement premise
+    //     of this claim.
     for p in &claim.trajectory_premises {
         verify_trajectory_document(store, &p.lineage, &p.coordinate_system, &p.series).map_err(
             |e| {
@@ -2428,6 +2543,22 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
                 p.lineage, p.coordinate_system, p.series, p.axis
             )));
         }
+        // THE SUBJECT BINDING (frf-claim-v12): the premise names the
+        // anchored premise receipt whose run is a point of the series, the
+        // axis is a clean declared observable of that receipt, and the
+        // lineage rederives from the anchored receipt's subject semantics.
+        verify_trajectory_premise_binding(
+            store,
+            p,
+            &claim.requires,
+            &claim.candidate.identity_hash,
+        )
+        .map_err(|e| {
+            FrfError::new(format!(
+                "claim {id}: trajectory premise {}.{}.{} is not bound to its subject: {e}",
+                p.lineage, p.coordinate_system, p.series
+            ))
+        })?;
         // The movement endpoints re-derive from the observations.
         let mut onset: Option<String> = None;
         let mut last_observed: Option<usize> = None;

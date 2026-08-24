@@ -781,6 +781,65 @@ pub fn residual_lineage_of_record(store: &Store, record: &ResidualRecord) -> Res
     )
 }
 
+/// The lineage a trajectory premise's movement is about, REDERIVED from the
+/// anchored premise receipt's subject semantics (frf-claim-v12). The
+/// movement's own first observed residual record names how the divergence
+/// was observed (kind, surface — the anchored receipt may be a CLEAN run
+/// whose run is the trajectory's non-observed point, so it cannot supply
+/// these); the anchored receipt names WHO the movement is about: its
+/// authority name, its fixture family, and its fixture (the receipt's
+/// fixtures are copied from the capture, so `fixtures[0].id` is the same
+/// fixture identity the residual lineage embeds). Equality with the
+/// trajectory's lineage is THE SUBJECT BINDING: the movement is about the
+/// same comparison question the anchored premise observed — a trajectory
+/// derived under a different authority or fixture family recomputes to a
+/// different lineage and is refused, whatever its axis.
+pub fn trajectory_lineage_from_receipt(
+    store: &Store,
+    anchored: &Receipt,
+    axis: &str,
+    trajectory_doc: &TrajectoryRecord,
+) -> Result<String> {
+    // The movement's own observations are the authority on kind/surface: the
+    // anchored receipt may be the clean point of the series (the divergence
+    // ceases there), so it has no residual of the lineage. The derivation
+    // guarantees the trajectory has at least one observed point.
+    let observed = trajectory_doc
+        .observations
+        .iter()
+        .find(|o| o.observed)
+        .ok_or_else(|| {
+            FrfError::new("trajectory has no observed point — nothing to bind".to_string())
+        })?;
+    let residual_id = observed.residual.as_deref().ok_or_else(|| {
+        FrfError::new("trajectory observation is observed but names no residual".to_string())
+    })?;
+    let verified = crate::verify::load_residual_verified(store, residual_id)?;
+    let record = verified.record();
+    if record.axis.as_str() != axis {
+        return Err(FrfError::new(format!(
+            "trajectory {}: its own observed residual {} is about axis {}, not the premise's {axis} — the movement's records disagree with the premise",
+            &trajectory_doc.id[..16.min(trajectory_doc.id.len())],
+            residual_id,
+            record.axis
+        )));
+    }
+    let fixture = anchored.fixtures.first().ok_or_else(|| {
+        FrfError::new(format!(
+            "receipt {}: carries no fixture — a receipt without a fixture cannot anchor a lineage",
+            anchored.run
+        ))
+    })?;
+    residual_lineage(
+        &record.kind,
+        &record.axis,
+        record.surface.as_deref(),
+        &anchored.court.admissibility_envelope.fixture_family,
+        &anchored.authority.name,
+        &fixture.id,
+    )
+}
+
 /// The coordinate identity of one series point (0.1.60): what EXACTLY varied
 /// at this point, content-addressed. `FRF/COORDINATE/v1` over the coordinate
 /// system and the system-specific value — for `candidate_revision` the

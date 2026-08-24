@@ -74,9 +74,12 @@ echo "receipt (buggy): $RECEIPT_BUGGY"
 echo "receipt (clean): $RECEIPT_CLEAN"
 
 step "claim: sensitivity-backed 'no acceptance of tampered records' for the fixed verifier, compiled WITH the trajectory movement"
-# The trajectory premise (v11): the tls.verdict movement over the
+# The trajectory premise (v12): the tls.verdict movement over the
 # candidate_revision series — onset in the buggy build, cessation in the
-# fixed build — is a COMPILED claim clause, not prose.
+# fixed build — BOUND TO ITS SUBJECT: the premise names the anchored premise
+# receipt (RECEIPT_CLEAN) whose run is the clean point of the series, so the
+# movement is compiled about the claim's own subject, not merely a valid
+# graph on a matching axis.
 TRAJ=$(python3 - "$RUN_BUGGY" "$RUN_CLEAN" <<'PY'
 import json, os, sys
 run_buggy, run_clean = sys.argv[1], sys.argv[2]
@@ -95,7 +98,7 @@ sys.exit(1)
 PY
 )
 echo "trajectory premise: $TRAJ"
-"$FRF" --root ev claim compile "$RECEIPT_CLEAN" --policy sensitivity-backed --trajectory "$TRAJ"
+"$FRF" --root ev claim compile "$RECEIPT_CLEAN" --policy sensitivity-backed --trajectory "$TRAJ@$RECEIPT_CLEAN"
 
 step "summary"
 echo "run_buggy=$RUN_BUGGY"

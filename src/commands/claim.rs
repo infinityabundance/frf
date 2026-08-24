@@ -373,17 +373,21 @@ pub fn cell_proposition(cell: &ClaimScope) -> String {
 }
 
 /// The machine-readable MOVEMENT clause of a claim's trajectory premises
-/// (frf-claim-v11) — a pure function of the premises, shared by the claim
+/// (frf-claim-v12) — a pure function of the premises, shared by the claim
 /// compiler and the verified loader (the claim's stored proposition must
-/// rederive).
+/// rederive). Each cell carries the premise's SUBJECT BINDING (the anchored
+/// receipt + its run) so two claims whose movements differ only in their
+/// binding have different propositions.
 pub fn movement_proposition(premises: &[crate::model::TrajectoryPremise]) -> String {
     format!(
         "movement(cells=[{}])",
         premises
             .iter()
             .map(|p| format!(
-                "{{lineage={},axis={},coordinate_system={},series={},trajectory={},drift={},slew={},localization={},bands={},onset={},cessation={}}}",
+                "{{lineage={},receipt={},anchor_run={},axis={},coordinate_system={},series={},trajectory={},drift={},slew={},localization={},bands={},onset={},cessation={}}}",
                 p.lineage,
+                p.receipt,
+                p.anchor_run,
                 p.axis,
                 p.coordinate_system,
                 p.series,
@@ -779,27 +783,47 @@ pub fn run(
     let observable_scope = scope::region_observables(&k_region);
     let excluded_evidence = scope::region_excluded_evidence(&receipts, &k_region);
 
-    // 5b. The TRAJECTORY PREMISES (v11): every `--trajectory` key is a
-    //     verified MOVEMENT of one lineage over one coordinate system — the
-    //     trajectory document rederives from its pinned series (id +
-    //     classification + transform), its axis must be a CLAIMED observable,
-    //     and the movement endpoints (onset/cessation) are derived from the
-    //     document's observations, never read from a caller-supplied label.
+    // 5b. The TRAJECTORY PREMISES (v12): every `--trajectory` key is a
+    //     verified MOVEMENT of one lineage over one coordinate system BOUND
+    //     to the claim's SUBJECT — the key is
+    //     `{lineage}.{coordinate-system}.{series}@RECEIPT`, naming the
+    //     premise receipt the movement is evidence about. The trajectory
+    //     document rederives from its pinned series (id + classification +
+    //     transform), the anchored receipt is a premise of this claim whose
+    //     run is a point of the series, the axis is a clean declared
+    //     observable of that receipt, and the lineage REDERIVES from the
+    //     anchored receipt's authority/fixture-family/fixture semantics —
+    //     an unrelated same-axis trajectory is not a movement premise, so
     //     "Onset in the vulnerable release, cessation in the fixed release"
-    //     is then a COMPILED claim under the scope algebra, not prose.
+    //     is a COMPILED claim under the scope algebra, about the claim's own
+    //     subject, not prose.
     let mut trajectory_premises: Vec<crate::model::TrajectoryPremise> = Vec::new();
     for key in trajectory_keys {
-        let mut parts = key.splitn(3, '.');
+        // The binding is part of the premise: the document key, the `@`, and
+        // the anchored premise receipt.
+        let (doc_key, receipt) = key.rsplit_once('@').ok_or_else(|| {
+            FrfError::new(format!(
+                "--trajectory must bind the anchored premise receipt: {{lineage}}.{{coordinate-system}}.{{series}}@RECEIPT, not {key:?} — a movement premise names the claim premise receipt it is evidence about"
+            ))
+        })?;
+        let mut parts = doc_key.splitn(3, '.');
         let (lineage, coordinate, series) = (
             parts.next().unwrap_or(""),
             parts.next().unwrap_or(""),
             parts.next().unwrap_or(""),
         );
-        if lineage.is_empty() || coordinate.is_empty() || series.is_empty() {
+        if lineage.is_empty() || coordinate.is_empty() || series.is_empty() || receipt.is_empty() {
             return Err(FrfError::new(format!(
-                "--trajectory must be the document key {{lineage}}.{{coordinate-system}}.{{series}}, not {key:?}"
+                "--trajectory must be the document key {{lineage}}.{{coordinate-system}}.{{series}} bound to a premise receipt ({{lineage}}.{{coordinate-system}}.{{series}}@RECEIPT), not {key:?}"
             )));
         }
+        // The anchored receipt is a premise of THIS claim.
+        let anchor_index = receipt_ids.iter().position(|r| r == receipt).ok_or_else(|| {
+            FrfError::new(format!(
+                "claim refused: trajectory premise {key} anchors receipt {receipt}, which is not a premise of this claim — a movement premise must bind a receipt the claim requires"
+            ))
+        })?;
+        let anchored = verified[anchor_index].body();
         crate::verify::verify_trajectory_document(store, lineage, coordinate, series).map_err(
             |e| {
                 FrfError::new(format!(
@@ -808,13 +832,6 @@ pub fn run(
             },
         )?;
         let doc = store.load_trajectory(lineage, coordinate, series)?;
-        if !observable_scope.contains(&doc.axis) {
-            return Err(FrfError::new(format!(
-                "claim refused: trajectory premise {key} is about axis {}, which this claim does not cover ({}) — a movement premise must be about a claimed observable",
-                doc.axis,
-                observable_scope.join(", ")
-            )));
-        }
         // The movement endpoints, derived from the document's observations:
         // onset = the first observed coordinate; cessation = the first
         // non-observation AFTER the last observed one (absent while the
@@ -835,8 +852,10 @@ pub fn run(
                 .find(|o| !o.observed)
                 .map(|o| o.coordinate.clone())
         });
-        trajectory_premises.push(crate::model::TrajectoryPremise {
+        let premise = crate::model::TrajectoryPremise {
             lineage: lineage.to_string(),
+            receipt: receipt.to_string(),
+            anchor_run: anchored.run.clone(),
             axis: doc.axis.clone(),
             coordinate_system: doc.coordinate_system.clone(),
             series: doc.series.clone(),
@@ -847,7 +866,21 @@ pub fn run(
             bands: doc.derivation.bands.clone(),
             onset,
             cessation,
-        });
+        };
+        // THE SUBJECT BINDING — the same verification the verified loader
+        // runs: a compiled claim passes its own loader by construction.
+        crate::verify::verify_trajectory_premise_binding(
+            store,
+            &premise,
+            receipt_ids,
+            &first.candidate.identity_hash,
+        )
+        .map_err(|e| {
+            FrfError::new(format!(
+                "claim refused: trajectory premise {key} is not bound to its subject: {e}"
+            ))
+        })?;
+        trajectory_premises.push(premise);
     }
     trajectory_premises.sort_by(|a, b| a.lineage.cmp(&b.lineage));
     trajectory_premises.dedup_by(|a, b| a.lineage == b.lineage && a.trajectory == b.trajectory);
@@ -862,7 +895,7 @@ pub fn run(
     );
 
     // The proposition: parity over the observed surface, PLUS the compiled
-    // movement of every trajectory premise (v11).
+    // movement of every trajectory premise (v12).
     let mut proposition = format!(
         "parity(cells=[{}])",
         k_region
@@ -876,9 +909,26 @@ pub fn run(
         proposition.push_str(" + ");
         proposition.push_str(&movement_proposition(&trajectory_premises));
     }
+    // The movement prose is attributed to EACH premise's OWN anchored
+    // receipt (frf-claim-v12) — never to the first receipt's authority: the
+    // authority a movement sentence names is derived from the receipt the
+    // movement is bound to.
+    let authority_of: std::collections::HashMap<String, String> = receipt_ids
+        .iter()
+        .zip(&receipts)
+        .map(|(id, r)| {
+            (
+                id.clone(),
+                format!("{}-{}", r.authority.name, r.authority.version),
+            )
+        })
+        .collect();
     let positive: Vec<String> = positive
         .into_iter()
-        .chain(sentences::movement_claims(&trajectory_premises, first))
+        .chain(sentences::movement_claims(
+            &trajectory_premises,
+            &authority_of,
+        ))
         .collect();
 
     // The required capability set: what the admission policy demanded. The

@@ -195,14 +195,14 @@
   {
    "id": "knowledge-snapshot",
    "meaning": "The committed evidence universe U a claim's absence scan ran over",
-   "schema": "frf-claim-v11",
+   "schema": "frf-claim-v12",
    "identity": "FRF/KNOWLEDGE/v2",
    "status": "active"
   },
   {
    "id": "claim",
-   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so \"onset in the vulnerable release, cessation in the fixed release\" is a compiled claim (movement clause) under the scope algebra",
-   "schema": "frf-claim-v11",
+   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address. v11 admits TRAJECTORY PREMISES: verified movements of lineages over coordinate systems, so \"onset in the vulnerable release, cessation in the fixed release\" is a compiled claim (movement clause) under the scope algebra. v12 BINDS every trajectory premise to its SUBJECT: the premise names the anchored premise receipt (∈ requires) whose run is a point of the series, the axis is a clean declared observable of that receipt, and the lineage rederives from the receipt's authority/fixture-family/fixture semantics — an unrelated same-axis trajectory is never a movement premise",
+   "schema": "frf-claim-v12",
    "identity": "FRF/CLAIM/v1",
    "status": "active"
   },
@@ -597,6 +597,10 @@
   },
   {
    "id": "frf-claim-v11",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-claim-v12",
    "status": "active"
   },
   {
