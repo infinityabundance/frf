@@ -882,8 +882,67 @@ pub fn run(
         })?;
         trajectory_premises.push(premise);
     }
-    trajectory_premises.sort_by(|a, b| a.lineage.cmp(&b.lineage));
-    trajectory_premises.dedup_by(|a, b| a.lineage == b.lineage && a.trajectory == b.trajectory);
+    // The premise set is a SET, and its order is CANONICAL: sorting by the
+    // complete canonical key `(lineage, axis, coordinate_system, series,
+    // trajectory, receipt, anchor_run)` means `--trajectory A --trajectory B`
+    // and `--trajectory B --trajectory A` derive the SAME claim (the
+    // movement clause is a pure function of the sorted set). The duplicate
+    // policy is decided EXPLICITLY:
+    //
+    // - a premise IDENTICAL in every field is the same `--trajectory` key
+    //   re-passed — it deduplicates (the set collapses it);
+    // - a premise with the SAME MOVEMENT but a DIFFERENT binding (same
+    //   lineage/axis/coordinate-system/series/trajectory, different anchored
+    //   receipt or anchor run) is AMBIGUOUS — the same movement cannot be
+    //   about two subjects in one claim — and is REFUSED, never silently
+    //   dropped.
+    trajectory_premises.sort_by(|a, b| {
+        (
+            &a.lineage,
+            &a.axis,
+            &a.coordinate_system,
+            &a.series,
+            &a.trajectory,
+            &a.receipt,
+            &a.anchor_run,
+        )
+            .cmp(&(
+                &b.lineage,
+                &b.axis,
+                &b.coordinate_system,
+                &b.series,
+                &b.trajectory,
+                &b.receipt,
+                &b.anchor_run,
+            ))
+    });
+    let mut i = 0;
+    while i < trajectory_premises.len() {
+        let j = i + 1;
+        while j < trajectory_premises.len() {
+            let a = &trajectory_premises[i];
+            let b = &trajectory_premises[j];
+            let same_movement = a.lineage == b.lineage
+                && a.axis == b.axis
+                && a.coordinate_system == b.coordinate_system
+                && a.series == b.series
+                && a.trajectory == b.trajectory;
+            if !same_movement {
+                // Sorted: no further premise shares this movement.
+                break;
+            }
+            if a.receipt == b.receipt && a.anchor_run == b.anchor_run {
+                // The identical premise re-passed: the set collapses it.
+                trajectory_premises.remove(j);
+            } else {
+                return Err(FrfError::new(format!(
+                    "claim refused: trajectory premise {}.{}.{} is anchored to BOTH {} and {} — the same movement cannot be about two subjects in one claim; compile separate claims, or anchor the movement to the single receipt it is evidence about",
+                    a.lineage, a.coordinate_system, a.series, a.receipt, b.receipt
+                )));
+            }
+        }
+        i += 1;
+    }
 
     let positive: Vec<String> = receipts
         .iter()

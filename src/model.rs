@@ -240,10 +240,17 @@ pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 ///   content-addressed `IndependenceEvidence` record bound to an attestation
 ///   of that premise). An attestation alone is WITNESSED, not independently
 ///   witnessed — the tier's name is its semantics.
-/// - [`CLAIM_POLICY_HIGH_ASSURANCE`]: independently witnessed PLUS the
-///   observation was made under the reference execution profile with the
-///   REFERENCE capture bounds — protocol constants that no `FRF_EXEC_*`
-///   override can redefine (the exact-replay contract).
+/// - [`CLAIM_POLICY_HIGH_ASSURANCE`]: independently witnessed PLUS every
+///   premise's observation was made under an execution profile providing the
+///   REQUIRED CAPABILITY SET — the reference contract
+///   `{exact_capture_contract, sealed_executable_image,
+///   native_runtime_closure_bound}` under the REFERENCE capture bounds,
+///   protocol constants that no `FRF_EXEC_*` override can redefine. Admission
+///   reasons over CAPABILITY SETS, never over a profile-name equality: every
+///   admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets),
+///   so an observation under a stronger harness qualifies exactly like a v1
+///   one, and the compiled claim records `required_capabilities` (the exact
+///   set the policy demanded).
 pub const CLAIM_POLICY_BASELINE: &str = "baseline";
 pub const CLAIM_POLICY_SENSITIVITY_BACKED: &str = "sensitivity-backed";
 pub const CLAIM_POLICY_INDEPENDENTLY_WITNESSED: &str = "independently-witnessed";

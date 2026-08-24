@@ -1,6 +1,6 @@
 [package]
 name = "frf"
-version = "0.1.77"
+version = "0.1.78"
 edition = "2021"
 description = "Minimal reference implementation of the Forensic Residual Framework kernel: authority -> court -> capture -> residual -> endoduction -> disposition -> receipt -> claim."
 license = "MIT OR Apache-2.0"
@@ -18,9 +18,14 @@ rust-version = "1.85"
 # anywhere (they are prohibited payloads in this repository, publication-
 # sensitive by policy): the corpus publishes DETACHED evidence — canonical
 # documents + content identities + reconstruction recipes — and every one
-# of the withheld payloads is rebuildable from the pinned sources in
-# external-corpus/v3/build/build-all.sh (SHA-256-pinned in
-# build-manifest.json). The published crate excludes them by policy.
+# of the withheld payloads is rebuildable: the three historical cases from
+# the pinned sources in external-corpus/v3/build/build-all.sh
+# (SHA-256-pinned in build-manifest.json), and the synthetic Goto Fail
+# model from its OWN independent byte-reproducible recipe
+# (external-corpus/v3/goto-fail/build/build.sh + build/Containerfile — a
+# digest-pinned builder image, source SHA, toolchain versions, target, and
+# flags recorded in its build-manifest.json). The published crate excludes
+# the build products by policy.
 exclude = [
     "external-corpus/v3/shellshock/builds/**",
     "external-corpus/v3/heartbleed/builds/**",

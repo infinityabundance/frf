@@ -279,3 +279,140 @@ fn unrelated_same_axis_trajectory_cannot_become_claim_premise() {
         "the refusal must name the missing premise: {err}"
     );
 }
+
+/// The trajectory-premise set is a SET with a CANONICAL order (P2): sorting
+/// by the complete canonical key `(lineage, axis, coordinate_system, series,
+/// trajectory, receipt, anchor_run)` means `--trajectory A --trajectory B`
+/// and `--trajectory B --trajectory A` derive the SAME claim, and a
+/// re-passed identical premise deduplicates — the movement clause is a pure
+/// function of the sorted set.
+#[test]
+fn trajectory_premise_order_is_canonical_and_duplicates_collapse() {
+    let work = Workdir::new("trajectory-canonical-order");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+
+    // A court with TWO clean-at-fix axes: the candidates diverge from the
+    // reference on exit AND stdout at the original revision, and match on
+    // both at the fixed revision — so the ladder observes TWO lineages
+    // (exit, stdout), each a legitimate movement premise of the fixed-run
+    // claim.
+    fs::write(
+        work.path("golden/candidate.sh"),
+        "#!/bin/sh\nset -u\nfile=\"\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --strict) ;;\n    *) file=\"$arg\" ;;\n  esac\ndone\nif [ -z \"$file\" ]; then echo \"cand: no input file\" >&2; exit 2; fi\nline=0\nwhile IFS= read -r entry || [ -n \"$entry\" ]; do\n  line=$((line + 1))\n  case \"$entry\" in\n    '' | \\#*) continue ;;\n    server\\ * | listen\\ * | log\\ *) echo \"CAND-OK: $entry\" ;;\n    *)\n      word=${entry%% *}\n      echo \"error: unknown directive $word at line $line\" >&2\n      exit 1\n      ;;\n  esac\ndone <\"$file\"\nexit 0\n",
+    )
+    .unwrap();
+    set_exec(&work.path("golden/candidate.sh"));
+    fs::write(
+        work.path("golden/work/candidate-fixed.sh"),
+        "#!/bin/sh\nset -u\nfile=\"\"\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    --strict) ;;\n    *) file=\"$arg\" ;;\n  esac\ndone\nif [ -z \"$file\" ]; then echo \"tool: no input file\" >&2; exit 2; fi\nline=0\nwhile IFS= read -r entry || [ -n \"$entry\" ]; do\n  line=$((line + 1))\n  case \"$entry\" in\n    '' | \\#*) continue ;;\n    server\\ * | listen\\ * | log\\ *) echo \"ok: $entry\" ;;\n    *)\n      word=${entry%% *}\n      echo \"tool: $file:$line: unknown directive '$word'\" >&2\n      exit 2\n      ;;\n  esac\ndone <\"$file\"\nexit 0\n",
+    )
+    .unwrap();
+    set_exec(&work.path("golden/work/candidate-fixed.sh"));
+    fs::create_dir_all(work.path("frf/courts/cli-two-axis")).unwrap();
+    fs::write(
+        work.path("frf/courts/cli-two-axis/manifest.yaml"),
+        "court:\n  id: cli-two-axis\n  question: >-\n    For malformed input in fixture family malformed-input, does the candidate\n    preserve the admitted reference's exit class and stdout?\n  falsifier: >-\n    The candidate's exit class or stdout diverges from the admitted reference\n    on a fixture in family malformed-input.\n  authority: ref-cli-1.8.2\n  candidate:\n    name: cand-cli\n    version_or_commit: \"0.1.0\"\n    build_profile: debug\n    path: golden/candidate.sh\n  fixture:\n    id: malformed-path.conf\n    path: frf/courts/cli-malformed-input/fixtures/malformed-path.conf\n    arguments: [\"--strict\", \"{fixture}\"]\n  admissibility_envelope:\n    fixture_family: malformed-input\n    platforms: [\"x86_64-linux\"]\n    observables: [exit, stdout]\n    normalizers: []\n    replay_scope: single-run\n",
+    )
+    .unwrap();
+
+    // The ladder: original (diverges on exit + stdout) then fixed (matches).
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "court",
+            "run",
+            "frf/courts/cli-two-axis/manifest.yaml",
+            "--candidate-revisions",
+            "golden/candidate.sh,golden/work/candidate-fixed.sh",
+        ],
+    );
+    assert_success(&out, "two-axis ladder");
+    let (_lineage, series, _stem, obs) = trajectory_for_axis(&work, "exit", None);
+    let (_l2, s2, _st2, obs2) = trajectory_for_axis(&work, "stdout", None);
+    assert_eq!(s2, series, "both lineages live in the same ladder series");
+    let clean_run = obs[1].0.clone();
+    let clean_run2 = obs2[1].0.clone();
+    assert_eq!(
+        clean_run, clean_run2,
+        "both lineages cease at the same fixed point"
+    );
+
+    let out = frf(&work, &["--root", ROOT, "receipt", "emit", &clean_run]);
+    assert_success(&out, "receipt emit (fixed point)");
+    let receipt = stdout(&out);
+
+    // The two trajectory document keys, in BOTH CLI orders.
+    let key_exit = {
+        let (lineage, series, _stem, _o) = trajectory_for_axis(&work, "exit", None);
+        format!("{lineage}.candidate_revision.{series}")
+    };
+    let key_stdout = {
+        let (lineage, series, _stem, _o) = trajectory_for_axis(&work, "stdout", None);
+        format!("{lineage}.candidate_revision.{series}")
+    };
+    let claim_id_of = |keys: &[&String]| {
+        let mut args: Vec<String> = vec![
+            "--root".into(),
+            ROOT.into(),
+            "claim".into(),
+            "compile".into(),
+            receipt.clone(),
+        ];
+        for k in keys {
+            args.push("--trajectory".into());
+            args.push(format!("{k}@{receipt}"));
+        }
+        let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let out = frf(&work, &args);
+        assert_success(&out, "claim compile with trajectory premises");
+        stdout(&out)
+            .lines()
+            .find(|l| l.starts_with("claim "))
+            .expect("the compile prints the claim id")
+            .trim_start_matches("claim ")
+            .to_string()
+    };
+
+    // The SAME two premises in either CLI order derive the SAME claim.
+    let id_ab = claim_id_of(&[&key_exit, &key_stdout]);
+    let id_ba = claim_id_of(&[&key_stdout, &key_exit]);
+    assert_eq!(id_ab, id_ba, "the premise ORDER must not change the claim");
+
+    // A re-passed identical premise collapses: the same key twice is the
+    // same claim as once (the premise set is a set).
+    let id_dup = claim_id_of(&[&key_exit, &key_exit]);
+    assert_eq!(
+        id_dup,
+        claim_id_of(&[&key_exit]),
+        "identical premises deduplicate"
+    );
+
+    // The compiled claim's premises are in canonical sorted order.
+    let claim: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(work.path(&format!("frf/claims/{id_ab}.json"))).unwrap(),
+    )
+    .unwrap();
+    let premises = claim["trajectory_premises"].as_array().unwrap().clone();
+    let mut sorted = premises.clone();
+    sorted.sort_by_key(|p| {
+        (
+            p["lineage"].as_str().unwrap_or_default().to_string(),
+            p["axis"].as_str().unwrap_or_default().to_string(),
+            p["coordinate_system"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            p["series"].as_str().unwrap_or_default().to_string(),
+            p["trajectory"].as_str().unwrap_or_default().to_string(),
+            p["receipt"].as_str().unwrap_or_default().to_string(),
+            p["anchor_run"].as_str().unwrap_or_default().to_string(),
+        )
+    });
+    assert_eq!(
+        premises, sorted,
+        "the stored premises are canonically ordered"
+    );
+}
