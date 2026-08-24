@@ -135,6 +135,59 @@ fn export_bundle(work: &Workdir, receipt_final: &str, name: &str) {
     assert_success(&out, "bundle export");
 }
 
+/// The DIRECTORY-bundle confinement is a protocol property, not a reference-
+/// engine implementation detail (P0): all three verifiers — the engine, the
+/// xtask verifier, and the Go verifier — must refuse a directory bundle that
+/// contains a symlink, because a link could resolve outside the bundle and
+/// smuggle foreign bytes into the "verified" graph. The container format must
+/// not change what self-contained evidence means.
+#[cfg(unix)]
+#[test]
+fn all_three_verifiers_refuse_a_symlinked_directory_bundle() {
+    let work = Workdir::new("independent-confine");
+    work.copy_canonical_tree();
+    let (_resolution_run, receipt_final) = golden_to_claim(&work);
+    export_bundle(&work, &receipt_final, "portable.frf");
+
+    // Plant a symlink where the manifest names a real file, pointing OUTSIDE
+    // the bundle: without confinement the outside bytes become "evidence".
+    let secret = work.path("outside-secret.txt");
+    fs::write(&secret, b"foreign bytes that never belong to the bundle").unwrap();
+    let link = work.path(&format!("portable.frf/receipts/{receipt_final}.json"));
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+    // The reference engine refuses.
+    let out = frf(&work, &["bundle", "verify", "portable.frf"]);
+    assert!(
+        !out.status.success(),
+        "the engine must refuse the symlinked bundle"
+    );
+    assert!(
+        stderr(&out).contains("symlink"),
+        "names the symlink: {}",
+        stderr(&out)
+    );
+
+    // The xtask verifier refuses.
+    let out = run_xtask(&work.dir, &["verify", "bundle", "portable.frf"]);
+    assert!(
+        !out.status.success(),
+        "the xtask verifier must refuse the symlinked bundle"
+    );
+
+    // The Go verifier refuses.
+    let out = go_verifier(&[
+        "verify",
+        "bundle",
+        &work.path("portable.frf").display().to_string(),
+    ]);
+    assert!(
+        !out.status.success(),
+        "the Go verifier must refuse the symlinked bundle"
+    );
+}
+
 /// The second premise manifest: the SAME authority and the SAME candidate
 /// artifact (candidate-fixed.sh) observed on a surface the resolution court
 /// never covered — a stdout-only court whose axis passes for the fixed

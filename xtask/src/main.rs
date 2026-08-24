@@ -161,6 +161,65 @@ fn extract_tar(bytes: &[u8], root: &Path) {
     }
 }
 
+/// Confine a DIRECTORY bundle before a single byte is read: the walk refuses
+/// symlinks and hard links (a link could smuggle a read outside the bundle),
+/// refuses any entry that is not a regular file or directory, and enforces
+/// the same count/size ceilings as the archive extractor. This is the archive
+/// form's trust model applied to the directory form — the container format
+/// must not change what "self-contained evidence" means.
+fn confine_dir(root: &Path) {
+    let mut count = 0usize;
+    let mut total: u64 = 0;
+    confine_dir_walk(root, &mut count, &mut total);
+}
+
+fn confine_dir_walk(dir: &Path, count: &mut usize, total: &mut u64) {
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+    {
+        let entry = entry.unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+        let from = entry.path();
+        // symlink_metadata: inspect the entry itself, NEVER what it points at.
+        let meta = std::fs::symlink_metadata(&from)
+            .unwrap_or_else(|e| panic!("cannot inspect {}: {e}", from.display()));
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            panic!(
+                "bundle directory refuses symlink {} — a bundle is self-contained evidence; a link could resolve outside it",
+                from.display()
+            );
+        }
+        if ft.is_dir() {
+            confine_dir_walk(&from, count, total);
+            continue;
+        }
+        if !ft.is_file() {
+            panic!(
+                "bundle directory refuses {} of unsupported type",
+                from.display()
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if meta.nlink() > 1 {
+                panic!(
+                    "bundle directory refuses hard-linked file {} — a hard link could share an inode outside the bundle",
+                    from.display()
+                );
+            }
+        }
+        *count += 1;
+        if *count > 10_000 {
+            panic!("bundle directory exceeds the 10 000-entry ceiling");
+        }
+        *total = total.saturating_add(meta.len());
+        if *total > 1 << 30 {
+            panic!("bundle directory exceeds the 1 GiB ceiling");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bundle verification
 // ---------------------------------------------------------------------------
@@ -951,8 +1010,129 @@ pub fn profile_capabilities(profile: &str) -> Vec<&'static str> {
     }
 }
 
+/// The bundle manifest's CLOSED schema (frf-bundle-v3): the top-level key
+/// set, `created_by`'s key set, and each inventory entry's key set are exact
+/// — an unknown property is refused, never read around; the receipt/run
+/// identifiers pass the id grammar; every inventory path is contained; the
+/// role vocabulary is closed; every digest is 64 hex digits; and no
+/// inventory path repeats. The reference engine enforces exactly this on the
+/// same bytes, so a manifest one verifier accepts and another refuses is a
+/// protocol bug.
+fn verify_manifest_schema(m: &Value) {
+    const TOP: &[&str] = &[
+        "schema_version",
+        "container",
+        "receipt_id",
+        "run",
+        "created_by",
+        "inventory",
+    ];
+    const CREATED: &[&str] = &["frf_version", "frf_executable_hash"];
+    const ENTRY: &[&str] = &["path", "sha256", "kind"];
+    const KINDS: &[&str] = &[
+        "receipt",
+        "claim",
+        "claim-index",
+        "challenge",
+        "mutation-evidence",
+        "witness",
+        "witness-evidence",
+        "independence",
+        "reduction",
+        "minimizer-evidence",
+        "authority",
+        "series",
+        "trajectory",
+        "produced",
+        "harness-event",
+        "normalizer-evidence",
+        "capture-adapter-evidence",
+        "residual",
+        "residual-index",
+        "event",
+        "execution-attempt",
+        "capture",
+        "side",
+        "object",
+        "comparator-request",
+        "comparator-response",
+        "comparator-invocation",
+        "comparator-result",
+    ];
+    let unknown = |o: &Value, allowed: &[&str], what: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(obj) = o.as_object() {
+            for k in obj.keys() {
+                if !allowed.contains(&k.as_str()) {
+                    out.push(format!(
+                        "manifest.json carries unknown property {k:?} on {what}"
+                    ));
+                }
+            }
+        }
+        out
+    };
+    let mut problems = unknown(m, TOP, "manifest");
+    if let Some(cb) = m.get("created_by") {
+        problems.extend(unknown(cb, CREATED, "created_by"));
+    }
+    if let Some(inv) = m["inventory"].as_array() {
+        let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for item in inv {
+            problems.extend(unknown(item, ENTRY, "inventory entry"));
+            let rel = as_str(&item["path"]);
+            let sha = as_str(&item["sha256"]);
+            let kind = as_str(&item["kind"]);
+            if rel.is_empty() {
+                problems.push("inventory entry carries no path".to_string());
+            }
+            let rel_path = Path::new(rel);
+            if rel_path.is_absolute()
+                || rel_path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                problems.push(format!("inventory path {rel} escapes the bundle"));
+            }
+            if !seen.insert(rel) {
+                problems.push(format!("inventory entry {rel} repeats a path"));
+            }
+            if !KINDS.contains(&kind) {
+                problems.push(format!(
+                    "inventory entry {rel} carries unknown kind {kind:?}"
+                ));
+            }
+            if sha.len() != 64 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+                problems.push(format!(
+                    "inventory entry {rel} carries an invalid digest {sha:?}"
+                ));
+            }
+        }
+    } else {
+        problems.push("manifest.json carries no inventory".to_string());
+    }
+    let valid_id = |id: &str| {
+        !id.is_empty()
+            && id != "."
+            && id != ".."
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    };
+    if !valid_id(as_str(&m["receipt_id"])) {
+        problems.push("manifest.json carries an invalid receipt_id".to_string());
+    }
+    if !valid_id(as_str(&m["run"])) {
+        problems.push("manifest.json carries an invalid run id".to_string());
+    }
+    if !problems.is_empty() {
+        panic!("invalid bundle manifest:\n  {}", problems.join("\n  "));
+    }
+}
+
 fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     let manifest = load_json(&safe_rel(bundle, "manifest.json"));
+    verify_manifest_schema(&manifest);
     if as_str(&manifest["schema_version"]) != "frf-bundle-v3" {
         panic!(
             "unsupported bundle schema version {:?}",
@@ -2276,12 +2456,19 @@ fn main() {
                     let path = Path::new(&args[3]);
                     if path.is_file() {
                         // A single-file bundle: verify from a temp extraction;
-                        // the archive itself is never mutated.
+                        // the archive itself is never mutated (the extractor
+                        // enforces the confinement rules).
                         let bytes = read(path);
                         let temp = TempRoot::new();
                         extract_tar(&bytes, &temp.0);
                         let _ = verify_bundle(&temp.0, "single-tar");
                     } else {
+                        // A DIRECTORY bundle gets the SAME confinement as the
+                        // archive form before a single byte is read: the walk
+                        // refuses symlinks/hard links/escapes and enforces the
+                        // count/size caps, so a link can never smuggle a read
+                        // outside the bundle.
+                        confine_dir(path);
                         let _ = verify_bundle(path, "directory");
                     }
                 }

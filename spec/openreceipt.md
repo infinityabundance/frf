@@ -380,6 +380,13 @@ complete required closure, recomputed from the bundle. Export only ever
 carries VERIFIED evidence: `frf bundle export` refuses a receipt that does
 not verify against the source tree first.
 
+The manifest is a strict closed-schema document (`frf-bundle-v3`): I-JSON
+(duplicate property names refused), an exact key set (an unknown property
+is refused, never read around), valid receipt/run identifiers, a closed
+inventory-role vocabulary, and 64-hex digests — enforced identically by
+the reference engine and the independent verifiers before any manifest
+value may construct a path.
+
 ### 6.1 Container forms — directory or single-file
 
 The same evidence graph ships in two containers, declared by the manifest
@@ -394,11 +401,19 @@ itself (`container`, `frf-bundle-v3`):
 |              | receipt are byte-identical                                       |
 
 `frf bundle export --single` writes the archive; `verify` and `replay`
-auto-detect the container (a directory is used in place, an archive is
-verified from a temp extraction and never mutated). A bundle whose manifest
-claims one container while the filesystem provides the other is refused.
-The verifier refuses hostile archives the same way the engine does: escaped
-paths, links, and unbounded extractions.
+auto-detect the container. The two forms feed ONE entry point with ONE
+TRUST MODEL: both are materialized into a private safe tree before a single
+byte is read — a single-file archive is extracted refusing absolute or
+parent-escaped paths, symlinks and hard links, non-file/non-directory
+entries, and unbounded extractions (10 000 entries / 1 GiB); a directory
+bundle is COPIED by the identical rules (a `symlink_metadata` walk refuses
+symlinks and hard-linked files — a link could resolve outside the bundle —
+and enforces the same entry-count and total-size ceilings). The source
+directory is never read in place after the walk (a swap could smuggle a
+link in between inspection and read). A bundle whose manifest claims one
+container while the filesystem provides the other is refused, and a
+manifest with an unknown property, an invalid identifier, or an unknown
+inventory role is refused the same way by every verifier.
 
 ### 6.2 Replay from the bundle — re-execution without the tree
 

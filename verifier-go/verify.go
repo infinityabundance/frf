@@ -89,6 +89,11 @@ func sortedNames(dir string) []string {
 // tar archive extracted to a fresh temp directory (returned with a cleanup).
 func openBundle(path string) (string, func()) {
 	if isDir(path) {
+		// A DIRECTORY bundle gets the SAME confinement as the archive form
+		// before a single byte is read: the walk refuses symlinks/hard links
+		// and enforces the count/size caps, so a link can never smuggle a
+		// read outside the bundle.
+		confineDir(path)
 		return path, func() {}
 	}
 	dir, err := extractTar(path)
@@ -96,6 +101,90 @@ func openBundle(path string) (string, func()) {
 		fail("cannot extract single-file bundle: %v", err)
 	}
 	return dir, func() { os.RemoveAll(dir) }
+}
+
+// verifyManifestSchema — the bundle manifest's CLOSED schema (frf-bundle-v3):
+// the top-level key set, `created_by`'s key set, and each inventory entry's
+// key set are exact (an unknown property is refused, never read around); the
+// receipt/run identifiers pass the id grammar; every inventory path is
+// contained; the role vocabulary is closed; every digest is 64 hex digits;
+// and no inventory path repeats. The reference engine enforces exactly this
+// on the same bytes, so a manifest one verifier accepts and another refuses
+// is a protocol bug.
+func verifyManifestSchema(m *jcs.Object) {
+	problems := []string{}
+	for _, k := range unknownKeys(m, []string{"schema_version", "container", "receipt_id", "run", "created_by", "inventory"}) {
+		problems = append(problems, fmt.Sprintf("manifest.json carries unknown property %q", k))
+	}
+	if cb, ok := m.Get("created_by"); ok && cb != nil {
+		for _, k := range unknownKeys(obj(cb), []string{"frf_version", "frf_executable_hash"}) {
+			problems = append(problems, fmt.Sprintf("manifest.json carries unknown property %q on created_by", k))
+		}
+	}
+	kinds := []string{
+		"receipt", "claim", "claim-index", "challenge", "mutation-evidence",
+		"witness", "witness-evidence", "independence", "reduction", "minimizer-evidence",
+		"authority", "series", "trajectory", "produced", "harness-event",
+		"normalizer-evidence", "capture-adapter-evidence", "residual", "residual-index",
+		"event", "execution-attempt", "capture", "side", "object",
+		"comparator-request", "comparator-response", "comparator-invocation", "comparator-result",
+	}
+	seen := map[string]bool{}
+	for _, item := range arr(recVal(m, "inventory")) {
+		io := obj(item)
+		for _, k := range unknownKeys(io, []string{"path", "sha256", "kind"}) {
+			problems = append(problems, fmt.Sprintf("manifest.json carries unknown property %q on an inventory entry", k))
+		}
+		rel := str(io, "path")
+		sha := str(io, "sha256")
+		kind := str(io, "kind")
+		if rel == "" {
+			problems = append(problems, "inventory entry carries no path")
+		}
+		clean := filepath.Clean(rel)
+		if clean == "." || strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
+			problems = append(problems, fmt.Sprintf("inventory path %q escapes the bundle", rel))
+		}
+		if seen[rel] {
+			problems = append(problems, fmt.Sprintf("inventory entry %q repeats a path", rel))
+		}
+		seen[rel] = true
+		if !containsString(kinds, kind) {
+			problems = append(problems, fmt.Sprintf("inventory entry %q carries unknown kind %q", rel, kind))
+		}
+		if len(sha) != 64 || !allHex(sha) {
+			problems = append(problems, fmt.Sprintf("inventory entry %q carries an invalid digest %q", rel, sha))
+		}
+	}
+	validID := func(id string) bool {
+		if id == "" || id == "." || id == ".." {
+			return false
+		}
+		for _, c := range id {
+			if !(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') && !(c >= '0' && c <= '9') && c != '.' && c != '_' && c != '-' {
+				return false
+			}
+		}
+		return true
+	}
+	if !validID(str(m, "receipt_id")) {
+		problems = append(problems, "manifest.json carries an invalid receipt_id")
+	}
+	if !validID(str(m, "run")) {
+		problems = append(problems, "manifest.json carries an invalid run id")
+	}
+	if len(problems) > 0 {
+		fail("invalid bundle manifest:\n  %s", strings.Join(problems, "\n  "))
+	}
+}
+
+func allHex(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // verifyBundle proves, from the bundle alone: the manifest's inventory
@@ -106,6 +195,7 @@ func openBundle(path string) (string, func()) {
 func verifyBundle(bundle string) ClaimIR {
 	manifest := loadEvidenceNoCanonical(safeJoin(bundle, "manifest.json"))
 	m := obj(manifest)
+	verifyManifestSchema(m)
 	if str(m, "schema_version") != "frf-bundle-v3" {
 		fail("unsupported bundle schema version %v", str(m, "schema_version"))
 	}

@@ -14,6 +14,15 @@ use common::*;
 
 use std::fs;
 
+#[cfg(unix)]
+fn plant_symlink(work: &Workdir, bundle: &str, rel: &str, target: &std::path::Path) {
+    // The exported bundle is sealed read-only; a hostile bundle is a fresh
+    // file in place of the sealed one.
+    let link = work.path(&format!("{bundle}/{rel}"));
+    fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(target, &link).unwrap();
+}
+
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     fs::create_dir_all(dst).unwrap();
     for entry in fs::read_dir(src).unwrap() {
@@ -655,4 +664,169 @@ fn directory_bundle_replays_away_from_the_tree() {
         out_text.contains("replay (exact)") && out_text.contains("reproduced"),
         "exact replay from the directory bundle alone: {out_text}"
     );
+}
+
+/// A DIRECTORY bundle containing a SYMLINK is refused (P0): the directory
+/// form gets the archive form's confinement — a link could resolve outside
+/// the bundle, so self-contained evidence never contains one, whether the
+/// link points outside (the hostile shape) or merely inside (still refused:
+/// the walk refuses links, not escapes).
+#[cfg(unix)]
+#[test]
+fn directory_bundle_verify_refuses_symlinks() {
+    let work = Workdir::new("bundle-dir-symlink");
+    work.copy_canonical_tree();
+    let (_run, _resolution_run, receipt_final, _receipt_original) = golden_to_claim(&work);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "bundle",
+            "export",
+            &receipt_final,
+            "--output",
+            "bundle.frf",
+        ],
+    );
+    assert_success(&out, "directory bundle export");
+
+    // 1. A link pointing OUTSIDE the bundle, replacing a file the manifest
+    //    names: without confinement, verification would read the outside
+    //    file's bytes and call them evidence.
+    let secret = work.path("outside-secret.txt");
+    fs::write(&secret, b"bytes that never belong to the bundle").unwrap();
+    plant_symlink(
+        &work,
+        "bundle.frf",
+        &format!("receipts/{receipt_final}.json"),
+        &secret,
+    );
+    let out = frf(&work, &["bundle", "verify", "bundle.frf"]);
+    assert!(!out.status.success(), "an escaping symlink must be refused");
+    let err = stderr(&out);
+    assert!(err.contains("symlink"), "names the symlink: {err}");
+
+    // 2. A link pointing INSIDE the bundle is refused too: self-contained
+    //    evidence contains no links at all — the walk refuses symlinks, not
+    //    merely escapes.
+    plant_symlink(
+        &work,
+        "bundle.frf",
+        &format!("receipts/{receipt_final}.json"),
+        &secret,
+    );
+    fs::write(work.path("bundle.frf/inside-target.txt"), b"inside").unwrap();
+    plant_symlink(
+        &work,
+        "bundle.frf",
+        "inside-target.txt",
+        &work.path("bundle.frf/inside-target.txt"),
+    );
+    let out = frf(&work, &["bundle", "verify", "bundle.frf"]);
+    assert!(!out.status.success(), "any symlink must be refused");
+    let err = stderr(&out);
+    assert!(err.contains("symlink"), "names the symlink: {err}");
+}
+
+/// The bundle manifest is a strict CLOSED-schema document: an unknown
+/// property is refused before any value may construct a path — a manifest
+/// with a planted `sneaky` field is not read around (P0).
+#[test]
+fn bundle_verify_refuses_unknown_manifest_properties() {
+    let work = Workdir::new("bundle-manifest-schema");
+    work.copy_canonical_tree();
+    let (_run, _resolution_run, receipt_final, _receipt_original) = golden_to_claim(&work);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "bundle",
+            "export",
+            &receipt_final,
+            "--output",
+            "bundle.frf",
+        ],
+    );
+    assert_success(&out, "directory bundle export");
+    let manifest_path = work.path("bundle.frf/manifest.json");
+    let text = fs::read_to_string(&manifest_path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    manifest
+        .as_object_mut()
+        .unwrap()
+        .insert("sneaky".to_string(), serde_json::json!(true));
+    fs::remove_file(&manifest_path).unwrap();
+    fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let out = frf(&work, &["bundle", "verify", "bundle.frf"]);
+    assert!(
+        !out.status.success(),
+        "a manifest with an unknown property must be refused"
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("unknown property"),
+        "names the closed schema: {err}"
+    );
+}
+
+/// The manifest's inventory is a set: a repeated path is refused, and so is
+/// an inventory entry whose role is outside the closed vocabulary (P0).
+#[test]
+fn bundle_verify_refuses_duplicate_inventory_paths_and_unknown_roles() {
+    let work = Workdir::new("bundle-manifest-inventory");
+    work.copy_canonical_tree();
+    let (_run, _resolution_run, receipt_final, _receipt_original) = golden_to_claim(&work);
+    let out = frf(
+        &work,
+        &[
+            "--root",
+            ROOT,
+            "bundle",
+            "export",
+            &receipt_final,
+            "--output",
+            "bundle.frf",
+        ],
+    );
+    assert_success(&out, "directory bundle export");
+    let manifest_path = work.path("bundle.frf/manifest.json");
+    let text = fs::read_to_string(&manifest_path).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+
+    // A duplicate inventory path: the first entry is cloned with the same
+    // path — the inventory is a set, and a manifest that lists a path twice
+    // is inconsistent.
+    let first = manifest["inventory"][0].clone();
+    manifest
+        .as_object_mut()
+        .unwrap()
+        .get_mut("inventory")
+        .unwrap()
+        .as_array_mut()
+        .unwrap()
+        .push(first);
+    fs::remove_file(&manifest_path).unwrap();
+    fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let out = frf(&work, &["bundle", "verify", "bundle.frf"]);
+    assert!(
+        !out.status.success(),
+        "a manifest with a duplicate inventory path must be refused"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("repeats a path"), "names the duplicate: {err}");
+
+    // An unknown inventory ROLE is refused: the vocabulary is closed.
+    let mut manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    manifest["inventory"][0]["kind"] = serde_json::json!("evil-role");
+    fs::remove_file(&manifest_path).unwrap();
+    fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let out = frf(&work, &["bundle", "verify", "bundle.frf"]);
+    assert!(
+        !out.status.success(),
+        "a manifest with an unknown inventory role must be refused"
+    );
+    let err = stderr(&out);
+    assert!(err.contains("unknown kind"), "names the role: {err}");
 }

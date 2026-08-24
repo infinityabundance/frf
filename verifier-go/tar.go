@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // extractTar unpacks a single-file FRF bundle (a deterministic tar archive
@@ -78,4 +79,56 @@ func extractTar(path string) (string, error) {
 		}
 	}
 	return root, nil
+}
+
+// confineDir walks a DIRECTORY bundle before a single byte is read, applying
+// the archive form's trust model to the directory form: symlinks and hard
+// links are refused (a link could smuggle a read outside the bundle), only
+// regular files and directories are admitted, and the entry count / total
+// size ceilings are the archive extractor's exact bounds. The container
+// format must not change what "self-contained evidence" means.
+func confineDir(root string) {
+	const maxEntries = 10_000
+	const maxBytes = 1 << 30
+	count := 0
+	var total int64
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			fail("cannot read %s: %v", dir, err)
+		}
+		for _, e := range entries {
+			from := filepath.Join(dir, e.Name())
+			// Lstat: inspect the entry itself, NEVER what it points at.
+			info, err := os.Lstat(from)
+			if err != nil {
+				fail("cannot inspect %s: %v", from, err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				fail("bundle directory refuses symlink %s — a bundle is self-contained evidence; a link could resolve outside it", from)
+			}
+			if info.IsDir() {
+				walk(from)
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				fail("bundle directory refuses %s of unsupported type", from)
+			}
+			if info.Sys() != nil {
+				if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+					fail("bundle directory refuses hard-linked file %s — a hard link could share an inode outside the bundle", from)
+				}
+			}
+			count++
+			if count > maxEntries {
+				fail("bundle directory exceeds the 10 000-entry ceiling")
+			}
+			total += info.Size()
+			if total > maxBytes {
+				fail("bundle directory exceeds the 1 GiB ceiling")
+			}
+		}
+	}
+	walk(root)
 }

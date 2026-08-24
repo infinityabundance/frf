@@ -37,15 +37,157 @@
 //! receipt's required closure from the bundle alone, requires the manifest to
 //! cover it, and verifies the receipt against the bundled evidence through
 //! the same verified loaders used everywhere.
+//!
+//! Both container forms feed ONE entry point — [`open_verified_bundle`] —
+//! which CONFINES the bytes first (a directory is copied by a walk that
+//! refuses symlinks/hard links and enforces the same count/size caps as the
+//! archive extractor; a single-file archive is extracted by those same
+//! rules), then parses the manifest strictly (I-JSON, closed schema, valid
+//! identifiers), and only then proves the exact inventory. The container
+//! format never changes the trust model: a portable bundle is self-contained
+//! evidence in both forms.
 
 use crate::error::{FrfError, Result};
 use crate::host;
 use crate::model::*;
 use crate::store::Store;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// The bundle manifest, parsed STRICTLY: the bytes must be I-JSON (duplicate
+/// property names refused) and the schema is closed (`deny_unknown_fields`) —
+/// a manifest with an unknown property is refused, never read around. Every
+/// identifier is validated before any value may construct a path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleManifest {
+    pub schema_version: String,
+    /// `directory` | `single-tar` — the container the manifest declares.
+    pub container: String,
+    pub receipt_id: String,
+    pub run: String,
+    pub created_by: BundleCreatedBy,
+    /// The exact inventory: every file the bundle carries, its digest, and
+    /// its role. Verification hashes every entry against this list.
+    pub inventory: Vec<BundleInventoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleCreatedBy {
+    pub frf_version: String,
+    pub frf_executable_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BundleInventoryEntry {
+    pub path: String,
+    pub sha256: String,
+    pub kind: String,
+}
+
+/// The closed inventory-role vocabulary a bundle manifest may declare. The
+/// closure walker emits exactly these roles; [`parse_bundle_manifest`]
+/// refuses any other, and export asserts every emitted role is in this set
+/// (so a new role is a protocol change, not a silent manifest extension).
+pub const BUNDLE_KINDS: &[&str] = &[
+    "receipt",
+    "claim",
+    "claim-index",
+    "challenge",
+    "mutation-evidence",
+    "witness",
+    "witness-evidence",
+    "independence",
+    "reduction",
+    "minimizer-evidence",
+    "authority",
+    "series",
+    "trajectory",
+    "produced",
+    "harness-event",
+    "normalizer-evidence",
+    "capture-adapter-evidence",
+    "residual",
+    "residual-index",
+    "event",
+    "execution-attempt",
+    "capture",
+    "side",
+    "object",
+    "comparator-request",
+    "comparator-response",
+    "comparator-invocation",
+    "comparator-result",
+];
+
+/// Parse and VALIDATE a bundle manifest: strict JSON (I-JSON — duplicate
+/// property names refused), the closed schema above (unknown properties
+/// refused), the protocol schema version, a declared container, valid
+/// receipt/run identifiers, contained inventory paths, and the closed
+/// inventory-role vocabulary. Only a manifest that passes ALL of this may
+/// construct a path.
+pub fn parse_bundle_manifest(bytes: &[u8]) -> Result<BundleManifest> {
+    let strict = crate::canon::parse_strict(bytes)
+        .map_err(|e| FrfError::new(format!("manifest.json is not strict JSON: {e}")))?;
+    let manifest: BundleManifest = serde_json::from_value(strict).map_err(|e| {
+        FrfError::new(format!(
+            "manifest.json carries an unknown property or an invalid value: {e}"
+        ))
+    })?;
+    if manifest.schema_version != SCHEMA_BUNDLE {
+        return Err(FrfError::new(format!(
+            "unsupported bundle schema version {:?} (expected {SCHEMA_BUNDLE})",
+            manifest.schema_version
+        )));
+    }
+    if !matches!(manifest.container.as_str(), "directory" | "single-tar") {
+        return Err(FrfError::new(format!(
+            "manifest.json declares unknown container {:?} (the protocol admits directory | single-tar)",
+            manifest.container
+        )));
+    }
+    crate::store::validate_id("receipt", &manifest.receipt_id)
+        .map_err(|_| FrfError::new("manifest.json carries an invalid receipt_id"))?;
+    crate::store::validate_id("run", &manifest.run)
+        .map_err(|_| FrfError::new("manifest.json carries an invalid run id"))?;
+    let mut seen: HashSet<&str> = HashSet::new();
+    for entry in &manifest.inventory {
+        let rel = &entry.path;
+        let rel_path = Path::new(rel);
+        if rel_path.is_absolute()
+            || rel_path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(FrfError::new(format!(
+                "inventory path {rel} escapes the bundle"
+            )));
+        }
+        if !BUNDLE_KINDS.contains(&entry.kind.as_str()) {
+            return Err(FrfError::new(format!(
+                "inventory entry {rel} carries unknown kind {:?}",
+                entry.kind
+            )));
+        }
+        if entry.sha256.len() != 64 || !entry.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(FrfError::new(format!(
+                "inventory entry {rel} carries an invalid digest {:?}",
+                entry.sha256
+            )));
+        }
+        if !seen.insert(rel) {
+            return Err(FrfError::new(format!(
+                "inventory entry {rel} repeats a path"
+            )));
+        }
+    }
+    Ok(manifest)
+}
 
 /// One file in a bundle: bundle-relative path, content digest, and role.
 pub struct ClosureEntry {
@@ -112,8 +254,24 @@ impl Drop for TempRoot {
     }
 }
 
-/// Copy a bundle directory tree into `dst` (which must exist).
+/// Copy a bundle DIRECTORY tree into `dst` (which must exist), enforcing the
+/// SAME confinement as the archive extractor — the container format must not
+/// change the trust model. `symlink_metadata` never follows: a symlink is
+/// refused, and a regular file with multiple hard links is refused too (a
+/// hard link could share an inode with a file outside the bundle, leaking
+/// its bytes into the tree). Entry names from `read_dir` are single path
+/// components, so an escape is structurally impossible here — the archive
+/// form's absolute/`..` checks exist because tar entry names are arbitrary
+/// strings. Count and total-size ceilings are the archive form's exact caps
+/// (10 000 entries / 1 GiB): the closure of one receipt is dozens of files
+/// and a few MiB. Only regular files and directories are materialized.
 fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+    let mut count = 0usize;
+    let mut total: u64 = 0;
+    copy_tree_walk(src, dst, &mut count, &mut total)
+}
+
+fn copy_tree_walk(src: &Path, dst: &Path, count: &mut usize, total: &mut u64) -> Result<()> {
     for entry in fs::read_dir(src)
         .map_err(|e| FrfError::new(format!("cannot read {}: {e}", src.display())))?
     {
@@ -121,13 +279,51 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
             entry.map_err(|e| FrfError::new(format!("cannot read {}: {e}", src.display())))?;
         let from = entry.path();
         let to = dst.join(entry.file_name());
-        if from.is_dir() {
+        // symlink_metadata: inspect the entry itself, NEVER what it points at.
+        let meta = fs::symlink_metadata(&from)
+            .map_err(|e| FrfError::new(format!("cannot inspect {}: {e}", from.display())))?;
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            return Err(FrfError::new(format!(
+                "bundle directory refuses symlink {} — a bundle is self-contained evidence; a link could resolve outside it",
+                from.display()
+            )));
+        }
+        if ft.is_dir() {
             fs::create_dir_all(&to)
                 .map_err(|e| FrfError::new(format!("cannot create {}: {e}", to.display())))?;
-            copy_tree(&from, &to)?;
-        } else {
+            copy_tree_walk(&from, &to, count, total)?;
+        } else if ft.is_file() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                if meta.nlink() > 1 {
+                    return Err(FrfError::new(format!(
+                        "bundle directory refuses hard-linked file {} — a hard link could share an inode outside the bundle",
+                        from.display()
+                    )));
+                }
+            }
+            *count += 1;
+            if *count > 10_000 {
+                return Err(FrfError::new(
+                    "bundle directory exceeds the 10 000-entry ceiling; refusing",
+                ));
+            }
+            *total = total.saturating_add(meta.len());
+            if *total > 1 << 30 {
+                return Err(FrfError::new(
+                    "bundle directory exceeds the 1 GiB ceiling; refusing",
+                ));
+            }
             fs::copy(&from, &to)
                 .map_err(|e| FrfError::new(format!("cannot copy {}: {e}", from.display())))?;
+        } else {
+            return Err(FrfError::new(format!(
+                "bundle directory refuses {} of unsupported type {:?}",
+                from.display(),
+                ft
+            )));
         }
     }
     Ok(())
@@ -197,53 +393,130 @@ fn extract_tar_into(bytes: &[u8], root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Open a bundle for reading. A directory is used in place; a single-file
-/// archive is extracted to a temp root (the archive itself is never
-/// mutated). Neither form writes anything.
-enum OpenedBundle {
-    Directory(PathBuf),
-    Extracted { root: PathBuf, _temp: TempRoot },
+/// A bundle that has been CONFINED and PROVEN — the ONE entry point for
+/// bundle verification and replay. Both container forms are materialized
+/// into a private temp tree (a directory bundle is COPIED by a confined walk
+/// that refuses symlinks/hard links and enforces the same count/size caps as
+/// the archive extractor; a single-file bundle is extracted by those same
+/// rules), so the container format never changes the trust model: after
+/// [`open_verified_bundle`] returns, every path lies inside a tree with no
+/// links and no escapes, the manifest is a strict closed-schema document
+/// with valid identifiers, and the exact inventory hashes. Only then are
+/// paths/content exposed to the semantic layer.
+pub struct VerifiedBundle {
+    /// The safe tree: `manifest.json` at its root, every inventory file
+    /// below it — guaranteed link-free and escape-free by construction.
+    root: PathBuf,
+    container: Container,
+    manifest: BundleManifest,
+    _temp: TempRoot,
 }
 
-impl OpenedBundle {
-    fn root(&self) -> &Path {
-        match self {
-            OpenedBundle::Directory(p) => p,
-            OpenedBundle::Extracted { root, .. } => root,
-        }
+impl VerifiedBundle {
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
-    fn container(&self) -> Container {
-        match self {
-            OpenedBundle::Directory(_) => Container::Directory,
-            OpenedBundle::Extracted { .. } => Container::SingleTar,
-        }
+    pub fn container(&self) -> Container {
+        self.container
+    }
+
+    pub fn manifest(&self) -> &BundleManifest {
+        &self.manifest
     }
 }
 
-fn open_bundle(path: &Path) -> Result<OpenedBundle> {
-    if path.is_dir() {
-        return Ok(OpenedBundle::Directory(path.to_path_buf()));
-    }
-    if path.is_file() {
+/// Open and PROVE a bundle: structural confinement walk (refuse
+/// symlinks/hard links/escapes; enforce the count/size caps) → strict
+/// canonical manifest (I-JSON, closed schema, every identifier validated) →
+/// exact inventory (every entry exists and hashes to its recorded digest;
+/// objects are named by their digest). The manifest's values may construct a
+/// path only after ALL of this has passed.
+pub fn open_verified_bundle(path: &Path) -> Result<VerifiedBundle> {
+    let temp = TempRoot::new("bundle")?;
+    let staged = temp.dir.join("extract");
+    fs::create_dir_all(&staged)
+        .map_err(|e| FrfError::new(format!("cannot create {}: {e}", staged.display())))?;
+    let container = if path.is_dir() {
+        // The directory bundle is COPIED by a confined walk: the source is
+        // never read in place after the walk (a swap could smuggle a link in
+        // between inspection and read), and the copy is the archive
+        // extraction's identical trust model.
+        copy_tree(path, &staged)?;
+        Container::Directory
+    } else if path.is_file() {
         let bytes = read(path, "bundle")?;
-        let temp = TempRoot::new("open")?;
-        extract_tar_into(&bytes, &temp.dir)?;
-        if !temp.dir.join("manifest.json").is_file() {
+        extract_tar_into(&bytes, &staged)?;
+        if !staged.join("manifest.json").is_file() {
             return Err(FrfError::new(format!(
                 "{} is an incomplete single-file bundle: manifest.json is missing (truncated archive?)",
                 path.display()
             )));
         }
-        return Ok(OpenedBundle::Extracted {
-            root: temp.dir.clone(),
-            _temp: temp,
-        });
+        Container::SingleTar
+    } else {
+        return Err(FrfError::new(format!(
+            "{} is neither a bundle directory nor a single-file bundle",
+            path.display()
+        )));
+    };
+
+    // The manifest: strict JSON (duplicates refused) + the closed schema +
+    // valid identifiers — before ANY of its values construct a path.
+    let manifest_bytes = fs::read(staged.join("manifest.json"))
+        .map_err(|e| FrfError::new(format!("cannot read manifest.json: {e}")))?;
+    let manifest = parse_bundle_manifest(&manifest_bytes)?;
+    if manifest.container != container.as_str() {
+        return Err(FrfError::new(format!(
+            "bundle container mismatch: the manifest declares {:?} but the bundle is a {}",
+            manifest.container,
+            container.as_str()
+        )));
     }
-    Err(FrfError::new(format!(
-        "{} is neither a bundle directory nor a single-file bundle",
-        path.display()
-    )))
+
+    // THE EXACT INVENTORY: every entry exists in the safe tree and hashes to
+    // its recorded digest; an object file must be named by its digest.
+    for entry in &manifest.inventory {
+        let rel = &entry.path;
+        let full = staged.join(rel);
+        let bytes = match fs::read(&full) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(FrfError::new(format!(
+                    "bundle is incomplete: {rel} is missing — the manifest records it but the bundle does not carry it"
+                )));
+            }
+            Err(e) => {
+                return Err(FrfError::new(format!("cannot read {rel}: {e}")));
+            }
+        };
+        let actual = host::sha256_bytes(&bytes);
+        if actual != entry.sha256 {
+            return Err(FrfError::new(format!(
+                "bundle is corrupt: {rel} hashes to {} but the manifest records {}",
+                &actual[..16],
+                &entry.sha256[..16]
+            )));
+        }
+        if entry.kind == "object" {
+            let name = Path::new(rel)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            if name != entry.sha256 {
+                return Err(FrfError::new(format!(
+                    "bundle is corrupt: object file {rel} is not named by its digest"
+                )));
+            }
+        }
+    }
+
+    Ok(VerifiedBundle {
+        root: staged,
+        container,
+        manifest,
+        _temp: temp,
+    })
 }
 
 /// The complete closure of a receipt, computed against `store`: the receipt
@@ -1149,6 +1422,17 @@ pub fn export(
     container: Container,
 ) -> Result<PathBuf> {
     let closure = collect_closure(store, receipt_id)?;
+    // The manifest's role vocabulary is CLOSED: every closure role must be
+    // registered (a new role is a protocol change, never a silent manifest
+    // extension — parse_bundle_manifest refuses roles outside this set).
+    for entry in &closure.entries {
+        if !BUNDLE_KINDS.contains(&entry.kind) {
+            return Err(FrfError::new(format!(
+                "closure role {:?} is not in the registered bundle vocabulary; refusing to export a manifest the verifiers would reject",
+                entry.kind
+            )));
+        }
+    }
     if output.exists() {
         return Err(FrfError::new(format!(
             "bundle {} already exists; refusing to overwrite (remove it to re-export)",
@@ -1236,106 +1520,46 @@ pub fn export(
     Ok(output.to_path_buf())
 }
 
-/// Verify a bundle: (0) its manifest declares the container it actually is,
-/// (1) every inventory file exists and hashes to its recorded digest
-/// (objects must be named by their digest), (2) the receipt verifies against
-/// the bundled evidence alone, and (3) the manifest's inventory covers the
-/// receipt's complete required closure. Only the bundle is touched — the
-/// original source tree and the exporting FRF installation are irrelevant;
-/// a single-file archive is verified from a temp extraction and never
-/// mutated.
+/// Verify a bundle: (0) the structural confinement walk + strict manifest +
+/// exact inventory ([`open_verified_bundle`]), then (1) the receipt verifies
+/// against the bundled evidence alone, and (2) the manifest's inventory
+/// covers the receipt's complete required closure. Only the bundle is
+/// touched — the original source tree and the exporting FRF installation are
+/// irrelevant; both container forms are proven from a private safe tree and
+/// never mutated.
 pub fn verify(bundle_root: &Path) -> Result<()> {
-    let opened = open_bundle(bundle_root)?;
-    verify_root(opened.root(), opened.container())
+    let verified = open_verified_bundle(bundle_root)?;
+    let closure = verify_bundle_contents(&verified)?;
+    println!(
+        "bundle {} verified: receipt {}, run {}, {} file(s) in the closure ({})",
+        verified.root().display(),
+        verified.manifest().receipt_id,
+        closure.run,
+        closure.entries.len(),
+        verified.container().as_str()
+    );
+    Ok(())
 }
 
-/// Verify an opened bundle root (a directory) against its declared container.
-fn verify_root(root: &Path, container: Container) -> Result<()> {
-    let manifest_path = root.join("manifest.json");
-    let text = fs::read_to_string(&manifest_path)
-        .map_err(|e| FrfError::new(format!("cannot read {}: {e}", manifest_path.display())))?;
-    let manifest: Value = serde_json::from_str(&text)
-        .map_err(|e| FrfError::new(format!("manifest.json is not valid JSON: {e}")))?;
-    if manifest["schema_version"].as_str() != Some(SCHEMA_BUNDLE) {
-        return Err(FrfError::new(format!(
-            "unsupported bundle schema version {:?} (expected {SCHEMA_BUNDLE})",
-            manifest["schema_version"]
-        )));
-    }
-    let declared = manifest["container"].as_str().unwrap_or("<missing>");
-    if declared != container.as_str() {
-        return Err(FrfError::new(format!(
-            "bundle container mismatch: the manifest declares {declared:?} but the bundle is a {}",
-            container.as_str()
-        )));
-    }
-    let receipt_id = manifest["receipt_id"]
-        .as_str()
-        .ok_or_else(|| FrfError::new("manifest.json carries no receipt_id"))?
-        .to_string();
-
-    // 1. Prove the manifest: every entry exists and hashes to its digest.
-    let inventory_list = manifest["inventory"]
-        .as_array()
-        .ok_or_else(|| FrfError::new("manifest.json carries no inventory"))?;
+/// The semantic layer over a PROVEN bundle: the receipt verifies against the
+/// bundle alone (identity + derivation + event chains + resolution edges —
+/// the same verified loaders used everywhere), and the manifest's inventory
+/// covers the receipt's complete required closure, recomputed from the
+/// bundle. `open_verified_bundle` has already confined the tree, validated
+/// the manifest, and proven the exact inventory — nothing here may construct
+/// a path outside the safe tree.
+pub fn verify_bundle_contents(verified: &VerifiedBundle) -> Result<Closure> {
+    let root = verified.root();
+    let manifest = &verified.manifest();
     let mut inventory: HashMap<String, (&str, &str)> = HashMap::new(); // rel -> (sha256, kind)
-    for item in inventory_list {
-        let rel = item["path"]
-            .as_str()
-            .ok_or_else(|| FrfError::new("inventory entry carries no path"))?;
-        let sha = item["sha256"]
-            .as_str()
-            .ok_or_else(|| FrfError::new(format!("inventory entry {rel} carries no sha256")))?;
-        let kind = item["kind"]
-            .as_str()
-            .ok_or_else(|| FrfError::new(format!("inventory entry {rel} carries no kind")))?;
-        let rel_path = Path::new(rel);
-        if rel_path.is_absolute()
-            || rel_path
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            return Err(FrfError::new(format!(
-                "inventory path {rel} escapes the bundle"
-            )));
-        }
-        let full = root.join(rel);
-        let bytes = match fs::read(&full) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(FrfError::new(format!(
-                    "bundle is incomplete: {rel} is missing — the manifest records it but the bundle does not carry it"
-                )));
-            }
-            Err(e) => {
-                return Err(FrfError::new(format!("cannot read {rel}: {e}")));
-            }
-        };
-        let actual = host::sha256_bytes(&bytes);
-        if actual != sha {
-            return Err(FrfError::new(format!(
-                "bundle is corrupt: {rel} hashes to {} but the manifest records {sha}",
-                &actual[..16]
-            )));
-        }
-        if kind == "object" {
-            let name = rel_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default();
-            if name != sha {
-                return Err(FrfError::new(format!(
-                    "bundle is corrupt: object file {rel} is not named by its digest"
-                )));
-            }
-        }
-        inventory.insert(rel.to_string(), (sha, kind));
+    for entry in &manifest.inventory {
+        inventory.insert(
+            entry.path.clone(),
+            (entry.sha256.as_str(), entry.kind.as_str()),
+        );
     }
-
-    // 2. The receipt verifies against the bundle alone, and the manifest
-    //    covers its complete required closure.
     let store = Store::new(root.to_path_buf());
-    let closure = collect_closure(&store, &receipt_id)?;
+    let closure = collect_closure(&store, &manifest.receipt_id)?;
     for entry in &closure.entries {
         match inventory.get(&entry.rel) {
             Some((sha, _)) if *sha == entry.sha256 => {}
@@ -1348,15 +1572,7 @@ fn verify_root(root: &Path, container: Container) -> Result<()> {
             }
         }
     }
-
-    println!(
-        "bundle {} verified: receipt {receipt_id}, run {}, {} file(s) in the closure ({})",
-        root.display(),
-        closure.run,
-        closure.entries.len(),
-        container.as_str()
-    );
-    Ok(())
+    Ok(closure)
 }
 
 /// `frf bundle replay BUNDLE.frf [--policy exact|semantic]`: re-execute the
@@ -1380,50 +1596,23 @@ fn verify_root(root: &Path, container: Container) -> Result<()> {
 /// what it executes inside the temp copy, and a read-only bundle stays
 /// replayable.
 pub fn replay_bundle(bundle_path: &Path, policy: &str) -> Result<()> {
-    // Always replay from a mutable temp copy of the bundle.
+    // The bundle must prove itself BEFORE anything is copied, staged, or
+    // replayed from it: `open_verified_bundle` confines the bytes (the same
+    // structural rules for both container forms), parses the manifest
+    // strictly, validates every identifier, and proves the exact inventory —
+    // only then does replay read anything out of the safe tree.
+    let verified = open_verified_bundle(bundle_path)?;
+    verify_bundle_contents(&verified)?;
+    let receipt_id = verified.manifest().receipt_id.clone();
     let temp = TempRoot::new("replay")?;
-    let container = if bundle_path.is_dir() {
-        // Stage into a flat extraction dir first so the receipt's evidence
-        // root can decide the final layout.
-        let staged = temp.dir.join("extract");
-        fs::create_dir_all(&staged)
-            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", staged.display())))?;
-        copy_tree(bundle_path, &staged)?;
-        Container::Directory
-    } else if bundle_path.is_file() {
-        let bytes = read(bundle_path, "bundle")?;
-        let staged = temp.dir.join("extract");
-        fs::create_dir_all(&staged)
-            .map_err(|e| FrfError::new(format!("cannot create {}: {e}", staged.display())))?;
-        extract_tar_into(&bytes, &staged)?;
-        if !staged.join("manifest.json").is_file() {
-            return Err(FrfError::new(format!(
-                "{} is an incomplete single-file bundle: manifest.json is missing (truncated archive?)",
-                bundle_path.display()
-            )));
-        }
-        Container::SingleTar
-    } else {
-        return Err(FrfError::new(format!(
-            "{} is neither a bundle directory nor a single-file bundle",
-            bundle_path.display()
-        )));
-    };
+    let staged = verified.root();
 
     // The evidence root decides the reconstructed layout: the store lives at
     // <temp>/<evidence_root>, and the sides run from <temp>, so recorded
     // argv paths (which embed the observation's --root) resolve to the
-    // bundle's objects. The value is a claim until verified, but it is
-    // contained: absolute or parent-escaped roots are refused up front.
-    let staged = temp.dir.join("extract");
-    let manifest_text = fs::read_to_string(staged.join("manifest.json"))
-        .map_err(|e| FrfError::new(format!("cannot read manifest.json: {e}")))?;
-    let manifest: Value = serde_json::from_str(&manifest_text)
-        .map_err(|e| FrfError::new(format!("manifest.json is not valid JSON: {e}")))?;
-    let receipt_id = manifest["receipt_id"]
-        .as_str()
-        .ok_or_else(|| FrfError::new("manifest.json carries no receipt_id"))?
-        .to_string();
+    // bundle's objects. The value is read from the PROVEN receipt inside the
+    // safe tree, and it is contained: absolute or parent-escaped roots are
+    // refused up front.
     let receipt_text = fs::read_to_string(staged.join(format!("receipts/{receipt_id}.json")))
         .map_err(|e| FrfError::new(format!("cannot read {receipt_id}: {e}")))?;
     let receipt: Value = serde_json::from_str(&receipt_text)
@@ -1443,12 +1632,10 @@ pub fn replay_bundle(bundle_path: &Path, policy: &str) -> Result<()> {
     let store_root = temp.dir.join(evidence_root);
     fs::create_dir_all(&store_root)
         .map_err(|e| FrfError::new(format!("cannot create {}: {e}", store_root.display())))?;
-    copy_tree(&staged, &store_root)?;
-    fs::remove_dir_all(&staged)
-        .map_err(|e| FrfError::new(format!("cannot remove {}: {e}", staged.display())))?;
-
-    // The bundle must prove itself before anything is replayed from it.
-    verify_root(&store_root, container)?;
+    // The safe tree is proven link-free, so this copy is a pure layout move;
+    // it still goes through the confined walk (one code path, one trust
+    // model).
+    copy_tree(staged, &store_root)?;
 
     eprintln!(
         "bundle replay: replaying {} from {} (the bundle alone)",
