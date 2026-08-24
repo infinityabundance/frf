@@ -64,15 +64,17 @@ Every operation derives its plan from the SAME capture-bound fields
 | replay      | nothing           | the whole observation                     | observation-reproduces  |
 | resolution  | candidate artifact| question, authority, fixture, environment, comparator | axis-closes  |
 | reduction   | fixture           | candidate, authority, comparator, environment | lineage-survives   |
-| trajectory  | the declared coordinate | the question, the artifacts, the relation | observed/absent per point |
+| trajectory  | the declared coordinate | lineage, axis, question, authority, comparator | movement-classified |
 
-This is the **evidence-transform** frame: every operation that produces new
-evidence from old evidence declares what it permits to change and what it
-requires to stay, and records that declaration in the evidence it produces
-(the reduction record carries its transform; the disposition event binds the
-resolution run). The relations and the success predicates are the same
-protocol objects the rest of the evidence graph uses — never a re-derived
-built-in projection.
+This is the **evidence-transform** frame (spec/transform.md): every operation
+that produces new evidence from old evidence declares what it permits to
+change and what it requires to stay, and records that declaration in the
+evidence it produces — the reduction record carries its transform, the
+trajectory record carries its transform and is content-addressed
+(`FRF/TRAJECTORY/v1`, `frf-trajectory-v6`), and the claim record declares its
+transform (nothing varies; parity over the premises; `scope-admitted`). The
+relations and the success predicates are the same protocol objects the rest
+of the evidence graph uses — never a re-derived built-in projection.
 
 ## Why one relation
 

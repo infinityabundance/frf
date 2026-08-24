@@ -56,3 +56,4 @@
 /tests/frf
 /tests/golden
 /golden/work/heartbleed-leak-study/
+session*.md

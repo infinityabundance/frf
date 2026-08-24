@@ -802,6 +802,7 @@ pub fn run(
         blockers: blockers.iter().map(|(id, _, _)| id.clone()).collect(),
         excluded_evidence,
         requires: receipt_ids.to_vec(),
+        transform: crate::model::EvidenceTransform::claim(&receipt_ids[0], "parity"),
         knowledge_snapshot,
         policy: policy.to_string(),
         mutation_profile: required_profile,

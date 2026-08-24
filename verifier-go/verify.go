@@ -328,8 +328,20 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v9" {
+			if str(obj(claim), "schema_version") != "frf-claim-v10" {
 				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
+			}
+			// The transform declaration is the CLAIM transform: nothing varies
+			// — parity over the premises, committed by the content address. A
+			// relabeled claim is refused.
+			ct := obj(recVal(obj(claim), "transform"))
+			cvarying := arrStr(recVal(ct, "varying_dimensions"))
+			if str(ct, "kind") != "claim" ||
+				str(ct, "source") != str(obj(claim), "receipt") ||
+				len(cvarying) != 0 ||
+				str(ct, "observation_relation") != "parity" ||
+				str(ct, "success_predicate") != "scope-admitted" {
+				fail("claim %s: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted)", claimID)
 			}
 			snapshot := obj(recVal(obj(claim), "knowledge_snapshot"))
 			expectedCID, err := knowledgeSnapshotIdentity(snapshot)
@@ -487,6 +499,25 @@ func verifyTrajectoryEvidence(bundle string, body *jcs.Object, run string) {
 			t := obj(loadEvidence(safeJoin(bundle, "trajectories/"+lineage+"."+coord+"."+sid+".json")))
 			if str(t, "subject") != lineage {
 				fail("residual %s: the trajectory is not keyed by its lineage", rid)
+			}
+			// frf-trajectory-v6: the trajectory is CONTENT-ADDRESSED — the id
+			// rederives (FRF/TRAJECTORY/v1 over the canonical document minus
+			// the id, the transform declaration included) and the transform
+			// declaration is the trajectory transform (only the coordinate
+			// varies). A relabeled or hand-edited trajectory is refused.
+			if str(t, "schema_version") != "frf-trajectory-v6" {
+				fail("residual %s: trajectory schema %s (expected frf-trajectory-v6)", rid, str(t, "schema_version"))
+			}
+			if tid := str(t, "id"); tid != trajectoryIdentity(t) {
+				fail("residual %s: trajectory is not content-addressed (id %s does not rederive); refusing a hand-edited or relabeled trajectory", rid, tid)
+			}
+			tf := obj(recVal(t, "transform"))
+			varying := arrStr(recVal(tf, "varying_dimensions"))
+			if str(tf, "kind") != "trajectory" ||
+				str(tf, "source") != sid ||
+				len(varying) != 1 || varying[0] != "coordinate" ||
+				str(tf, "success_predicate") != "movement-classified" {
+				fail("residual %s: trajectory does not declare the trajectory transform (coordinate varies; movement-classified)", rid)
 			}
 			// The classification recomputes from the observations (sorted by
 			// point index) with the magnitudes recomputed from the residuals.

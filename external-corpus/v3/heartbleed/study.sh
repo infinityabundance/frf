@@ -5,7 +5,9 @@
 # (sensitivity-backed). Run from the repository root:
 #   sh external-corpus/v3/heartbleed/study.sh
 set -eu
-ROOT=/run/media/one/1tb_kingston1/frf
+# The repository root, resolved from this script's own location (the study
+# runs from a checkout whose mount point may differ between machines).
+ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 HB="$ROOT/external-corpus/v3/heartbleed"
 WORK="$ROOT/golden/work/heartbleed-leak-study"
 rm -rf "$WORK"

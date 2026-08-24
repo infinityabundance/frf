@@ -263,7 +263,7 @@ fn repeated_court_writes_a_persistent_trajectory_and_the_receipt_derives_its_sig
     trajectories.sort_by_key(|t| t["subject"].as_str().unwrap().to_string());
     let mut series_id = String::new();
     for t in &trajectories {
-        assert_eq!(t["schema_version"], "frf-trajectory-v5");
+        assert_eq!(t["schema_version"], "frf-trajectory-v6");
         assert_eq!(t["coordinate_system"], "repeat_index");
         assert_eq!(t["derivation"]["drift"], "persistent");
         assert_eq!(t["derivation"]["slew"], "stable");
@@ -405,7 +405,7 @@ fn repeated_court_with_a_nondeterministic_candidate_writes_a_valid_trajectory() 
     for path in &files {
         let t: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-        assert_eq!(t["schema_version"], "frf-trajectory-v5");
+        assert_eq!(t["schema_version"], "frf-trajectory-v6");
         assert_eq!(t["coordinate_system"], "repeat_index");
         let obs = t["observations"].as_array().unwrap();
         assert_eq!(obs.len(), 5);

@@ -7,11 +7,13 @@ sentence — and written to `claims/<claim-id>.json` with a by-receipt index at
 `claims/by-receipt/<first-premise-receipt>/<claim-id>` (or rendered canonically
 with `--json`).
 
-The claim schema is `frf-claim-v9` (v9 adds the sensitivity mutation
+The claim schema is `frf-claim-v10` (v9 added the sensitivity mutation
 profile: the required AXIS:FAMILY pairs the claim was compiled under and
-each capability entry's demonstrated operators). The core of the protocol
-is the paper's admission rule, made RELATIVE to an explicitly committed
-state of knowledge:
+each capability entry's demonstrated operators; v10 declares the claim's
+EVIDENCE TRANSFORM — nothing varies, parity over the premises, `scope-admitted`
+— committed by the content address, spec/transform.md). The core of the
+protocol is the paper's admission rule, made RELATIVE to an explicitly
+committed state of knowledge:
 
 ```text
 Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)     and     no unresolved residual in U intersects K
@@ -84,7 +86,7 @@ the admission from the claim alone (the independent verifiers do).
 ClaimRecord {
     id                 content address: FRF/CLAIM/v1 over the canonical
                        document minus the id (Section 0)
-    schema_version     frf-claim-v9
+    schema_version     frf-claim-v10
     receipt            the FIRST premise receipt (the claim's root into the
                        evidence graph; the by-receipt index maps it)
     authority          prose id of the admitted reference (all premises bind
@@ -106,6 +108,11 @@ ClaimRecord {
     blockers           residuals that refuse this claim
     excluded_evidence  observed divergences outside K's cells
     requires           ALL premise receipt ids
+    transform          the EVIDENCE TRANSFORM declaration (v10): kind=claim,
+                       source=the first premise receipt, nothing varies,
+                       invariant={candidate, authority}, relation=parity,
+                       success=scope-admitted — committed by the claim's
+                       content address (spec/transform.md)
     knowledge_snapshot U — the evidence universe the absence search ran over
     policy             the admission policy (Section 0)
     mutation_profile   the REQUIRED sensitivity mutation profile: the
@@ -143,7 +150,7 @@ ClaimRecord {
 }
 
 KnowledgeSnapshot {
-    schema_version     frf-claim-v9
+    schema_version     frf-claim-v10
     cid                SHA-256 of FRF/KNOWLEDGE/v2 over the snapshot's fields
     residual_heads     every residual present in U, committed as an exact
                        immutable observation: (id, record_cid — the content

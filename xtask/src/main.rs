@@ -1436,6 +1436,38 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
             if as_str(&t["subject"]) != lineage {
                 panic!("trajectory of {rid} is not keyed by its lineage");
             }
+            // frf-trajectory-v6: the trajectory is CONTENT-ADDRESSED — the
+            // id rederives (FRF/TRAJECTORY/v1 over the canonical document
+            // minus the id, the transform declaration included) and the
+            // transform declaration is the trajectory transform (only the
+            // coordinate varies). A relabeled or hand-edited trajectory is
+            // refused.
+            let mut tdoc = t.clone();
+            if let Some(obj) = tdoc.as_object_mut() {
+                obj.remove("id");
+            }
+            let tcanon = encode(&tdoc)
+                .unwrap_or_else(|e| panic!("trajectory of {rid}: cannot canonicalize: {e}"));
+            let trederived = sha256_bytes(format!("FRF/TRAJECTORY/v1\n{tcanon}").as_bytes());
+            if as_str(&t["id"]) != trederived {
+                panic!(
+                    "trajectory of {rid} is not content-addressed: the canonical document minus the id hashes to {trederived}; refusing a hand-edited or relabeled trajectory"
+                );
+            }
+            let tform = &t["transform"];
+            let varying: Vec<&str> = tform["varying_dimensions"]
+                .as_array()
+                .map(|a| a.iter().map(|v| v.as_str().unwrap_or("")).collect())
+                .unwrap_or_default();
+            if as_str(&tform["kind"]) != "trajectory"
+                || as_str(&tform["source"]) != sid
+                || varying != ["coordinate"]
+                || as_str(&tform["success_predicate"]) != "movement-classified"
+            {
+                panic!(
+                    "trajectory of {rid} does not declare the trajectory transform (coordinate varies; movement-classified)"
+                );
+            }
             // The classification REDERIVES from the observations (sorted by
             // point), it is not read from the file's derivation: the
             // presence pattern over the coordinate system, with the
@@ -1631,10 +1663,27 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v9" {
+            if as_str(&claim["schema_version"]) != "frf-claim-v10" {
                 panic!(
                     "claim {claim_id}: unexpected schema version {}",
                     as_str(&claim["schema_version"])
+                );
+            }
+            // The transform declaration is the CLAIM transform: nothing
+            // varies — parity over the premises, committed by the content
+            // address. A relabeled claim is refused.
+            let ct = &claim["transform"];
+            if as_str(&ct["kind"]) != "claim"
+                || as_str(&ct["source"]) != as_str(&claim["receipt"])
+                || !ct["varying_dimensions"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(false)
+                || as_str(&ct["observation_relation"]) != "parity"
+                || as_str(&ct["success_predicate"]) != "scope-admitted"
+            {
+                panic!(
+                    "claim {claim_id}: its transform declaration is not the claim transform (nothing varies; parity; scope-admitted)"
                 );
             }
             let snapshot = &claim["knowledge_snapshot"];

@@ -246,6 +246,7 @@ mod tests {
             blockers: Vec::new(),
             excluded_evidence: vec!["cli-text-0001".to_string()],
             requires: vec!["receipt-run-x-abc".to_string()],
+            transform: EvidenceTransform::claim("receipt-run-x-abc", "parity"),
             knowledge_snapshot: KnowledgeSnapshot {
                 schema_version: SCHEMA_CLAIM.to_string(),
                 cid: "f".repeat(64),

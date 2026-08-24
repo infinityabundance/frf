@@ -1000,6 +1000,25 @@ pub fn claim_identity(claim: &ClaimRecord) -> Result<String> {
     ))
 }
 
+/// The content address of a TRAJECTORY record: `FRF/TRAJECTORY/v1` over the
+/// canonical document minus the `id` field — the trajectory is a DERIVED
+/// protocol object (the transform declaration included), so it can never be
+/// relabeled as a different kind of evidence without changing its identity.
+/// The identity commits the observations AND the derivation (drift/slew/
+/// localization/bands/trend), so the record cannot be hand-edited into a
+/// different classification.
+pub fn trajectory_identity(trajectory: &TrajectoryRecord) -> Result<String> {
+    let mut value = serde_json::to_value(trajectory)
+        .map_err(|e| FrfError::new(format!("cannot serialize the trajectory: {e}")))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("id");
+    }
+    let json = crate::canon::canonical(&value)?;
+    Ok(host::sha256_bytes(
+        format!("FRF/TRAJECTORY/v1\n{json}").as_bytes(),
+    ))
+}
+
 /// The CONTENT ADDRESS of an evidence record (a residual record or an
 /// authority record): SHA-256 of the canonical serialization of the record's
 /// own fields. Records are stored as canonical JSON evidence documents, and

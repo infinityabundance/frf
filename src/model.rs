@@ -219,7 +219,7 @@ pub const SCHEMA_RECEIPT: &str = "frf-receipt-v20";
 /// `claimed observables(K) ⊆ demonstrated-sensitive observables(C)` is
 /// policy-checkable per family — and still bounded (a demonstrated family is
 /// never a universal-correctness claim).
-pub const SCHEMA_CLAIM: &str = "frf-claim-v9";
+pub const SCHEMA_CLAIM: &str = "frf-claim-v10";
 /// Runner identity block recorded in every capture at court time.
 pub const SCHEMA_RUNNER: &str = "frf-runner-v1";
 
@@ -694,7 +694,7 @@ pub const BUNDLE_CONTAINER_SINGLE_TAR: &str = "single-tar";
 /// (`FRF/COORDINATE/v1`) — a trajectory says exactly what varied at each
 /// point (the candidate artifact identity, the authority record address, the
 /// effective environment digest), not merely what the point was labelled.
-pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v5";
+pub const SCHEMA_TRAJECTORY: &str = "frf-trajectory-v6";
 
 /// The ExecutionSeries protocol object: the experiment. One chain per
 /// (court, coordinate system); points are appended by series courts
@@ -4278,6 +4278,11 @@ pub struct TrajectoryObservation {
 #[serde(deny_unknown_fields)]
 pub struct TrajectoryRecord {
     pub schema_version: String,
+    /// Content address: `FRF/TRAJECTORY/v1` over the canonical document
+    /// minus the id field — the trajectory is a DERIVED protocol object like
+    /// the reduction: content-addressed over its own fields (observations +
+    /// derivation + transform declaration).
+    pub id: String,
     /// The residual lineage identity — the stable subject.
     pub subject: String,
     pub axis: String,
@@ -4289,6 +4294,9 @@ pub struct TrajectoryRecord {
     pub series: String,
     pub observations: Vec<TrajectoryObservation>,
     pub derivation: TrajectoryDerivation,
+    /// The transform declaration: the coordinate varies; the lineage, axis,
+    /// question, authority, and comparator must stay.
+    pub transform: EvidenceTransform,
 }
 
 /// THE DETACHED-OBJECT DECLARATION — `detached-objects.json` at the
@@ -4424,7 +4432,8 @@ pub const SCHEMA_REDUCTION: &str = "frf-reduction-v5";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceTransform {
-    /// `observation` | `resolution` | `replay` | `trajectory` | `reduction`.
+    /// `observation` | `resolution` | `replay` | `trajectory` | `reduction`
+    /// | `claim`.
     pub kind: String,
     /// The source evidence this transform consumes (run id / residual id).
     pub source: String,
@@ -4502,6 +4511,44 @@ impl EvidenceTransform {
             ],
             observation_relation: relation.to_string(),
             success_predicate: "lineage-survives".to_string(),
+        }
+    }
+
+    /// The transform a TRAJECTORY is: only the coordinate varies (repetition
+    /// index, candidate revision, authority version, environment, time); the
+    /// lineage, axis, question, authority, and comparator must stay. The
+    /// trajectory record declares this transform and is content-addressed
+    /// (`FRF/TRAJECTORY/v1`), so the movement classification is a first-class
+    /// derived protocol object — never relabelable evidence.
+    pub fn trajectory(series: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "trajectory".to_string(),
+            source: series.to_string(),
+            varying_dimensions: vec!["coordinate".to_string()],
+            invariant_dimensions: vec![
+                "lineage".to_string(),
+                "axis".to_string(),
+                "question".to_string(),
+                "authority".to_string(),
+                "comparator".to_string(),
+            ],
+            observation_relation: relation.to_string(),
+            success_predicate: "movement-classified".to_string(),
+        }
+    }
+
+    /// The transform a CLAIM is: nothing varies — the claim is the scope
+    /// algebra over exactly the premises, the committed universe, and the
+    /// admission policy. The claim record declares this transform and is
+    /// content-addressed (`FRF/CLAIM/v1`).
+    pub fn claim(receipt: &str, relation: &str) -> EvidenceTransform {
+        EvidenceTransform {
+            kind: "claim".to_string(),
+            source: receipt.to_string(),
+            varying_dimensions: vec![],
+            invariant_dimensions: vec!["candidate".to_string(), "authority".to_string()],
+            observation_relation: relation.to_string(),
+            success_predicate: "scope-admitted".to_string(),
         }
     }
 }
@@ -5894,6 +5941,11 @@ pub struct ClaimRecord {
     /// Claim IR — the premise receipts: admission is
     /// `Scope(K) ⊆ Scope(P₁ ∪ … ∪ Pₙ)` over these.
     pub requires: Vec<String>,
+    /// The transform declaration: nothing varies — the claim is the scope
+    /// algebra over exactly the premises, the committed universe, and the
+    /// admission policy (`parity` / `scope-admitted`). Committed by the
+    /// claim's content address like the reduction's transform.
+    pub transform: EvidenceTransform,
     /// The evidence universe the blocker search ran over (the negative
     /// search is as portable as the premises).
     pub knowledge_snapshot: KnowledgeSnapshot,

@@ -31,7 +31,7 @@ fn pathological_strings() -> Vec<String> {
         "\u{10000}".to_string(),
         "\u{e000}".to_string(),
         "\u{d7ff}".to_string(),
-        format!("boundary-\u{10000}-\u{e000}-\u{d7ff}"),
+        "boundary-\u{10000}-\u{e000}-\u{d7ff}".to_string(),
         // Escaped/unescaped equivalents: "\u0041" == "A" — the canonical
         // form must be the shortest escape / literal consistently.
         "\u{0041}".to_string(),

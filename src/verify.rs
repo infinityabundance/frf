@@ -1285,6 +1285,50 @@ pub fn sign_for(
     })
 }
 
+/// Verify a trajectory DOCUMENT as evidence. The trajectory is a DERIVED
+/// protocol object (frf-trajectory-v6): (1) it matches its document address
+/// (the derivation key `subject.coordinate_system.series`); (2) its content
+/// address rederives (`FRF/TRAJECTORY/v1` over the canonical document minus
+/// the id — the transform declaration included, so a relabeled trajectory is
+/// a different id); and (3) it is the EXACT derivation from its pinned
+/// series — the observations, the deterministic classification, and the
+/// transform declaration are re-derived from the verified series and the
+/// documents compared byte-for-byte. A trajectory that fails any of these is
+/// not evidence.
+pub fn verify_trajectory_document(
+    store: &Store,
+    subject: &str,
+    coordinate_system: &str,
+    series: &str,
+) -> Result<()> {
+    let t = store.load_trajectory(subject, coordinate_system, series)?;
+    if t.subject != subject || t.coordinate_system != coordinate_system || t.series != series {
+        return Err(FrfError::new(format!(
+            "trajectory {}: the record does not match its document address",
+            t.id
+        )));
+    }
+    let rederived = crate::semantics::trajectory_identity(&t)?;
+    if t.id != rederived {
+        return Err(FrfError::new(format!(
+            "trajectory {} (subject {}): the record does not rederive its content address — a hand-edited or relabeled trajectory is not evidence",
+            &t.id[..16.min(t.id.len())],
+            &subject[..16.min(subject.len())]
+        )));
+    }
+    let series_rec = store.load_series(series)?;
+    let rederived_rec = crate::store::derive_lineage_trajectory(store, &series_rec, subject)?;
+    let stored_canon = crate::canon::canonical(&t)?;
+    let derived_canon = crate::canon::canonical(&rederived_rec)?;
+    if stored_canon != derived_canon {
+        return Err(FrfError::new(format!(
+            "trajectory {} does not re-derive from its series — the stored document is not the exact derivation of its pinned evidence",
+            &t.id[..16.min(t.id.len())]
+        )));
+    }
+    Ok(())
+}
+
 /// Verify a receipt entry's sign against the evidence it PINNED. Every entry
 /// names the exact ExecutionSeries snapshot the drift/slew were derived
 /// from; the verifier replays THAT series (it must exist, contain the run,
@@ -1332,6 +1376,7 @@ pub fn verify_sign(store: &Store, record: &ResidualRecord, sign: &ResidualSign) 
             )));
         }
         let t = store.load_trajectory(&lineage, &series.coordinate_system, &entry.series)?;
+        verify_trajectory_document(store, &lineage, &series.coordinate_system, &entry.series)?;
         if entry.drift != t.derivation.drift.as_str() || entry.slew != t.derivation.slew.as_str() {
             return Err(FrfError::new(format!(
                 "residual {}: drift/slew do not match the pinned series' trajectory",
@@ -2256,6 +2301,21 @@ pub fn verify_knowledge_universe(store: &Store, universe: &KnowledgeSnapshot) ->
 ///    rederive.
 pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     let claim = store.load_claim(id)?;
+
+    // 1.5 The transform declaration is the CLAIM transform: nothing varies
+    //     — parity over the premises, committed by the content address. A
+    //     claim whose declaration was relabeled is not evidence.
+    let claim_transform_ok = claim.transform.kind == "claim"
+        && claim.transform.source == claim.receipt
+        && claim.transform.varying_dimensions.is_empty()
+        && claim.transform.invariant_dimensions == ["candidate", "authority"]
+        && claim.transform.observation_relation == "parity"
+        && claim.transform.success_predicate == "scope-admitted";
+    if !claim_transform_ok {
+        return Err(FrfError::new(format!(
+            "claim {id}: its transform declaration is not the claim transform (nothing varies; parity over the premises; scope-admitted) — a relabeled claim is not evidence"
+        )));
+    }
 
     // 2. Every premise is a verified receipt.
     let mut premises: Vec<ReceiptVerified> = Vec::new();
@@ -3879,8 +3939,10 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
     }
 
     // trajectories/ — the filename IS the address
-    // ({subject}.{coordinate_system}.{series}.json); the record must match
-    // it and the derived sign must be the deterministic classification.
+    // ({subject}.{coordinate_system}.{series}.json); every document is a
+    // VERIFIED DERIVED OBJECT: its content address rederives
+    // (FRF/TRAJECTORY/v1, the transform declaration included) and it is the
+    // exact byte-for-byte derivation from its pinned series.
     let trajectories_dir = store.root.join("trajectories");
     if trajectories_dir.is_dir() {
         let mut n = 0usize;
@@ -3901,19 +3963,8 @@ pub fn verify_whole_store(store: &Store) -> Result<WholeStoreReport> {
                 ));
                 continue;
             };
-            match store.load_trajectory(subject, coordinate, series) {
-                Ok(t) => {
-                    if t.subject != subject
-                        || t.coordinate_system != coordinate
-                        || t.series != series
-                    {
-                        errors.push(format!(
-                            "trajectory {name}: the record does not match its filename address"
-                        ));
-                        continue;
-                    }
-                    n += 1;
-                }
+            match verify_trajectory_document(store, subject, coordinate, series) {
+                Ok(_) => n += 1,
                 Err(e) => errors.push(format!("trajectory {name}: {e}")),
             }
         }

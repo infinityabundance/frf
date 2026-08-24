@@ -1,1110 +1,1124 @@
 {
-  "schema_version": "frf-protocol-registry-v1",
-  "description": "The machine-readable inventory of the FRF evidence protocol. This registry is the AUTHORITY: every schema version, identity domain, relation, policy, and execution profile used anywhere in the reference engine or the independent verifiers must occur here (tests/protocol_registry.rs enforces it), and the README's registry tables are generated from it. Status values: active (the protocol currently defines it), superseded (a previous version, kept for history), future (designed, not yet implemented), reserved-invalid (deliberately refused values used by negative tests), test-only (reserved for unit-test fixtures, never protocol).",
-  "objects": [
-    {
-      "id": "artifact",
-      "meaning": "Exact executable/data bytes under objects/sha256/<H>, content-addressed by their bytes",
-      "schema": null,
-      "status": "active"
-    },
-    {
-      "id": "authority",
-      "meaning": "Admitted reference executable and its provenance",
-      "schema": "frf-authority-v1",
-      "status": "active"
-    },
-    {
-      "id": "environment",
-      "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + the DECLARED execution environment the sides ran under + digest)",
-      "schema": "frf-environment-v3",
-      "identity": "FRF/ENVIRONMENT/v2",
-      "status": "active"
-    },
-    {
-      "id": "court",
-      "meaning": "Semantic question + falsifier + envelope (human-authored YAML manifest, not evidence)",
-      "schema": null,
-      "status": "active"
-    },
-    {
-      "id": "comparator-spec",
-      "meaning": "Meaning of a comparison relation (extractor/relation/classifier/version)",
-      "schema": null,
-      "identity": "FRF/COMPARATOR-SPEC/v2",
-      "status": "active"
-    },
-    {
-      "id": "normalizer-spec",
-      "meaning": "Meaning of a comparison-surface transform (relation + the streams it applies to)",
-      "schema": null,
-      "identity": "FRF/NORMALIZER-SPEC/v2",
-      "status": "active"
-    },
-    {
-      "id": "capture-adapter-spec",
-      "meaning": "Meaning of an adapted observation for an externally served axis",
-      "schema": null,
-      "identity": "FRF/CAPTURE-ADAPTER-SPEC/v2",
-      "status": "active"
-    },
-    {
-      "id": "minimizer-spec",
-      "meaning": "Meaning of a reduction relation",
-      "schema": null,
-      "identity": "FRF/MINIMIZER-SPEC/v2",
-      "status": "active"
-    },
-    {
-      "id": "mutation-spec",
-      "meaning": "Meaning of a mutation relation (the defect class a provider proposes)",
-      "schema": null,
-      "identity": "FRF/MUTATION-SPEC/v1",
-      "status": "active"
-    },
-    {
-      "id": "witness-spec",
-      "meaning": "Meaning of a witness attestation relation",
-      "schema": null,
-      "identity": "FRF/WITNESS-SPEC/v2",
-      "status": "active"
-    },
-    {
-      "id": "execution",
-      "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 — what was observed) and the execution identity (FRF/EXECUTION/v1 — under exactly what machinery/contract it was observed). v15: the capture binds the harness events recorded during the run's observation (the bound-firing records that completed as valid side outcomes)",
-      "schema": "frf-capture-v15",
-      "identity": "FRF/RUN/v2",
-      "status": "active"
-    },
-    {
-      "id": "harness-event",
-      "meaning": "Evidentiary overflow record: a declared bound the harness ENFORCED during an observation attempt (stream-overflow | timeout | rlimit | produced-overflow), content-addressed under harness/<id>.json — the run is still refused (fail-closed, never truncated), but the refusal is itself provable evidence. A bound that refuses the run (stream/timeout/produced overflow) leaves no capture to bind to: those events are court-scoped refusal evidence, named by the refusal message; a bound that completes as a valid side outcome (the CPU limit's SIGXCPU) is cited by the run's capture (frf-capture-v15) and travels with the run's bundle",
-      "schema": "frf-harness-event-v1",
-      "identity": "FRF/HARNESS-EVENT/v1",
-      "status": "active"
-    },
-    {
-      "id": "execution-attempt",
-      "meaning": "Refused observation attempt made first-class: when a court's observation attempt ends in a harness refusal (stream overflow, timeout, produced-tree overflow) there is no successful run to become the durable graph root of that attempt — the refusal itself is the observation about the attempt. A content-addressed immutable record under attempts/<id>.json binding the declared court + its semantic identity, the bound artifacts, the fixture, argv, the environment digest, the execution contract (profile + capture bounds as enforced), the side that refused, the recorded harness-event ids, and the refusal reason. The identity rederives on every read and every cited harness event is itself verified — a refusal is as portable as the observation that would have been captured. The `refused` arm of the conceptual ExecutionAttempt sum (completed attempts ARE runs); the error message is no longer the only surface through which a failed observation attempt is named",
-      "schema": "frf-execution-attempt-v1",
-      "identity": "FRF/EXECUTION-ATTEMPT/v1",
-      "status": "active"
-    },
-    {
-      "id": "execution-context",
-      "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) — high-assurance means the declared context is bound, not that every file read was captured",
-      "schema": "frf-execution-context-v1",
-      "identity": "FRF/EXECUTION-CONTEXT/v1",
-      "status": "active"
-    },
-    {
-      "id": "observation-identity",
-      "meaning": "What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them",
-      "schema": null,
-      "identity": "FRF/OBSERVATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "execution-identity",
-      "meaning": "Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract",
-      "schema": null,
-      "identity": "FRF/EXECUTION/v1",
-      "status": "active"
-    },
-    {
-      "id": "observation",
-      "meaning": "Raw captured result (side capture + produced-artifact tree)",
-      "schema": "frf-produced-v1",
-      "status": "active"
-    },
-    {
-      "id": "residual",
-      "meaning": "Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified — no shared sequence counter anywhere in the residual namespace",
-      "schema": "frf-residual-v1",
-      "identity": "FRF/RESIDUAL/v1",
-      "status": "active"
-    },
-    {
-      "id": "residual-lineage",
-      "meaning": "Stable comparison surface / QUESTION CLASS (FRF/RESIDUAL-LINEAGE/v1): one lineage spans candidate revisions, authority versions, environments, and time — many fingerprints, one trajectory. Lineage is the trajectory subject and scope key, never exact divergence identity",
-      "schema": null,
-      "identity": "FRF/RESIDUAL-LINEAGE/v1",
-      "status": "active"
-    },
-    {
-      "id": "disposition-event",
-      "meaning": "Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims",
-      "schema": "frf-disposition-v3",
-      "identity": "FRF/DISPOSITION-EVENT/v1",
-      "status": "active"
-    },
-    {
-      "id": "resolution",
-      "meaning": "Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation)",
-      "schema": null,
-      "status": "active"
-    },
-    {
-      "id": "series",
-      "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled",
-      "schema": "frf-series-v4",
-      "identity": "FRF/SERIES/v3",
-      "status": "active"
-    },
-    {
-      "id": "trajectory",
-      "meaning": "Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled",
-      "schema": "frf-trajectory-v5",
-      "status": "active"
-    },
-    {
-      "id": "reduction",
-      "meaning": "Minimization attempt: fixture reduction + preservation predicate",
-      "schema": "frf-reduction-v5",
-      "identity": "FRF/REDUCTION/v3",
-      "status": "active"
-    },
-    {
-      "id": "token",
-      "meaning": "Deterministic endoduction result routing the residual",
-      "schema": "frf-token-v1",
-      "status": "active"
-    },
-    {
-      "id": "challenge",
-      "meaning": "Court capability evidence: a seeded defect the court demonstrated it can see",
-      "schema": "frf-challenge-v1",
-      "identity": "FRF/CHALLENGE/v1",
-      "status": "active"
-    },
-    {
-      "id": "witness-statement",
-      "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence — independence is the separate `independence` object",
-      "schema": "frf-witness-statement-v3",
-      "identity": "FRF/WITNESS-STATEMENT/v1",
-      "status": "active"
-    },
-    {
-      "id": "independence",
-      "meaning": "Declared independence relation about a witness attestation, with its basis",
-      "schema": "frf-independence-v1",
-      "identity": "FRF/INDEPENDENCE/v1",
-      "status": "active"
-    },
-    {
-      "id": "knowledge-snapshot",
-      "meaning": "The committed evidence universe U a claim's absence scan ran over",
-      "schema": "frf-claim-v9",
-      "identity": "FRF/KNOWLEDGE/v2",
-      "status": "active"
-    },
-    {
-      "id": "claim",
-      "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators",
-      "schema": "frf-claim-v9",
-      "identity": "FRF/CLAIM/v1",
-      "status": "active"
-    },
-    {
-      "id": "receipt",
-      "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds)",
-      "schema": "frf-receipt-v20",
-      "status": "active"
-    },
-    {
-      "id": "runtime-closure",
-      "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment",
-      "schema": "frf-runtime-closure-v1",
-      "identity": "FRF/RUNTIME-CLOSURE/v1",
-      "status": "active"
-    },
-    {
-      "id": "bundle",
-      "meaning": "Portable closure of referenced evidence (directory or single tar)",
-      "schema": "frf-bundle-v3",
-      "status": "active"
-    },
-    {
-      "id": "ci-status",
-      "meaning": "CI gate presentation of a compiled claim",
-      "schema": "frf-ci-status-v1",
-      "status": "active"
-    },
-    {
-      "id": "comparator-invocation",
-      "meaning": "Extension evidence: what was invoked, against which request",
-      "schema": "frf-comparator-invocation-v1",
-      "identity": "FRF/COMPARATOR-INVOCATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "comparator-result",
-      "meaning": "Extension evidence: which response answered which request",
-      "schema": "frf-comparator-result-v1",
-      "identity": "FRF/COMPARATOR-RESULT/v1",
-      "status": "active"
-    },
-    {
-      "id": "normalizer-invocation",
-      "meaning": "Normalizer invocation evidence",
-      "schema": "frf-normalizer-invocation-v1",
-      "identity": "FRF/NORMALIZER-INVOCATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "normalizer-result",
-      "meaning": "Normalizer result evidence",
-      "schema": "frf-normalizer-result-v1",
-      "identity": "FRF/NORMALIZER-RESULT/v1",
-      "status": "active"
-    },
-    {
-      "id": "minimizer-invocation",
-      "meaning": "Minimizer invocation evidence",
-      "schema": "frf-minimizer-invocation-v1",
-      "identity": "FRF/MINIMIZER-INVOCATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "minimizer-result",
-      "meaning": "Minimizer result evidence",
-      "schema": "frf-minimizer-result-v1",
-      "identity": "FRF/MINIMIZER-RESULT/v1",
-      "status": "active"
-    },
-    {
-      "id": "mutation-invocation",
-      "meaning": "Mutation provider invocation evidence",
-      "schema": "frf-mutation-invocation-v1",
-      "identity": "FRF/MUTATION-INVOCATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "mutation-result",
-      "meaning": "Mutation provider result evidence",
-      "schema": "frf-mutation-result-v1",
-      "identity": "FRF/MUTATION-RESULT/v1",
-      "status": "active"
-    },
-    {
-      "id": "capture-adapter-invocation",
-      "meaning": "Capture adapter invocation evidence",
-      "schema": "frf-capture-invocation-v1",
-      "identity": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
-      "status": "active"
-    },
-    {
-      "id": "capture-adapter-result",
-      "meaning": "Capture adapter result evidence",
-      "schema": "frf-capture-result-v1",
-      "identity": "FRF/CAPTURE-ADAPTER-RESULT/v1",
-      "status": "active"
-    }
-  ],
-  "identities": [
-    {
-      "domain": "FRF/RUN/v2",
-      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity — the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/OBSERVATION/v1",
-      "meaning": "Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION/v1",
-      "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION-CONTEXT/v1",
-      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) — the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/HARNESS-EVENT/v1",
-      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash — the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION-ATTEMPT/v1",
-      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted — a deterministic function of the cited set), and refusal reason — the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/ENVIRONMENT/v2",
-      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map — a declared variable is content-addressed input",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/FIXTURE/v1",
-      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments — claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COURT/v2",
-      "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-SPEC/v2",
-      "meaning": "Comparator semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-SPEC/v2",
-      "meaning": "Normalizer semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-SPEC/v2",
-      "meaning": "Minimizer semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2",
-      "meaning": "Capture-adapter semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/WITNESS-SPEC/v2",
-      "meaning": "Witness semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-SPEC/v1",
-      "meaning": "Mutation semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL/v1",
-      "meaning": "Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) — collision-free under concurrent courts and idempotent under re-observation",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
-      "meaning": "The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL-LINEAGE/v1",
-      "meaning": "Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME — deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/KIND/v1",
-      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) — the registered kind vocabulary",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/SERIES/v3",
-      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points — each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/SERIES/v2",
-      "meaning": "Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities)",
-      "status": "superseded"
-    },
-    {
-      "domain": "FRF/COORDINATE/v1",
-      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value — for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/REDUCTION/v3",
-      "meaning": "Reduction record identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/REDUCTION/v2",
-      "meaning": "Previous reduction record identity (superseded by v3)",
-      "status": "superseded"
-    },
-    {
-      "domain": "FRF/KNOWLEDGE/v2",
-      "meaning": "Knowledge snapshot (evidence universe U) identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CHALLENGE/v1",
-      "meaning": "CourtChallenge identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/DISPOSITION-EVENT/v1",
-      "meaning": "Disposition event identity (hash-chained)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-INVOCATION/v1",
-      "meaning": "Comparator invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-RESULT/v1",
-      "meaning": "Comparator result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-INVOCATION/v1",
-      "meaning": "Normalizer invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-RESULT/v1",
-      "meaning": "Normalizer result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-INVOCATION/v1",
-      "meaning": "Minimizer invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-RESULT/v1",
-      "meaning": "Minimizer result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-INVOCATION/v1",
-      "meaning": "Mutation invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-RESULT/v1",
-      "meaning": "Mutation result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
-      "meaning": "Capture-adapter invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CAPTURE-ADAPTER-RESULT/v1",
-      "meaning": "Capture-adapter result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/WITNESS-IDENTITY/v1",
-      "meaning": "Witness identity (the stable WHO: semantic + implementation)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/WITNESS-STATEMENT/v1",
-      "meaning": "Witness statement identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/INDEPENDENCE-SPEC/v1",
-      "meaning": "Independence relation specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/INDEPENDENCE/v1",
-      "meaning": "Independence evidence record identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CLAIM/v1",
-      "meaning": "Compiled claim identity (over the canonical document minus the id)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RUNTIME-CLOSURE/v1",
-      "meaning": "Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/X/v1",
-      "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
-      "status": "test-only"
-    },
-    {
-      "domain": "FRF/Y/v1",
-      "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
-      "status": "test-only"
-    }
-  ],
-  "schemas": [
-    {
-      "id": "frf-authority-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-bundle-v2",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-bundle-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-bundle-v9",
-      "status": "reserved-invalid"
-    },
-    {
-      "id": "frf-capture-invocation-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-capture-request-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-capture-response-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-capture-result-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-capture-v12",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-capture-v13",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-capture-v14",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-capture-v15",
-      "status": "active"
-    },
-    {
-      "id": "frf-challenge-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-ci-status-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-claim-v7",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-claim-v8",
-      "status": "superseded",
-      "superseded_by": "frf-claim-v9"
-    },
-    {
-      "id": "frf-claim-v9",
-      "status": "active"
-    },
-    {
-      "id": "frf-comparator-invocation-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-comparator-request-v3",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-comparator-request-v4",
-      "status": "active"
-    },
-    {
-      "id": "frf-comparator-response-v2",
-      "status": "active"
-    },
-    {
-      "id": "frf-comparator-response-v9",
-      "status": "reserved-invalid"
-    },
-    {
-      "id": "frf-comparator-result-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-detached-objects-v1",
-      "status": "active",
-      "kind": "publication declaration",
-      "meaning": "the detached-object declaration (detached-objects.json): deliberately withheld content addresses + reconstruction recipes; verification distinguishes graph_verified (whole-store) / object_closure / replay_ready / replay_verified (not-performed until an actual replay)"
-    },
-    {
-      "id": "frf-disposition-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-environment-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-execution-attempt-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-execution-context-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-execution-context-v9",
-      "status": "reserved-invalid"
-    },
-    {
-      "id": "frf-experiment-v1",
-      "status": "active",
-      "scope": "xtask empirical-program report"
-    },
-    {
-      "id": "frf-external-corpus-v1",
-      "status": "active",
-      "scope": "external empirical corpus manifest"
-    },
-    {
-      "id": "frf-external-corpus-v3",
-      "status": "active",
-      "scope": "v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases)"
-    },
-    {
-      "id": "frf-external-experiment-v1",
-      "status": "active",
-      "scope": "external empirical program v1 report"
-    },
-    {
-      "id": "frf-external-experiment-v2",
-      "status": "active",
-      "scope": "external empirical program v2 report"
-    },
-    {
-      "id": "frf-external-experiment-v3",
-      "status": "active",
-      "scope": "external empirical program v3 report (real upstream releases)"
-    },
-    {
-      "id": "frf-external-experiment-v4",
-      "status": "active",
-      "scope": "external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus)"
-    },
-    {
-      "id": "frf-external-experiment-v5",
-      "status": "active",
-      "scope": "external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description — measurements only, no timing thresholds)"
-    },
-    {
-      "id": "frf-harness-event-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-independence-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-kind-v1",
-      "status": "active",
-      "scope": "residual-kind protocol record (conformance/kinds/)"
-    },
-    {
-      "id": "frf-minimizer-invocation-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-minimizer-request-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-minimizer-response-v1",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-minimizer-result-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-mutation-invocation-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-mutation-request-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-mutation-response-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-mutation-result-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-normalizer-invocation-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-normalizer-request-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-normalizer-response-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-normalizer-result-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-produced-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-provenance-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-receipt-v12",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v15",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v16",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v17",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v18",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v19",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v5",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v7",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-reduction-v4",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-v3-build-manifest-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-stream-publication-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-publication-manifest-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-residual-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-runner-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-runtime-closure-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-series-v3",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-series-v4",
-      "status": "active"
-    },
-    {
-      "id": "frf-token-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-trajectory-v4",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-trajectory-v5",
-      "status": "active"
-    },
-    {
-      "id": "frf-witness-request-v1",
-      "status": "active"
-    },
-    {
-      "id": "frf-witness-response-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-witness-statement-v3",
-      "status": "active"
-    },
-    {
-      "id": "frf-disposition-v2",
-      "status": "superseded"
-    },
-    {
-      "id": "frf-receipt-v20",
-      "status": "active"
-    },
-    {
-      "id": "frf-reduction-v5",
-      "status": "active"
-    },
-    {
-      "id": "frf-minimizer-response-v2",
-      "status": "active"
-    }
-  ],
-  "relations": {
-    "comparator": [
-      {
-        "id": "eq",
-        "meaning": "Equality over the extractor's projection",
-        "status": "active"
-      }
-    ],
-    "independence": [
-      {
-        "id": "different-implementation",
-        "meaning": "The attestation was produced by a different implementation",
-        "status": "active"
-      },
-      {
-        "id": "separate-party",
-        "meaning": "The attestation was produced by a separate party",
-        "status": "active"
-      },
-      {
-        "id": "unaffiliated-channel",
-        "meaning": "The attestation arrived over an unaffiliated channel",
-        "status": "active"
-      },
-      {
-        "id": "adversarial-review",
-        "meaning": "The attestation is an adversarial review",
-        "status": "active"
-      }
-    ],
-    "mutation-operators": [
-      {
-        "id": "exit-class",
-        "meaning": "Alter exactly the exit class",
-        "status": "active"
-      },
-      {
-        "id": "stderr-first-line",
-        "meaning": "Alter exactly the first stderr line",
-        "status": "active"
-      },
-      {
-        "id": "stdout-first-line",
-        "meaning": "Alter exactly the first stdout line",
-        "status": "active"
-      }
-    ],
-    "trajectory-coordinates": [
-      {
-        "id": "repeat_index",
-        "meaning": "Repeated observation of the same evidence",
-        "status": "active"
-      },
-      {
-        "id": "candidate_revision",
-        "meaning": "Candidate revision ladder",
-        "status": "active"
-      },
-      {
-        "id": "authority_version",
-        "meaning": "Authority version ladder",
-        "status": "active"
-      },
-      {
-        "id": "environment",
-        "meaning": "Environment points",
-        "status": "active"
-      },
-      {
-        "id": "time",
-        "meaning": "Time points",
-        "status": "active"
-      },
-      {
-        "id": "fixture_reduction",
-        "meaning": "Fixture reduction (belongs to the minimization protocol)",
-        "status": "active"
-      }
-    ],
-    "dispositions": [
-      {
-        "id": "open",
-        "meaning": "Unexplained, blocks claims whose scope intersects",
-        "status": "active"
-      },
-      {
-        "id": "fixed",
-        "meaning": "Closed by a verified resolution run",
-        "status": "active"
-      },
-      {
-        "id": "intentional",
-        "meaning": "Documented intentional divergence",
-        "status": "active"
-      },
-      {
-        "id": "environmental",
-        "meaning": "Environment-dependent",
-        "status": "active"
-      },
-      {
-        "id": "oracle_version",
-        "meaning": "The reference version changed",
-        "status": "active"
-      },
-      {
-        "id": "harness",
-        "meaning": "Runner contamination — invalidates the run's evidence",
-        "status": "active"
-      },
-      {
-        "id": "unknown",
-        "meaning": "Unclassified — treated as open",
-        "status": "active"
-      }
-    ],
-    "trajectory-classes": {
-      "drift": [
-        {
-          "id": "persistent",
-          "meaning": "Observed at every coordinate",
-          "status": "active"
-        },
-        {
-          "id": "transient",
-          "meaning": "Observed then gone",
-          "status": "active"
-        },
-        {
-          "id": "recurrent",
-          "meaning": "Observed, gone, observed again",
-          "status": "active"
-        }
-      ],
-      "slew": [
-        {
-          "id": "stable",
-          "meaning": "Present at every coordinate",
-          "status": "active"
-        },
-        {
-          "id": "abrupt",
-          "meaning": "Appears/disappears at one boundary",
-          "status": "active"
-        },
-        {
-          "id": "burst",
-          "meaning": "A bounded run of coordinates",
-          "status": "active"
-        },
-        {
-          "id": "recurrent",
-          "meaning": "Multiple separated runs",
-          "status": "active"
-        }
-      ],
-      "localization": [
-        {
-          "id": "start",
-          "meaning": "Boundary-localized at the axis start",
-          "status": "active"
-        },
-        {
-          "id": "end",
-          "meaning": "Boundary-localized at the axis end",
-          "status": "active"
-        },
-        {
-          "id": "both",
-          "meaning": "Boundary-localized at both ends",
-          "status": "active"
-        },
-        {
-          "id": "interior",
-          "meaning": "A band not touching either bound",
-          "status": "active"
-        }
-      ],
-      "trend": [
-        {
-          "id": "none",
-          "meaning": "No monotonic magnitude movement (identity surfaces never claim a trend)",
-          "status": "active"
-        },
-        {
-          "id": "increasing",
-          "meaning": "The divergence degree increases monotonically",
-          "status": "active"
-        },
-        {
-          "id": "decreasing",
-          "meaning": "The divergence degree decreases monotonically",
-          "status": "active"
-        }
-      ]
-    }
+ "schema_version": "frf-protocol-registry-v1",
+ "description": "The machine-readable inventory of the FRF evidence protocol. This registry is the AUTHORITY: every schema version, identity domain, relation, policy, and execution profile used anywhere in the reference engine or the independent verifiers must occur here (tests/protocol_registry.rs enforces it), and the README's registry tables are generated from it. Status values: active (the protocol currently defines it), superseded (a previous version, kept for history), future (designed, not yet implemented), reserved-invalid (deliberately refused values used by negative tests), test-only (reserved for unit-test fixtures, never protocol).",
+ "objects": [
+  {
+   "id": "artifact",
+   "meaning": "Exact executable/data bytes under objects/sha256/<H>, content-addressed by their bytes",
+   "schema": null,
+   "status": "active"
   },
-  "policies": [
-    {
-      "id": "baseline",
-      "meaning": "Observation evidence only (verified premises + absence scan over U)",
-      "status": "active"
-    },
-    {
-      "id": "sensitivity-backed",
-      "meaning": "Every claimed axis has challenge coverage per premise",
-      "status": "active"
-    },
-    {
-      "id": "independently-witnessed",
-      "meaning": "Sensitivity + a verified affirming witness attestation of every premise + at least one admissible independence relation per premise",
-      "status": "active"
-    },
-    {
-      "id": "high-assurance",
-      "meaning": "Independently witnessed + every premise observed under a profile providing the REQUIRED CAPABILITY SET (the reference contract: exact_capture_contract, sealed_executable_image, native_runtime_closure_bound) under the reference capture bounds — protocol constants no FRF_EXEC_* override can redefine. Every admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets) — assurance is orthogonal capabilities, never a profile-name equality; the claim records required_capabilities",
-      "status": "active"
-    }
+  {
+   "id": "authority",
+   "meaning": "Admitted reference executable and its provenance",
+   "schema": "frf-authority-v1",
+   "status": "active"
+  },
+  {
+   "id": "environment",
+   "meaning": "Execution environment identity (os/arch/kernel/locale/timezone/umask/cwd + the DECLARED execution environment the sides ran under + digest)",
+   "schema": "frf-environment-v3",
+   "identity": "FRF/ENVIRONMENT/v2",
+   "status": "active"
+  },
+  {
+   "id": "court",
+   "meaning": "Semantic question + falsifier + envelope (human-authored YAML manifest, not evidence)",
+   "schema": null,
+   "status": "active"
+  },
+  {
+   "id": "comparator-spec",
+   "meaning": "Meaning of a comparison relation (extractor/relation/classifier/version)",
+   "schema": null,
+   "identity": "FRF/COMPARATOR-SPEC/v2",
+   "status": "active"
+  },
+  {
+   "id": "normalizer-spec",
+   "meaning": "Meaning of a comparison-surface transform (relation + the streams it applies to)",
+   "schema": null,
+   "identity": "FRF/NORMALIZER-SPEC/v2",
+   "status": "active"
+  },
+  {
+   "id": "capture-adapter-spec",
+   "meaning": "Meaning of an adapted observation for an externally served axis",
+   "schema": null,
+   "identity": "FRF/CAPTURE-ADAPTER-SPEC/v2",
+   "status": "active"
+  },
+  {
+   "id": "minimizer-spec",
+   "meaning": "Meaning of a reduction relation",
+   "schema": null,
+   "identity": "FRF/MINIMIZER-SPEC/v2",
+   "status": "active"
+  },
+  {
+   "id": "mutation-spec",
+   "meaning": "Meaning of a mutation relation (the defect class a provider proposes)",
+   "schema": null,
+   "identity": "FRF/MUTATION-SPEC/v1",
+   "status": "active"
+  },
+  {
+   "id": "witness-spec",
+   "meaning": "Meaning of a witness attestation relation",
+   "schema": null,
+   "identity": "FRF/WITNESS-SPEC/v2",
+   "status": "active"
+  },
+  {
+   "id": "execution",
+   "meaning": "What was actually executed (a run: identity + capture + produced trees); the capture identity is the FRF/RUN/v2 composition of the observation identity (FRF/OBSERVATION/v1 \u2014 what was observed) and the execution identity (FRF/EXECUTION/v1 \u2014 under exactly what machinery/contract it was observed). v15: the capture binds the harness events recorded during the run's observation (the bound-firing records that completed as valid side outcomes)",
+   "schema": "frf-capture-v15",
+   "identity": "FRF/RUN/v2",
+   "status": "active"
+  },
+  {
+   "id": "harness-event",
+   "meaning": "Evidentiary overflow record: a declared bound the harness ENFORCED during an observation attempt (stream-overflow | timeout | rlimit | produced-overflow), content-addressed under harness/<id>.json \u2014 the run is still refused (fail-closed, never truncated), but the refusal is itself provable evidence. A bound that refuses the run (stream/timeout/produced overflow) leaves no capture to bind to: those events are court-scoped refusal evidence, named by the refusal message; a bound that completes as a valid side outcome (the CPU limit's SIGXCPU) is cited by the run's capture (frf-capture-v15) and travels with the run's bundle",
+   "schema": "frf-harness-event-v1",
+   "identity": "FRF/HARNESS-EVENT/v1",
+   "status": "active"
+  },
+  {
+   "id": "execution-attempt",
+   "meaning": "Refused observation attempt made first-class: when a court's observation attempt ends in a harness refusal (stream overflow, timeout, produced-tree overflow) there is no successful run to become the durable graph root of that attempt \u2014 the refusal itself is the observation about the attempt. A content-addressed immutable record under attempts/<id>.json binding the declared court + its semantic identity, the bound artifacts, the fixture, argv, the environment digest, the execution contract (profile + capture bounds as enforced), the side that refused, the recorded harness-event ids, and the refusal reason. The identity rederives on every read and every cited harness event is itself verified \u2014 a refusal is as portable as the observation that would have been captured. The `refused` arm of the conceptual ExecutionAttempt sum (completed attempts ARE runs); the error message is no longer the only surface through which a failed observation attempt is named",
+   "schema": "frf-execution-attempt-v1",
+   "identity": "FRF/EXECUTION-ATTEMPT/v1",
+   "status": "active"
+  },
+  {
+   "id": "execution-context",
+   "meaning": "The DECLARED execution-context closure: the child executables / runtime libraries / data dependencies a side's execution depends on beyond its own bytes, snapshotted and content-addressed at observation time. A DECLARED closure, never a measured file-access trace: it binds what the court author declares the side needs (for JVM evidence, java + its native startup closure + the classpath artifacts; for Python, the interpreter + the module tree; for a service, the binary + shared libs + config) \u2014 high-assurance means the declared context is bound, not that every file read was captured",
+   "schema": "frf-execution-context-v1",
+   "identity": "FRF/EXECUTION-CONTEXT/v1",
+   "status": "active"
+  },
+  {
+   "id": "observation-identity",
+   "meaning": "What was observed: the semantic question, the inputs (artifacts, fixture, argv, effective environment), and the observed answer (side projections + residual projections). Two observations with the same question, inputs, environment, and outputs share this identity regardless of which harness observed them",
+   "schema": null,
+   "identity": "FRF/OBSERVATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "execution-identity",
+   "meaning": "Under exactly what machinery/contract an observation was made: the execution profile, the effective capture bounds (including FRF_EXEC_* overrides), the runner executable, the side interpreter chains, and every comparator/normalizer/adapter/minimizer implementation. An observation is made under a declared harness contract, and its identity commits that contract",
+   "schema": null,
+   "identity": "FRF/EXECUTION/v1",
+   "status": "active"
+  },
+  {
+   "id": "observation",
+   "meaning": "Raw captured result (side capture + produced-artifact tree)",
+   "schema": "frf-produced-v1",
+   "status": "active"
+  },
+  {
+   "id": "residual",
+   "meaning": "Preserved disagreement, CONTENT-ADDRESSED by the divergence itself (FRF/RESIDUAL/v1 over run + kind + axis + surface + raw projection hashes), fingerprinted and lineage-identified \u2014 no shared sequence counter anywhere in the residual namespace",
+   "schema": "frf-residual-v1",
+   "identity": "FRF/RESIDUAL/v1",
+   "status": "active"
+  },
+  {
+   "id": "residual-lineage",
+   "meaning": "Stable comparison surface / QUESTION CLASS (FRF/RESIDUAL-LINEAGE/v1): one lineage spans candidate revisions, authority versions, environments, and time \u2014 many fingerprints, one trajectory. Lineage is the trajectory subject and scope key, never exact divergence identity",
+   "schema": null,
+   "identity": "FRF/RESIDUAL-LINEAGE/v1",
+   "status": "active"
+  },
+  {
+   "id": "disposition-event",
+   "meaning": "Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims",
+   "schema": "frf-disposition-v3",
+   "identity": "FRF/DISPOSITION-EVENT/v1",
+   "status": "active"
+  },
+  {
+   "id": "resolution",
+   "meaning": "Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation)",
+   "schema": null,
+   "status": "active"
+  },
+  {
+   "id": "series",
+   "meaning": "Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) \u2014 the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled",
+   "schema": "frf-series-v4",
+   "identity": "FRF/SERIES/v3",
+   "status": "active"
+  },
+  {
+   "id": "trajectory",
+   "meaning": "Ordered residual observations over a declared axis with deterministic classification, content-addressed (FRF/TRAJECTORY/v1) and declaring its EvidenceTransform. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point \u2014 a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled. v6: the record is a first-class DERIVED protocol object \u2014 content address + transform declaration (coordinate varies; lineage/axis/question/authority/comparator stay), committed by the identity",
+   "schema": "frf-trajectory-v6",
+   "status": "active",
+   "identity": "FRF/TRAJECTORY/v1"
+  },
+  {
+   "id": "reduction",
+   "meaning": "Minimization attempt: fixture reduction + preservation predicate",
+   "schema": "frf-reduction-v5",
+   "identity": "FRF/REDUCTION/v3",
+   "status": "active"
+  },
+  {
+   "id": "token",
+   "meaning": "Deterministic endoduction result routing the residual",
+   "schema": "frf-token-v1",
+   "status": "active"
+  },
+  {
+   "id": "challenge",
+   "meaning": "Court capability evidence: a seeded defect the court demonstrated it can see",
+   "schema": "frf-challenge-v1",
+   "identity": "FRF/CHALLENGE/v1",
+   "status": "active"
+  },
+  {
+   "id": "witness-statement",
+   "meaning": "Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence \u2014 independence is the separate `independence` object",
+   "schema": "frf-witness-statement-v3",
+   "identity": "FRF/WITNESS-STATEMENT/v1",
+   "status": "active"
+  },
+  {
+   "id": "independence",
+   "meaning": "Declared independence relation about a witness attestation, with its basis",
+   "schema": "frf-independence-v1",
+   "identity": "FRF/INDEPENDENCE/v1",
+   "status": "active"
+  },
+  {
+   "id": "knowledge-snapshot",
+   "meaning": "The committed evidence universe U a claim's absence scan ran over",
+   "schema": "frf-claim-v10",
+   "identity": "FRF/KNOWLEDGE/v2",
+   "status": "active"
+  },
+  {
+   "id": "claim",
+   "meaning": "Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address",
+   "schema": "frf-claim-v10",
+   "identity": "FRF/CLAIM/v1",
+   "status": "active"
+  },
+  {
+   "id": "receipt",
+   "meaning": "Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts \u2014 executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds \u2014 the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds)",
+   "schema": "frf-receipt-v20",
+   "status": "active"
+  },
+  {
+   "id": "runtime-closure",
+   "meaning": "The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component \u2014 resolved by the system loader under the observation environment",
+   "schema": "frf-runtime-closure-v1",
+   "identity": "FRF/RUNTIME-CLOSURE/v1",
+   "status": "active"
+  },
+  {
+   "id": "bundle",
+   "meaning": "Portable closure of referenced evidence (directory or single tar)",
+   "schema": "frf-bundle-v3",
+   "status": "active"
+  },
+  {
+   "id": "ci-status",
+   "meaning": "CI gate presentation of a compiled claim",
+   "schema": "frf-ci-status-v1",
+   "status": "active"
+  },
+  {
+   "id": "comparator-invocation",
+   "meaning": "Extension evidence: what was invoked, against which request",
+   "schema": "frf-comparator-invocation-v1",
+   "identity": "FRF/COMPARATOR-INVOCATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "comparator-result",
+   "meaning": "Extension evidence: which response answered which request",
+   "schema": "frf-comparator-result-v1",
+   "identity": "FRF/COMPARATOR-RESULT/v1",
+   "status": "active"
+  },
+  {
+   "id": "normalizer-invocation",
+   "meaning": "Normalizer invocation evidence",
+   "schema": "frf-normalizer-invocation-v1",
+   "identity": "FRF/NORMALIZER-INVOCATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "normalizer-result",
+   "meaning": "Normalizer result evidence",
+   "schema": "frf-normalizer-result-v1",
+   "identity": "FRF/NORMALIZER-RESULT/v1",
+   "status": "active"
+  },
+  {
+   "id": "minimizer-invocation",
+   "meaning": "Minimizer invocation evidence",
+   "schema": "frf-minimizer-invocation-v1",
+   "identity": "FRF/MINIMIZER-INVOCATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "minimizer-result",
+   "meaning": "Minimizer result evidence",
+   "schema": "frf-minimizer-result-v1",
+   "identity": "FRF/MINIMIZER-RESULT/v1",
+   "status": "active"
+  },
+  {
+   "id": "mutation-invocation",
+   "meaning": "Mutation provider invocation evidence",
+   "schema": "frf-mutation-invocation-v1",
+   "identity": "FRF/MUTATION-INVOCATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "mutation-result",
+   "meaning": "Mutation provider result evidence",
+   "schema": "frf-mutation-result-v1",
+   "identity": "FRF/MUTATION-RESULT/v1",
+   "status": "active"
+  },
+  {
+   "id": "capture-adapter-invocation",
+   "meaning": "Capture adapter invocation evidence",
+   "schema": "frf-capture-invocation-v1",
+   "identity": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
+   "status": "active"
+  },
+  {
+   "id": "capture-adapter-result",
+   "meaning": "Capture adapter result evidence",
+   "schema": "frf-capture-result-v1",
+   "identity": "FRF/CAPTURE-ADAPTER-RESULT/v1",
+   "status": "active"
+  }
+ ],
+ "identities": [
+  {
+   "domain": "FRF/RUN/v2",
+   "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity \u2014 the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/OBSERVATION/v1",
+   "meaning": "Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/EXECUTION/v1",
+   "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/EXECUTION-CONTEXT/v1",
+   "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) \u2014 the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/HARNESS-EVENT/v1",
+   "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash \u2014 the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/EXECUTION-ATTEMPT/v1",
+   "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted \u2014 a deterministic function of the cited set), and refusal reason \u2014 the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/ENVIRONMENT/v2",
+   "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map \u2014 a declared variable is content-addressed input",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/FIXTURE/v1",
+   "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments \u2014 claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/COURT/v2",
+   "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/COMPARATOR-SPEC/v2",
+   "meaning": "Comparator semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/NORMALIZER-SPEC/v2",
+   "meaning": "Normalizer semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MINIMIZER-SPEC/v2",
+   "meaning": "Minimizer semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2",
+   "meaning": "Capture-adapter semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/WITNESS-SPEC/v2",
+   "meaning": "Witness semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MUTATION-SPEC/v1",
+   "meaning": "Mutation semantic specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/RESIDUAL/v1",
+   "meaning": "Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) \u2014 collision-free under concurrent courts and idempotent under re-observation",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
+   "meaning": "The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/RESIDUAL-LINEAGE/v1",
+   "meaning": "Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME \u2014 deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/KIND/v1",
+   "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) \u2014 the registered kind vocabulary",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/SERIES/v3",
+   "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points \u2014 each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/SERIES/v2",
+   "meaning": "Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities)",
+   "status": "superseded"
+  },
+  {
+   "domain": "FRF/COORDINATE/v1",
+   "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value \u2014 for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/REDUCTION/v3",
+   "meaning": "Reduction record identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/REDUCTION/v2",
+   "meaning": "Previous reduction record identity (superseded by v3)",
+   "status": "superseded"
+  },
+  {
+   "domain": "FRF/KNOWLEDGE/v2",
+   "meaning": "Knowledge snapshot (evidence universe U) identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/CHALLENGE/v1",
+   "meaning": "CourtChallenge identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/DISPOSITION-EVENT/v1",
+   "meaning": "Disposition event identity (hash-chained)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/COMPARATOR-INVOCATION/v1",
+   "meaning": "Comparator invocation evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/COMPARATOR-RESULT/v1",
+   "meaning": "Comparator result evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/NORMALIZER-INVOCATION/v1",
+   "meaning": "Normalizer invocation evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/NORMALIZER-RESULT/v1",
+   "meaning": "Normalizer result evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MINIMIZER-INVOCATION/v1",
+   "meaning": "Minimizer invocation evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MINIMIZER-RESULT/v1",
+   "meaning": "Minimizer result evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MUTATION-INVOCATION/v1",
+   "meaning": "Mutation invocation evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/MUTATION-RESULT/v1",
+   "meaning": "Mutation result evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
+   "meaning": "Capture-adapter invocation evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/CAPTURE-ADAPTER-RESULT/v1",
+   "meaning": "Capture-adapter result evidence identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/WITNESS-IDENTITY/v1",
+   "meaning": "Witness identity (the stable WHO: semantic + implementation)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/WITNESS-STATEMENT/v1",
+   "meaning": "Witness statement identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/INDEPENDENCE-SPEC/v1",
+   "meaning": "Independence relation specification",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/INDEPENDENCE/v1",
+   "meaning": "Independence evidence record identity",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/CLAIM/v1",
+   "meaning": "Compiled claim identity (over the canonical document minus the id)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/RUNTIME-CLOSURE/v1",
+   "meaning": "Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable)",
+   "status": "active"
+  },
+  {
+   "domain": "FRF/X/v1",
+   "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
+   "status": "test-only"
+  },
+  {
+   "domain": "FRF/Y/v1",
+   "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
+   "status": "test-only"
+  },
+  {
+   "domain": "FRF/TRAJECTORY/v1",
+   "meaning": "The content address of a trajectory record (frf-trajectory-v6): SHA-256 of FRF/TRAJECTORY/v1 over the canonical document minus the id \u2014 the derived movement classification, the transform declaration included",
+   "status": "active"
+  }
+ ],
+ "schemas": [
+  {
+   "id": "frf-authority-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-bundle-v2",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-bundle-v3",
+   "status": "active"
+  },
+  {
+   "id": "frf-bundle-v9",
+   "status": "reserved-invalid"
+  },
+  {
+   "id": "frf-capture-invocation-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-capture-request-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-capture-response-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-capture-result-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-capture-v12",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-capture-v13",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-capture-v14",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-capture-v15",
+   "status": "active"
+  },
+  {
+   "id": "frf-challenge-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-ci-status-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-claim-v10",
+   "status": "active"
+  },
+  {
+   "id": "frf-claim-v7",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-claim-v8",
+   "status": "superseded",
+   "superseded_by": "frf-claim-v9"
+  },
+  {
+   "id": "frf-claim-v9",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-comparator-invocation-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-comparator-request-v3",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-comparator-request-v4",
+   "status": "active"
+  },
+  {
+   "id": "frf-comparator-response-v2",
+   "status": "active"
+  },
+  {
+   "id": "frf-comparator-response-v9",
+   "status": "reserved-invalid"
+  },
+  {
+   "id": "frf-comparator-result-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-detached-objects-v1",
+   "status": "active",
+   "kind": "publication declaration",
+   "meaning": "the detached-object declaration (detached-objects.json): deliberately withheld content addresses + reconstruction recipes; verification distinguishes graph_verified (whole-store) / object_closure / replay_ready / replay_verified (not-performed until an actual replay)"
+  },
+  {
+   "id": "frf-disposition-v2",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-disposition-v3",
+   "status": "active"
+  },
+  {
+   "id": "frf-environment-v3",
+   "status": "active"
+  },
+  {
+   "id": "frf-execution-attempt-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-execution-context-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-execution-context-v9",
+   "status": "reserved-invalid"
+  },
+  {
+   "id": "frf-experiment-v1",
+   "status": "active",
+   "scope": "xtask empirical-program report"
+  },
+  {
+   "id": "frf-external-corpus-v1",
+   "status": "active",
+   "scope": "external empirical corpus manifest"
+  },
+  {
+   "id": "frf-external-corpus-v3",
+   "status": "active",
+   "scope": "v3 corpus manifest (ACTUAL upstream vulnerable + fixed releases)"
+  },
+  {
+   "id": "frf-external-experiment-v1",
+   "status": "active",
+   "scope": "external empirical program v1 report"
+  },
+  {
+   "id": "frf-external-experiment-v2",
+   "status": "active",
+   "scope": "external empirical program v2 report"
+  },
+  {
+   "id": "frf-external-experiment-v3",
+   "status": "active",
+   "scope": "external empirical program v3 report (real upstream releases)"
+  },
+  {
+   "id": "frf-external-experiment-v4",
+   "status": "active",
+   "scope": "external empirical program v4 report (the comparative measurement study: golden/differential/unit baselines vs FRF court/+challenge/+trajectory/+minimization over the ACTUAL upstream corpus)"
+  },
+  {
+   "id": "frf-external-experiment-v5",
+   "status": "active",
+   "scope": "external empirical program v5 report (the proper runtime-overhead benchmark: warmups + isolated samples, wall + child CPU, p50/p90/p99, machine description \u2014 measurements only, no timing thresholds)"
+  },
+  {
+   "id": "frf-harness-event-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-independence-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-kind-v1",
+   "status": "active",
+   "scope": "residual-kind protocol record (conformance/kinds/)"
+  },
+  {
+   "id": "frf-minimizer-invocation-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-minimizer-request-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-minimizer-response-v1",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-minimizer-response-v2",
+   "status": "active"
+  },
+  {
+   "id": "frf-minimizer-result-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-mutation-invocation-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-mutation-request-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-mutation-response-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-mutation-result-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-normalizer-invocation-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-normalizer-request-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-normalizer-response-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-normalizer-result-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-produced-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-provenance-v3",
+   "status": "active"
+  },
+  {
+   "id": "frf-publication-manifest-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-receipt-v12",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v15",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v16",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v17",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v18",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v19",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v20",
+   "status": "active"
+  },
+  {
+   "id": "frf-receipt-v5",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-receipt-v7",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-reduction-v4",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-reduction-v5",
+   "status": "active"
+  },
+  {
+   "id": "frf-residual-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-runner-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-runtime-closure-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-series-v3",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-series-v4",
+   "status": "active"
+  },
+  {
+   "id": "frf-stream-publication-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-token-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-trajectory-v4",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-trajectory-v5",
+   "status": "superseded"
+  },
+  {
+   "id": "frf-trajectory-v6",
+   "status": "active"
+  },
+  {
+   "id": "frf-v3-build-manifest-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-witness-request-v1",
+   "status": "active"
+  },
+  {
+   "id": "frf-witness-response-v3",
+   "status": "active"
+  },
+  {
+   "id": "frf-witness-statement-v3",
+   "status": "active"
+  }
+ ],
+ "relations": {
+  "comparator": [
+   {
+    "id": "eq",
+    "meaning": "Equality over the extractor's projection",
+    "status": "active"
+   }
   ],
-  "execution_profiles": [
+  "independence": [
+   {
+    "id": "different-implementation",
+    "meaning": "The attestation was produced by a different implementation",
+    "status": "active"
+   },
+   {
+    "id": "separate-party",
+    "meaning": "The attestation was produced by a separate party",
+    "status": "active"
+   },
+   {
+    "id": "unaffiliated-channel",
+    "meaning": "The attestation arrived over an unaffiliated channel",
+    "status": "active"
+   },
+   {
+    "id": "adversarial-review",
+    "meaning": "The attestation is an adversarial review",
+    "status": "active"
+   }
+  ],
+  "mutation-operators": [
+   {
+    "id": "exit-class",
+    "meaning": "Alter exactly the exit class",
+    "status": "active"
+   },
+   {
+    "id": "stderr-first-line",
+    "meaning": "Alter exactly the first stderr line",
+    "status": "active"
+   },
+   {
+    "id": "stdout-first-line",
+    "meaning": "Alter exactly the first stdout line",
+    "status": "active"
+   }
+  ],
+  "trajectory-coordinates": [
+   {
+    "id": "repeat_index",
+    "meaning": "Repeated observation of the same evidence",
+    "status": "active"
+   },
+   {
+    "id": "candidate_revision",
+    "meaning": "Candidate revision ladder",
+    "status": "active"
+   },
+   {
+    "id": "authority_version",
+    "meaning": "Authority version ladder",
+    "status": "active"
+   },
+   {
+    "id": "environment",
+    "meaning": "Environment points",
+    "status": "active"
+   },
+   {
+    "id": "time",
+    "meaning": "Time points",
+    "status": "active"
+   },
+   {
+    "id": "fixture_reduction",
+    "meaning": "Fixture reduction (belongs to the minimization protocol)",
+    "status": "active"
+   }
+  ],
+  "dispositions": [
+   {
+    "id": "open",
+    "meaning": "Unexplained, blocks claims whose scope intersects",
+    "status": "active"
+   },
+   {
+    "id": "fixed",
+    "meaning": "Closed by a verified resolution run",
+    "status": "active"
+   },
+   {
+    "id": "intentional",
+    "meaning": "Documented intentional divergence",
+    "status": "active"
+   },
+   {
+    "id": "environmental",
+    "meaning": "Environment-dependent",
+    "status": "active"
+   },
+   {
+    "id": "oracle_version",
+    "meaning": "The reference version changed",
+    "status": "active"
+   },
+   {
+    "id": "harness",
+    "meaning": "Runner contamination \u2014 invalidates the run's evidence",
+    "status": "active"
+   },
+   {
+    "id": "unknown",
+    "meaning": "Unclassified \u2014 treated as open",
+    "status": "active"
+   }
+  ],
+  "trajectory-classes": {
+   "drift": [
     {
-      "id": "frf-exec-linux-v1",
-      "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> — no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)",
-      "status": "active"
+     "id": "persistent",
+     "meaning": "Observed at every coordinate",
+     "status": "active"
     },
     {
-      "id": "frf-exec-linux-v2",
-      "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer — the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run — a declared profile is enforced, never approximated",
-      "status": "active"
+     "id": "transient",
+     "meaning": "Observed then gone",
+     "status": "active"
     },
     {
-      "id": "frf-exec-linux-v3",
-      "meaning": "The I/O-CLOSED profile (0.1.65): on top of the reference setrlimit layer, the side's world is CLOSED before it runs a single instruction — the FILESYSTEM closure (Landlock, Linux >= 5.13): read/execute only the content-addressed objects directory, the execution machinery (the interpreter chain + its own native closure, the artifact's native runtime closure, the declared execution-context artifacts), and the declared randomness channel; the produced-output staging directory is the ONLY writable surface (absent = none at all); and the AMBIENT-CHANNEL closure (seccomp BPF): no network, no Unix sockets, no shared memory, no ptrace, no cross-process memory. A side that violates a closure fails visibly and the court OBSERVES the denial. The side executes its VERIFIED SNAPSHOT PATH (the sealed-memfd mechanism is incompatible with a Landlock closure: the kernel cannot bind access rules to anonymous-inode memfds — proven empirically); the OCI profile remains the mechanism that closes both the path race and the ambient-environment race. Replay rebuilds the closure from the capture's recorded machinery. Requires Landlock; without it the profile REFUSES to run — a declared profile is enforced, never approximated",
-      "status": "active"
-    },
-    {
-      "id": "frf-exec-oci",
-      "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest — a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery — the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run — never a silent substitution. Extensions are harness-side instrumentation and run on the host. An OCI observation is a different execution contract from a v1 one; both qualify for high-assurance when they provide the required capability set (the reference contract — spec/execution-profile.md § assurance capabilities)",
-      "status": "active"
+     "id": "recurrent",
+     "meaning": "Observed, gone, observed again",
+     "status": "active"
     }
-  ]
+   ],
+   "slew": [
+    {
+     "id": "stable",
+     "meaning": "Present at every coordinate",
+     "status": "active"
+    },
+    {
+     "id": "abrupt",
+     "meaning": "Appears/disappears at one boundary",
+     "status": "active"
+    },
+    {
+     "id": "burst",
+     "meaning": "A bounded run of coordinates",
+     "status": "active"
+    },
+    {
+     "id": "recurrent",
+     "meaning": "Multiple separated runs",
+     "status": "active"
+    }
+   ],
+   "localization": [
+    {
+     "id": "start",
+     "meaning": "Boundary-localized at the axis start",
+     "status": "active"
+    },
+    {
+     "id": "end",
+     "meaning": "Boundary-localized at the axis end",
+     "status": "active"
+    },
+    {
+     "id": "both",
+     "meaning": "Boundary-localized at both ends",
+     "status": "active"
+    },
+    {
+     "id": "interior",
+     "meaning": "A band not touching either bound",
+     "status": "active"
+    }
+   ],
+   "trend": [
+    {
+     "id": "none",
+     "meaning": "No monotonic magnitude movement (identity surfaces never claim a trend)",
+     "status": "active"
+    },
+    {
+     "id": "increasing",
+     "meaning": "The divergence degree increases monotonically",
+     "status": "active"
+    },
+    {
+     "id": "decreasing",
+     "meaning": "The divergence degree decreases monotonically",
+     "status": "active"
+    }
+   ]
+  }
+ },
+ "policies": [
+  {
+   "id": "baseline",
+   "meaning": "Observation evidence only (verified premises + absence scan over U)",
+   "status": "active"
+  },
+  {
+   "id": "sensitivity-backed",
+   "meaning": "Every claimed axis has challenge coverage per premise",
+   "status": "active"
+  },
+  {
+   "id": "independently-witnessed",
+   "meaning": "Sensitivity + a verified affirming witness attestation of every premise + at least one admissible independence relation per premise",
+   "status": "active"
+  },
+  {
+   "id": "high-assurance",
+   "meaning": "Independently witnessed + every premise observed under a profile providing the REQUIRED CAPABILITY SET (the reference contract: exact_capture_contract, sealed_executable_image, native_runtime_closure_bound) under the reference capture bounds \u2014 protocol constants no FRF_EXEC_* override can redefine. Every admitted profile provides the set (v1 exactly; v2/v3/OCI as supersets) \u2014 assurance is orthogonal capabilities, never a profile-name equality; the claim records required_capabilities",
+   "status": "active"
+  }
+ ],
+ "execution_profiles": [
+  {
+   "id": "frf-exec-linux-v1",
+   "meaning": "The reference profile: SEALED-IMAGE direct exec (the verified bytes in a memfd sealed F_SEAL_WRITE|GROW|SHRINK|SEAL, executed via /proc/self/fd/<n> \u2014 no pathname is re-opened for execution), per-side process group, concurrent pipe draining, bounded spawn retries, 60s timeout, 16MiB stream caps, RLIMIT_AS/CPU/NOFILE/NPROC. The reference capture bounds are protocol constants (never overridable)",
+   "status": "active"
+  },
+  {
+   "id": "frf-exec-linux-v2",
+   "meaning": "The cgroup v2 per-side AGGREGATE envelope (pids.max/memory.max/cpu.max over the side's whole descendant tree) on top of the setrlimit layer \u2014 the per-side, per-tree resource contract RLIMIT_* cannot give (RLIMIT_NPROC is per-real-UID, RLIMIT_AS/CPU per process). Requires a writable cgroup v2 subtree (systemd delegation, a container with a writable /sys/fs/cgroup); without one the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+   "status": "active"
+  },
+  {
+   "id": "frf-exec-linux-v3",
+   "meaning": "The I/O-CLOSED profile (0.1.65): on top of the reference setrlimit layer, the side's world is CLOSED before it runs a single instruction \u2014 the FILESYSTEM closure (Landlock, Linux >= 5.13): read/execute only the content-addressed objects directory, the execution machinery (the interpreter chain + its own native closure, the artifact's native runtime closure, the declared execution-context artifacts), and the declared randomness channel; the produced-output staging directory is the ONLY writable surface (absent = none at all); and the AMBIENT-CHANNEL closure (seccomp BPF): no network, no Unix sockets, no shared memory, no ptrace, no cross-process memory. A side that violates a closure fails visibly and the court OBSERVES the denial. The side executes its VERIFIED SNAPSHOT PATH (the sealed-memfd mechanism is incompatible with a Landlock closure: the kernel cannot bind access rules to anonymous-inode memfds \u2014 proven empirically); the OCI profile remains the mechanism that closes both the path race and the ambient-environment race. Replay rebuilds the closure from the capture's recorded machinery. Requires Landlock; without it the profile REFUSES to run \u2014 a declared profile is enforced, never approximated",
+   "status": "active"
+  },
+  {
+   "id": "frf-exec-oci",
+   "meaning": "The OCI container profile (0.1.62): each side runs INSIDE a container from a digest-pinned OCI image (the reference must carry its manifest digest \u2014 a mutable tag is refused), with no network, the declared environment, and the working directory bind-mounted at its own absolute path so recorded argv paths resolve inside the container. The image IS the complete execution machinery \u2014 the whole root filesystem (interpreter, shared libraries, loader configuration, certificates) is bound by the digest in the execution identity. Requires a container runtime (podman or docker) and the exact image present; a missing runtime or image REFUSES the run \u2014 never a silent substitution. Extensions are harness-side instrumentation and run on the host. An OCI observation is a different execution contract from a v1 one; both qualify for high-assurance when they provide the required capability set (the reference contract \u2014 spec/execution-profile.md \u00a7 assurance capabilities)",
+   "status": "active"
+  }
+ ]
 }

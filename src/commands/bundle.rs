@@ -1029,6 +1029,14 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
                         kind: "series",
                     },
                 );
+                // The series' OTHER points' runs travel too: the receipt
+                // PINNED this series (its trajectory signs read from it), so
+                // the bundle must be able to RE-DERIVE the trajectory from
+                // the pinned series — every point's run, its capture, its
+                // residuals, and their objects are part of the closure.
+                for point in &s.points {
+                    runs.push(point.run.clone());
+                }
                 // Trajectories for the lineages this run's residuals belong
                 // to, within this series. The residual is VERIFIED before its
                 // lineage may name the trajectory file.

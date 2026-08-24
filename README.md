@@ -115,14 +115,14 @@ not these tables.
 | disposition-event | Interpretation/state transition of a residual (hash-chained append-only events). v3 vocabulary: fixed REQUIRES a changed candidate artifact; nonreproduced (one pass on the SAME candidate) and stabilized (repeated passes on the SAME candidate, trajectory-backed) are first-class non-fix observations that still block positive claims | frf-disposition-v3 · FRF/DISPOSITION-EVENT/v1 | active |
 | resolution | Evidence that a residual closed (a fixed event + its resolution run, or a nonreproduced/stabilized observation) | — | active |
 | series | Ordered experimental coordinates referencing content-addressed runs (parent-linked snapshots). v4: each point carries the CONTENT IDENTITY of its coordinate (FRF/COORDINATE/v1) — the series says what EXACTLY varied at each point (the candidate artifact identity, the authority record's content address, the effective environment digest), not merely what the point was labelled | frf-series-v4 · FRF/SERIES/v3 | active |
-| trajectory | Ordered residual observations over a declared axis with deterministic classification. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled | frf-trajectory-v5 | active |
+| trajectory | Ordered residual observations over a declared axis with deterministic classification, content-addressed (FRF/TRAJECTORY/v1) and declaring its EvidenceTransform. v5: each observation carries the coordinate identity (FRF/COORDINATE/v1) of its series point — a trajectory says what moved (the exact candidate artifact, authority record, or environment), not merely what the point was labelled. v6: the record is a first-class DERIVED protocol object — content address + transform declaration (coordinate varies; lineage/axis/question/authority/comparator stay), committed by the identity | frf-trajectory-v6 · FRF/TRAJECTORY/v1 | active |
 | reduction | Minimization attempt: fixture reduction + preservation predicate | frf-reduction-v5 · FRF/REDUCTION/v3 | active |
 | token | Deterministic endoduction result routing the residual | frf-token-v1 | active |
 | challenge | Court capability evidence: a seeded defect the court demonstrated it can see | frf-challenge-v1 · FRF/CHALLENGE/v1 | active |
 | witness-statement | Attestation of a rederived subject (content-addressed, request/response preserved). An attestation is not independence — independence is the separate `independence` object | frf-witness-statement-v3 · FRF/WITNESS-STATEMENT/v1 | active |
 | independence | Declared independence relation about a witness attestation, with its basis | frf-independence-v1 · FRF/INDEPENDENCE/v1 | active |
-| knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v9 · FRF/KNOWLEDGE/v2 | active |
-| claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators | frf-claim-v9 · FRF/CLAIM/v1 | active |
+| knowledge-snapshot | The committed evidence universe U a claim's absence scan ran over | frf-claim-v10 · FRF/KNOWLEDGE/v2 | active |
+| claim | Machine-readable bounded proposition compiled from verified evidence (content-addressed: FRF/CLAIM/v1, stored at claims/<id>.json with a by-receipt index; prose is a derived renderer output, never stored). v9 records the SENSITIVITY MUTATION PROFILE: the required AXIS:FAMILY pairs the claim was compiled under and each capability entry's demonstrated operators. v10 declares its EvidenceTransform (nothing varies; parity over the premises; scope-admitted), committed by the content address | frf-claim-v10 · FRF/CLAIM/v1 | active |
 | receipt | Immutable evidence snapshot/root (OpenReceipt; v17 binds the native runtime closure of ELF artifacts — executable hash is not executable semantics; v18 carries the court's DECLARED execution-context closure (when declared): the child executables, runtime libraries, and data dependencies the side's behavior depends on beyond its own bytes, snapshotted and content-addressed at observation time; v19 records the PRODUCED-TREE CAPS in the capture bounds — the filesystem-tree surface's overflow bounds, so a produced tree that exceeds a cap is refused exactly like a stream overflow and replay enforces the same bounds) | frf-receipt-v20 | active |
 | runtime-closure | The native runtime closure of an ELF executable: the dynamic loader (PT_INTERP), the resolved DT_NEEDED closure, and the hash of every loaded component — resolved by the system loader under the observation environment | frf-runtime-closure-v1 · FRF/RUNTIME-CLOSURE/v1 | active |
 | bundle | Portable closure of referenced evidence (directory or single tar) | frf-bundle-v3 | active |
@@ -187,6 +187,7 @@ not these tables.
 | FRF/RUNTIME-CLOSURE/v1 | Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable) | active |
 | FRF/X/v1 | Reserved for the domain-separation unit test; never a protocol domain | test-only |
 | FRF/Y/v1 | Reserved for the domain-separation unit test; never a protocol domain | test-only |
+| FRF/TRAJECTORY/v1 | The content address of a trajectory record (frf-trajectory-v6): SHA-256 of FRF/TRAJECTORY/v1 over the canonical document minus the id — the derived movement classification, the transform declaration included | active |
 
 ### Schemas (evidence documents)
 
@@ -206,9 +207,10 @@ not these tables.
 | frf-capture-v15 | active |  |
 | frf-challenge-v1 | active |  |
 | frf-ci-status-v1 | active |  |
+| frf-claim-v10 | active |  |
 | frf-claim-v7 | superseded |  |
 | frf-claim-v8 | superseded |  |
-| frf-claim-v9 | active |  |
+| frf-claim-v9 | superseded |  |
 | frf-comparator-invocation-v1 | active |  |
 | frf-comparator-request-v3 | superseded |  |
 | frf-comparator-request-v4 | active |  |
@@ -216,6 +218,7 @@ not these tables.
 | frf-comparator-response-v9 | reserved-invalid |  |
 | frf-comparator-result-v1 | active |  |
 | frf-detached-objects-v1 | active |  |
+| frf-disposition-v2 | superseded |  |
 | frf-disposition-v3 | active |  |
 | frf-environment-v3 | active |  |
 | frf-execution-attempt-v1 | active |  |
@@ -235,6 +238,7 @@ not these tables.
 | frf-minimizer-invocation-v1 | active |  |
 | frf-minimizer-request-v1 | active |  |
 | frf-minimizer-response-v1 | superseded |  |
+| frf-minimizer-response-v2 | active |  |
 | frf-minimizer-result-v1 | active |  |
 | frf-mutation-invocation-v1 | active |  |
 | frf-mutation-request-v1 | active |  |
@@ -246,33 +250,32 @@ not these tables.
 | frf-normalizer-result-v1 | active |  |
 | frf-produced-v1 | active |  |
 | frf-provenance-v3 | active |  |
+| frf-publication-manifest-v1 | active |  |
 | frf-receipt-v12 | superseded |  |
 | frf-receipt-v15 | superseded |  |
 | frf-receipt-v16 | superseded |  |
 | frf-receipt-v17 | superseded |  |
 | frf-receipt-v18 | superseded |  |
 | frf-receipt-v19 | superseded |  |
+| frf-receipt-v20 | active |  |
 | frf-receipt-v5 | superseded |  |
 | frf-receipt-v7 | superseded |  |
 | frf-reduction-v4 | superseded |  |
-| frf-v3-build-manifest-v1 | active |  |
-| frf-stream-publication-v1 | active |  |
-| frf-publication-manifest-v1 | active |  |
+| frf-reduction-v5 | active |  |
 | frf-residual-v1 | active |  |
 | frf-runner-v1 | active |  |
 | frf-runtime-closure-v1 | active |  |
 | frf-series-v3 | superseded |  |
 | frf-series-v4 | active |  |
+| frf-stream-publication-v1 | active |  |
 | frf-token-v1 | active |  |
 | frf-trajectory-v4 | superseded |  |
-| frf-trajectory-v5 | active |  |
+| frf-trajectory-v5 | superseded |  |
+| frf-trajectory-v6 | active |  |
+| frf-v3-build-manifest-v1 | active |  |
 | frf-witness-request-v1 | active |  |
 | frf-witness-response-v3 | active |  |
 | frf-witness-statement-v3 | active |  |
-| frf-disposition-v2 | superseded |  |
-| frf-receipt-v20 | active |  |
-| frf-reduction-v5 | active |  |
-| frf-minimizer-response-v2 | active |  |
 
 ### Relations
 

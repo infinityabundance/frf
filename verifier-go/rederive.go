@@ -137,6 +137,30 @@ func claimIdentity(claim jcs.Value) (string, error) {
 	return jcs.Sha256Hex([]byte("FRF/CLAIM/v1\n" + json)), nil
 }
 
+// trajectoryIdentity — the content address of a trajectory record:
+// FRF/TRAJECTORY/v1 over the canonical document minus the id field (the
+// same formula as the reference engine). The trajectory is a DERIVED
+// protocol object — the transform declaration included — so it can never
+// be relabeled as a different kind of evidence without changing its
+// identity.
+func trajectoryIdentity(t jcs.Value) string {
+	clone := *obj(t)
+	var kept []string
+	var keptValues []jcs.Value
+	for i, k := range clone.Keys {
+		if k != "id" {
+			kept = append(kept, k)
+			keptValues = append(keptValues, clone.Values[i])
+		}
+	}
+	doc := &jcs.Object{Keys: kept, Values: keptValues}
+	json, err := jcs.Canonical(doc)
+	if err != nil {
+		return ""
+	}
+	return jcs.Sha256Hex([]byte("FRF/TRAJECTORY/v1\n" + json))
+}
+
 // witnessIdentity: FRF/WITNESS-IDENTITY/v1 over {specification_hash,
 // implementation_hash, interpreter} — the stable WHO behind an attestation.
 func witnessIdentity(semantic, implementation *jcs.Object) (string, error) {

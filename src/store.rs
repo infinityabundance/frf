@@ -2833,6 +2833,7 @@ pub(crate) fn derive_lineage_trajectory(
     let mut per_point: Vec<Option<(String, String, Option<String>)>> =
         vec![None; series.points.len()];
     let mut axis: Option<String> = None;
+    let mut relation: Option<String> = None;
     for (i, point) in series.points.iter().enumerate() {
         let capture = crate::verify::load_capture_verified(store, &point.run)?;
         for id in &capture.capture.residuals {
@@ -2842,6 +2843,17 @@ pub(crate) fn derive_lineage_trajectory(
                 continue;
             }
             axis = Some(record.axis.as_str().to_string());
+            // The transform's observation relation is the axis's comparator
+            // relation (the same identity the court bound) — resolved from
+            // the verified capture, never from a caller-supplied label.
+            if let Some(sem) = capture
+                .capture
+                .comparator_semantics
+                .iter()
+                .find(|s| s.id == record.axis.as_str())
+            {
+                relation = Some(sem.relation_label());
+            }
             let fp = crate::semantics::residual_fingerprint(record)?;
             let magnitude = crate::comparators::divergence_magnitude(
                 record.axis.as_str(),
@@ -2858,6 +2870,7 @@ pub(crate) fn derive_lineage_trajectory(
             &lineage[..16]
         ))
     })?;
+    let relation = relation.unwrap_or_else(|| format!("eq({axis})"));
     let observed: Vec<bool> = per_point.iter().map(|o| o.is_some()).collect();
     let magnitudes: Vec<Option<String>> = per_point
         .iter()
@@ -2866,8 +2879,10 @@ pub(crate) fn derive_lineage_trajectory(
     let kind = crate::comparators::magnitude_kind(&axis);
     let derivation =
         crate::trajectory::classify(&observed, &series.coordinate_system, &magnitudes, &kind)?;
-    Ok(TrajectoryRecord {
+    let transform = EvidenceTransform::trajectory(&series.id, &relation);
+    let mut record = TrajectoryRecord {
         schema_version: SCHEMA_TRAJECTORY.to_string(),
+        id: String::new(),
         subject: lineage.to_string(),
         axis: axis.clone(),
         coordinate_system: series.coordinate_system.clone(),
@@ -2887,7 +2902,10 @@ pub(crate) fn derive_lineage_trajectory(
             })
             .collect(),
         derivation,
-    })
+        transform,
+    };
+    record.id = crate::semantics::trajectory_identity(&record)?;
+    Ok(record)
 }
 
 #[cfg(test)]
