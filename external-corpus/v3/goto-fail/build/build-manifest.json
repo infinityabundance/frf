@@ -1,16 +1,31 @@
 {
  "schema_version": "frf-v3-build-manifest-v1",
  "case": "goto-fail",
- "description": "CVE-2014-1266 (Apple Secure Transport 'goto fail') semantic study: one C source, two verifiers (clean, and the -DGO_TO_FAIL defect build whose duplicated goto skips the signature comparison). Built with gcc -O2; no historical library, so no container is needed.",
+ "description": "CVE-2014-1266 (Apple Secure Transport 'goto fail') semantic study: one C source, two verifiers (clean, and the -DGO_TO_FAIL defect build whose duplicated goto skips the signature comparison). Built BYTE-REPRODUCIBLY inside a digest-pinned builder image (fedora:41 by OCI digest + exact gcc/binutils/glibc-devel NEVRAs, see build/Containerfile); the produced binaries are NOT committed, every artifact is pinned by SHA-256 below, and the reconstruction recipe (same source bytes + same pinned image + the recorded flags) reproduces the pinned bytes exactly.",
  "sources": [
   {
    "name": "sslcheck.c",
    "sha256": "311e3c75e3d07a20f6806178223c2dff129bfadc90089eae358f0d1ea908f3f5",
-   "url": "https://github.com/openssl/openssl (the CVE-2014-1266 defect shape is reproduced from Apple's Secure Transport; this study models the defect's observable)"
+   "path": "external-corpus/v3/goto-fail/src/sslcheck.c",
+   "provenance_kind": "synthetic-model",
+   "provenance": "The defect shape of CVE-2014-1266 (a duplicated `goto fail;` that skips the signature comparison, so every handshake is accepted) is reproduced as a LOCAL SYNTHETIC MODEL of the defect's observable: this source is not and never was Apple Secure Transport code, and no upstream repository URL is claimed for it. The study models the defect's observable behavior, not the historical artifact."
   }
  ],
  "artifacts": {
-  "builds/sslcheck-clean": "0e2bd91fe51277c5edbb057568a1afa0dccbeb5039a665a7bcc3b124cf305f83",
-  "builds/sslcheck-buggy": "fa4da9b3e8dad6cbd7620fb7b40d9a985e7cf9555c06f7a24b23729e17b371d1"
+  "builds/sslcheck-clean": "d3cc771ab52fe463c33b9a7baca6ce888f6641f1dca0792f064f57cc535a1bce",
+  "builds/sslcheck-buggy": "2815bdba929f4269b3648d1b136da4c58d12468926b3441013c32f7b60dfe027"
+ },
+ "builder": {
+  "base_image": "fedora@sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366",
+  "built_image_id": "5ffba14505bbf7e5ff0df0c329c0583917b82bf66fde43715caf620b9033f2d7",
+  "containerfile": "external-corpus/v3/goto-fail/build/Containerfile (pinned base digest + exact package NEVRAs)",
+  "compiler": "gcc (GCC) 14.3.1 20251022 (Red Hat 14.3.1-4)",
+  "linker": "GNU ld version 2.43.1-14.fc41",
+  "libc": "glibc-2.40-28.fc41.x86_64",
+  "target": "x86_64-redhat-linux",
+  "flags": [
+   "-O2",
+   "-O2 -DGO_TO_FAIL"
+  ]
  }
 }

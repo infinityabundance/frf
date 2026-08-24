@@ -1,0 +1,22 @@
+# The goto-fail synthetic-model builder — a digest-pinned toolchain.
+#
+# EVERY input is pinned, so the reconstruction recipe is GENUINELY
+# byte-reproducible (source reproducibility is not artifact reproducibility):
+#   - the base image by OCI manifest digest (fedora:41 as of 2026-08-22,
+#     sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366 —
+#     the same pinned base the v3 corpus toolchain uses);
+#   - the exact compiler/linker/libc-devel NEVRAs (recorded from the image
+#     that produced the committed artifact bytes; a rebuild with these pins
+#     reproduces the pinned SHA-256s byte-for-byte).
+#
+# The produced binaries are NOT committed (external-corpus/v3/goto-fail/
+# builds/ is gitignored): every artifact is pinned by SHA-256 in
+# build-manifest.json and materialized here (a fresh clone runs
+# build/build.sh once). The OCI image id of the BUILT image and the exact
+# toolchain versions are recorded in build-manifest.json by the recipe.
+FROM fedora@sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366
+RUN dnf -y --setopt=install_weak_deps=False install \
+      gcc-14.3.1-4.fc41.x86_64 \
+      binutils-2.43.1-14.fc41.x86_64 \
+      glibc-devel-2.40-28.fc41.x86_64 \
+    && dnf clean all

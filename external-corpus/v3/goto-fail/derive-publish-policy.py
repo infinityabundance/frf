@@ -23,13 +23,21 @@ pins = manifest["artifacts"]  # e.g. builds/sslcheck-clean -> sha256
 objects = []
 for rel, sha in pins.items():
     role = "authority-artifact" if rel.endswith("sslcheck-clean") else "candidate-artifact"
+    b = manifest["builder"]
+    recipe = (
+        "external-corpus/v3/goto-fail/build/build.sh: the two verifiers are built "
+        f"BYTE-REPRODUCIBLY inside the digest-pinned builder image ({b['base_image']}, "
+        f"compiler {b['compiler']}, linker {b['linker']}, libc {b['libc']}, target {b['target']}, "
+        f"flags {', '.join(b['flags'])}) from src/sslcheck.c "
+        "(SHA-256-pinned in build-manifest.json); the bytes are the same object the court executed"
+    )
     objects.append({
         "cid": sha,
         "role": role,
         "publication": "build-product",
         "size": str((case_dir / rel).stat().st_size),
         "reconstruction": {
-            "recipe": "external-corpus/v3/goto-fail/build/build.sh: gcc -O2 builds the clean verifier and the -DGO_TO_FAIL defect build from src/sslcheck.c (SHA-256-pinned in build-manifest.json); the bytes are the same object the court executed",
+            "recipe": recipe,
             "source_path": "external-corpus/v3/goto-fail/src/sslcheck.c",
         },
     })

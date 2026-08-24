@@ -7,11 +7,11 @@
   "domain": "tls-verdict",
   "defect": "A duplicated `goto fail;` skips the signature comparison, so every handshake is accepted. The study models the defect's OBSERVABLE with one C source (src/sslcheck.c) built twice: the clean verifier compares the record's signature against its data's checksum and refuses mismatches; the -DGO_TO_FAIL build carries the duplicated goto and accepts everything. The record carries a `len=` field — the TLS record header's length — so the payload length is a first-class, minimizable dimension.",
   "build": {
-    "recipe": "build/build.sh (gcc -O2; no container needed — the program links nothing historical)",
+    "recipe": "build/build.sh (BYTE-REPRODUCIBLE: the two verifiers are built inside a digest-pinned builder image — fedora:41 by OCI digest + exact gcc/binutils/glibc-devel NEVRAs, build/Containerfile — with the flags recorded in build/build-manifest.json)",
     "series": "buggy (the defect), clean (the fix)",
     "vulnerable": "sslcheck-buggy",
     "fixed": "sslcheck-clean",
-    "official_tarballs": "none — the defect shape is reproduced from Apple's Secure Transport (CVE-2014-1266); the source is pinned by SHA-256 in build/build-manifest.json"
+    "official_tarballs": "none — the defect shape is reproduced as a LOCAL SYNTHETIC MODEL (provenance_kind: synthetic-model in build/build-manifest.json; no upstream repository URL is claimed); the source is pinned by SHA-256 in build/build-manifest.json"
   },
   "sides": {
     "vulnerable": "builds/sslcheck-buggy",

@@ -50,7 +50,7 @@ challenge) is a general protocol facility, not a one-off.
 ## Reproduce
 
 ```sh
-./reproduce.sh build    # gcc; no container needed — the program links nothing historical
+./reproduce.sh build    # BYTE-REPRODUCIBLE: digest-pinned builder image (needs podman/docker + network)
 ./reproduce.sh run      # regenerate evidence/ under golden/work (never the public tree)
 ./reproduce.sh publish  # full local evidence -> publish-detached -> evidence/
 ./reproduce.sh verify   # re-derive + publish + byte-compare the committed publication

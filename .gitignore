@@ -40,8 +40,9 @@
 # The v3 corpus BUILD PRODUCTS (the heartbleed/shellshock/log4shell/goto-fail
 # binaries) are NOT committed: every artifact is pinned by SHA-256 in
 # external-corpus/v3/build/build-manifest.json (and the per-case manifests)
-# and materialized hermetically by external-corpus/v3/build/build-all.sh (or
-# by the case's own build script; goto-fail needs only gcc). A fresh clone
+# and materialized hermetically by external-corpus/v3/build/build-all.sh or
+# by the case's own build script (goto-fail builds inside its digest-pinned
+# builder image). A fresh clone
 # builds them once; CI does NOT build them, and the xtask empirical programs
 # skip a case whose build products are absent (recorded in the report). The
 # log4shell launcher wrappers (run-vuln.sh / run-fixed.sh) are small tracked

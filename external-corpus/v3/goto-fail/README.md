@@ -15,7 +15,7 @@ See `claims/goto-fail-verdict.md` for the measured story, and
 ## Reproduce
 
 ```sh
-./reproduce.sh build    # gcc; no container needed
+./reproduce.sh build    # BYTE-REPRODUCIBLE: digest-pinned builder image (build/Containerfile; needs podman/docker + network)
 ./reproduce.sh run      # regenerate evidence/ under golden/work (never the public tree)
 ./reproduce.sh publish  # full local evidence -> publish-detached -> evidence/ (+ the portable bundle)
 ./reproduce.sh verify   # re-derive + publish + byte-compare the committed publication (+ the portable bundle)

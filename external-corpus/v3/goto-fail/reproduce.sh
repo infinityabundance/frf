@@ -133,7 +133,7 @@ case "$cmd" in
   usage|*)
     echo "usage: ./reproduce.sh {build|run|publish|verify}"
     echo
-    echo "  build   build the two verifiers (gcc; no container needed)"
+    echo "  build   build the two verifiers BYTE-REPRODUCIBLY inside a digest-pinned builder image (build/Containerfile; needs podman/docker + network)"
     echo "  run     regenerate the FULL LOCAL evidence tree (golden/work; ignored)"
     echo "  publish the publication transform: full local evidence -> publish-detached -> evidence/"
     echo "  verify  re-derive + publish + byte-compare the committed publication; check pins"

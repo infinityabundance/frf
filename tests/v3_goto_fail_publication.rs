@@ -79,6 +79,38 @@ fn the_goto_fail_v3_publication_integrity_gate_holds() {
         assert!(hex64(pin), "pinned artifact hashes are 64-hex sha256");
     }
 
+    // ✓ the reconstruction is GENUINELY byte-reproducible (source
+    // reproducibility is NOT artifact reproducibility): the builder record
+    // pins the toolchain — the base image by OCI digest, the exact
+    // compiler/linker/libc versions, the target, and the flags — and the
+    // source declares its provenance honestly (a synthetic model of the
+    // defect observable, with no unrelated upstream repository URL claimed).
+    let builder = &manifest["builder"];
+    for key in [
+        "base_image",
+        "built_image_id",
+        "containerfile",
+        "compiler",
+        "linker",
+        "libc",
+        "target",
+    ] {
+        assert!(
+            !builder[key].as_str().unwrap_or_default().is_empty(),
+            "the builder record must pin {key}"
+        );
+    }
+    assert_eq!(
+        builder["flags"].as_array().map(|f| f.len()).unwrap_or(0),
+        2,
+        "the builder record pins the exact compile flags for both verifiers"
+    );
+    assert_eq!(
+        sources[0]["provenance_kind"],
+        "synthetic-model",
+        "the source declares its provenance honestly (a local synthetic model, not an upstream repository)"
+    );
+
     // ✓ the published evidence tree's detached declaration resolves
     // structurally: it parses as frf-detached-objects-v1, passes semantic
     // conformance, carries role/publication/reconstruction for every object,
