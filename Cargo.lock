@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "frf"
-version = "0.1.70"
+version = "0.1.71"
 dependencies = [
  "base64",
  "clap",

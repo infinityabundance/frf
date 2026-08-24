@@ -75,6 +75,34 @@ require_artifacts() {
   fi
 }
 
+# The portable-bundle step (Phase 3): a reviewer with ONLY the bundle — no
+# source tree, no FRF installation — verifies the FIXED receipt from an
+# EMPTY directory. `frf bundle export` carries the fixed receipt + its
+# complete evidence closure; `frf bundle verify` (no --root) re-verifies it
+# against the bundled evidence alone; the INDEPENDENT verifiers (xtask, Go
+# — no frf library, no execution) reach the same verdict on the same bytes.
+portable_bundle() {
+  local ev="$1" receipt="$2" out="$3"
+  echo "== the portable bundle: export + verify-from-empty-dir =="
+  rm -rf "$(dirname "$out")"
+  "$FRF" --root "$ev" bundle export "$receipt" --output "$out"
+  EMPTY=$(mktemp -d)
+  (cd "$EMPTY" && "$FRF" bundle verify "$out")
+  rm -rf "$EMPTY"
+  if [ -n "${XTASK_BIN:-}" ]; then
+    "$XTASK_BIN" verify bundle "$out"
+  elif [ -x "$ROOT/target/debug/xtask" ]; then
+    "$ROOT/target/debug/xtask" verify bundle "$out"
+  elif command -v cargo >/dev/null 2>&1; then
+    (cd "$ROOT" && cargo xtask verify bundle "$out")
+  fi
+  if [ -n "${GO_VERIFIER:-}" ]; then
+    "$GO_VERIFIER" verify bundle "$out"
+  elif command -v go >/dev/null 2>&1; then
+    (cd "$ROOT/verifier-go" && go run . verify bundle "$out")
+  fi
+}
+
 # The full local evidence tree (complete, with objects) — the transform's
 # input. Never committed (golden/work is ignored).
 WORK="$ROOT/golden/work/heartbleed-leak-study"
@@ -103,7 +131,7 @@ case "$cmd" in
     acknowledge publish
     require_artifacts
     echo "== running the full FRF study (the transform's input) =="
-    sh "$HB/study.sh"
+    RECEIPT_FIXED=$(sh "$HB/study.sh" 2>&1 | sed -n 's/^receipt_g=//p' | tail -1)
     echo "== deriving the publication policy (probes + mutation request) =="
     POLICY=$(mktemp)
     trap 'rm -f "$POLICY"' EXIT
@@ -114,13 +142,15 @@ case "$cmd" in
     echo
     echo "== the committed publication =="
     "$FRF" --root "$HB/evidence" evidence status
+    echo
+    portable_bundle "$EV" "$RECEIPT_FIXED" "$HB/bundle/portable.frf"
     ;;
   verify)
     acknowledge verify
     sh "$0" verify-artifacts
     require_artifacts
     echo "== re-deriving the study and publishing fresh =="
-    sh "$HB/study.sh"
+    RECEIPT_FIXED=$(sh "$HB/study.sh" 2>&1 | sed -n 's/^receipt_g=//p' | tail -1)
     POLICY=$(mktemp)
     PUB=$(mktemp -u "${TMPDIR:-/tmp}/frf-hb-pub-XXXXXX")
     trap 'rm -f "$POLICY"; rm -rf "$PUB"' EXIT
@@ -136,6 +166,8 @@ case "$cmd" in
     fi
     echo "== the committed publication's four-state verdict =="
     "$FRF" --root "$HB/evidence" evidence status
+    echo
+    portable_bundle "$EV" "$RECEIPT_FIXED" "$HB/bundle/portable.frf"
     ;;
   verify-artifacts)
     echo "== checking the probe binaries against the pinned hashes =="

@@ -21,7 +21,7 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 | `evidence/` | the committed, deterministic evidence tree: 7-run series + boundary-localized trajectory, the f/g receipts, the seed-leak challenge, the court-verified reduction (reproducer `malformed 0x0FE9`), and the sensitivity-backed claim |
 | `claims/heartbleed-trajectory.md` | the comparative claim: the measured lifecycle table, the minimized trigger, the sensitivity proof |
 | `study.sh` | the full FRF flow driver (regenerates the evidence under `golden/work`) |
-| `reproduce.sh` | `build` / `run` / `verify` — the zero-click reproducibility kit |
+| `reproduce.sh` | `build` / `run` / `verify` — the zero-click reproducibility kit (`publish` + `verify` also build the PORTABLE BUNDLE: the fixed receipt + its complete evidence closure, verifiable from an empty dir and by the independent verifiers) |
 
 ## The measured story
 
@@ -48,7 +48,13 @@ challenge, and a sensitivity-backed claim — all from the OFFICIAL OpenSSL
 ```sh
 ./reproduce.sh build   # rebuild the probes from the pinned recipe (pinned container + NEVRAs + official tarballs; needs network for the live package repository)
 ./reproduce.sh run     # regenerate evidence/
-./reproduce.sh verify  # re-derive and compare — evidence is deterministic
+./reproduce.sh publish # full local evidence -> publish-detached -> evidence/ (+ the portable bundle)
+./reproduce.sh verify  # re-derive and compare — evidence is deterministic (+ the portable bundle)
+
+The PORTABLE BUNDLE (`bundle/portable.frf`): the fixed receipt + its
+complete evidence closure, verified from an EMPTY directory — no source
+tree, no FRF installation — by the reference engine AND the independent
+verifiers.
 ```
 
 The probe binaries are NOT committed (they are pinned build products): a

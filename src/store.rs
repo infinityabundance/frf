@@ -997,6 +997,13 @@ impl Store {
         snapshot.objects.sort_by(|a, b| {
             (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str()))
         });
+        // The universe is a SET of typed content references: a member listed
+        // twice (e.g. a reduction named by both its `.json` file and its
+        // `minimizer/` evidence directory) is one member. The independent
+        // verifiers enforce uniqueness — the compiled snapshot must too.
+        snapshot
+            .objects
+            .dedup_by(|a, b| a.kind == b.kind && a.id == b.id);
 
         let cid = crate::semantics::knowledge_snapshot_identity(&snapshot)?;
         snapshot.cid = cid;

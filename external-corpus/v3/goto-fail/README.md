@@ -17,8 +17,14 @@ See `claims/goto-fail-verdict.md` for the measured story, and
 ```sh
 ./reproduce.sh build    # gcc; no container needed
 ./reproduce.sh run      # regenerate evidence/ under golden/work (never the public tree)
-./reproduce.sh publish  # full local evidence -> publish-detached -> evidence/
-./reproduce.sh verify   # re-derive + publish + byte-compare the committed publication
+./reproduce.sh publish  # full local evidence -> publish-detached -> evidence/ (+ the portable bundle)
+./reproduce.sh verify   # re-derive + publish + byte-compare the committed publication (+ the portable bundle)
+
+The PORTABLE BUNDLE (`bundle/portable.frf`, built by `publish` and
+`verify`): the fixed receipt + its complete evidence closure, exported by
+`frf bundle export` and verified from an EMPTY directory — no source tree,
+no FRF installation — by the reference engine AND the independent
+verifiers (xtask, Go), which reach the same verdict on the same bytes.
 ```
 
 The verifier binaries are NOT committed (they are pinned build products):

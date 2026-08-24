@@ -47,6 +47,34 @@ require_artifacts() {
 WORK="$ROOT/golden/work/goto-fail-verdict-study"
 EV="$WORK/ev"
 
+# The portable-bundle step (Phase 3): a reviewer with ONLY the bundle — no
+# source tree, no FRF installation — verifies the FIXED receipt from an
+# EMPTY directory. `frf bundle export` carries the fixed receipt + its
+# complete evidence closure; `frf bundle verify` (no --root) re-verifies it
+# against the bundled evidence alone; the INDEPENDENT verifiers (xtask, Go
+# — no frf library, no execution) reach the same verdict on the same bytes.
+portable_bundle() {
+  local ev="$1" receipt="$2" out="$3"
+  echo "== the portable bundle: export + verify-from-empty-dir =="
+  rm -rf "$(dirname "$out")"
+  "$FRF" --root "$ev" bundle export "$receipt" --output "$out"
+  EMPTY=$(mktemp -d)
+  (cd "$EMPTY" && "$FRF" bundle verify "$out")
+  rm -rf "$EMPTY"
+  if [ -n "${XTASK_BIN:-}" ]; then
+    "$XTASK_BIN" verify bundle "$out"
+  elif [ -x "$ROOT/target/debug/xtask" ]; then
+    "$ROOT/target/debug/xtask" verify bundle "$out"
+  elif command -v cargo >/dev/null 2>&1; then
+    (cd "$ROOT" && cargo xtask verify bundle "$out")
+  fi
+  if [ -n "${GO_VERIFIER:-}" ]; then
+    "$GO_VERIFIER" verify bundle "$out"
+  elif command -v go >/dev/null 2>&1; then
+    (cd "$ROOT/verifier-go" && go run . verify bundle "$out")
+  fi
+}
+
 cmd=${1:-usage}
 case "$cmd" in
   build)
@@ -66,7 +94,7 @@ case "$cmd" in
   publish)
     require_artifacts
     echo "== running the full FRF study (the transform's input) =="
-    sh "$GF/study.sh"
+    RECEIPT_FIXED=$(sh "$GF/study.sh" 2>&1 | sed -n 's/^receipt_clean=//p' | tail -1)
     echo "== deriving the publication policy (binaries + mutation request) =="
     POLICY=$(mktemp)
     trap 'rm -f "$POLICY"' EXIT
@@ -77,11 +105,13 @@ case "$cmd" in
     echo
     echo "== the committed publication =="
     "$FRF" --root "$GF/evidence" evidence status
+    echo
+    portable_bundle "$EV" "$RECEIPT_FIXED" "$GF/bundle/portable.frf"
     ;;
   verify)
     require_artifacts
     echo "== re-deriving the study and publishing fresh =="
-    sh "$GF/study.sh"
+    RECEIPT_FIXED=$(sh "$GF/study.sh" 2>&1 | sed -n 's/^receipt_clean=//p' | tail -1)
     POLICY=$(mktemp)
     PUB=$(mktemp -u "${TMPDIR:-/tmp}/frf-gf-pub-XXXXXX")
     trap 'rm -f "$POLICY"; rm -rf "$PUB"' EXIT
@@ -97,6 +127,8 @@ case "$cmd" in
     fi
     echo "== the committed publication's four-state verdict =="
     "$FRF" --root "$GF/evidence" evidence status
+    echo
+    portable_bundle "$EV" "$RECEIPT_FIXED" "$GF/bundle/portable.frf"
     ;;
   usage|*)
     echo "usage: ./reproduce.sh {build|run|publish|verify}"
