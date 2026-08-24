@@ -734,9 +734,11 @@ pub fn fingerprint_from_projections(
 ///   key, never a claim about exact divergence identity.
 /// - fingerprint = the EXACT observed divergence
 ///   ([`residual_fingerprint`] / [`fingerprint_from_projections`]): the run
-///   + the exact raw projections. Two observations with the same fingerprint
-///   are the same bytes diverging the same way; two fingerprints on one
-///   lineage are DIFFERENT answers to the same question.
+///   + the exact raw projections.
+///
+///   Two observations with the same fingerprint are the same bytes diverging
+///   the same way; two fingerprints on one lineage are DIFFERENT answers to
+///   the same question.
 ///
 /// Contents: kind, axis, surface, fixture, fixture family, authority NAME.
 /// (The authority name, not the versioned id — the lineage must span

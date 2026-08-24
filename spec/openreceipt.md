@@ -350,11 +350,17 @@ bundle.frf/
                        and — transitively — every resolution run its
                        disposition events reference, plus
                        comparator/<axis>/{request,response,invocation,
-                       result}.json for every externally served axis
+                       result}.json for every externally served axis, and
+                       residuals/<id>.json — the residual LEAF, the
+                       canonical evidence carried inside its run (the run
+                       directory is the transactional root)
   objects/sha256/<H>   content-addressed execution snapshots — the executed
                        artifacts AND the comparator instrumentation, walked
                        via the capture's typed evidence references
-  residuals/           residual records + <id>.events/ event chains
+  residuals/           the DERIVED INDEX: byte-identical copies of the
+                       leaves (residuals/<id>.json) + <id>.events/ event
+                       chains + <id>.token.json — carried so the unpacked
+                       store is immediately consistent
   claims/<id>.json     the compiled claim, when present
 ```
 

@@ -42,6 +42,9 @@ use crate::error::{FrfError, Result};
 use crate::model::*;
 use crate::store::Store;
 
+// One argument per disposition dimension; the closure is the command's whole
+// surface.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     store: &Store,
     id: &str,

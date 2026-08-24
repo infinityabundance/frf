@@ -6,9 +6,13 @@
 //! <root>/
 //!   authorities/   admitted once, never rewritten
 //!   courts/        hand-authored declarations (never created by the tool)
-//!   captures/      raw observations, written once (create_new)
+//!   captures/      raw observations, written once (create_new); the run
+//!                  directory is the TRANSACTIONAL ROOT — it carries the
+//!                  residual LEAVES (captures/<run>/residuals/<id>.json),
+//!                  published by ONE atomic rename
 //!   objects/       content-addressed execution snapshots (sha256/<H>)
-//!   residuals/     residual records + derived token files
+//!   residuals/     the DERIVED INDEX (byte-identical copies of the leaves)
+//!                  + derived token files + <id>.events/ event chains
 //!   receipts/      bindings, written once (content-addressed ids)
 //!   claims/        compiled claim artifacts, written only by `frf claim compile`
 //! ```
@@ -20,10 +24,13 @@
 //! - [`Store::write_once`] fails if the target already exists (raw captures,
 //!   authorities, receipts).
 //! - [`Store::write_derived`] may overwrite, and is used only for artifacts
-//!   that are pure functions of immutable inputs (tokens, claims).
-//! - The residual record is the single mutable evidence object; mutation goes
-//!   through [`Store::write_residual`], which rewrites the record and its
-//!   derived token together.
+//!   that are pure functions of immutable inputs (tokens, claims, the derived
+//!   residual index).
+//! - The residual record is IMMUTABLE evidence: its LEAF is written once
+//!   inside the run (the transactional root) and never rewritten; the derived
+//!   top-level artifacts that follow it — the index copy and the κ token —
+//!   are pure functions of the record + its disposition chain, rewritten by
+//!   [`Store::write_residual_index`] / [`Store::write_token`].
 
 use crate::error::{FrfError, Result};
 use crate::model::*;
@@ -668,11 +675,44 @@ impl Store {
             .join("minimizer"))
     }
 
+    /// The DERIVED residual index: `residuals/<id>.json` — a byte-identical
+    /// copy of the residual record LEAF (which lives inside its run's
+    /// directory, `captures/<run>/residuals/<id>.json`). The record's `run`
+    /// field IS the index: given an id, the copy names the run the leaf
+    /// lives in. The index is DERIVED (the leaf is the evidence; the copy is
+    /// rederivable and self-heals on read) and the whole-store verifier
+    /// enforces copy == leaf byte-for-byte — the run directory is the
+    /// transactional root published by ONE rename, so the observation
+    /// closure (capture + residual leaves) can never appear half-written,
+    /// while the top-level residual namespace remains a content-addressed
+    /// lookup over every residual.
     pub fn residual_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
         Ok(self.root.join("residuals").join(format!("{id}.json")))
     }
 
+    /// The residual LEAF path: `captures/<run>/residuals/<id>.json` — the
+    /// canonical evidence, published atomically with its run.
+    pub fn residual_leaf_path(&self, run: &str, id: &str) -> Result<PathBuf> {
+        validate_id("run", run)?;
+        validate_id("residual", id)?;
+        Ok(self
+            .root
+            .join("captures")
+            .join(run)
+            .join("residuals")
+            .join(format!("{id}.json")))
+    }
+
+    /// The residual leaf DIRECTORY of a run: `captures/<run>/residuals/`.
+    pub fn residual_leaf_dir(&self, run: &str) -> Result<PathBuf> {
+        validate_id("run", run)?;
+        Ok(self.root.join("captures").join(run).join("residuals"))
+    }
+
+    /// The derived κ token path: `residuals/<id>.token.json` — a pure
+    /// function of the residual record + its current disposition, so it is
+    /// derived (rewritten on disposition change), never evidence.
     pub fn token_path(&self, id: &str) -> Result<PathBuf> {
         validate_id("residual", id)?;
         Ok(self.root.join("residuals").join(format!("{id}.token.json")))
@@ -823,38 +863,45 @@ impl Store {
 
         // Residual heads: every residual record with its canonical record
         // content address, its fingerprint, and its projected head
-        // disposition (the event chain is verified on load).
-        let residuals_dir = self.root.join("residuals");
-        if residuals_dir.is_dir() {
-            let mut names: Vec<String> = std::fs::read_dir(&residuals_dir)
-                .map_err(|e| FrfError::new(format!("cannot read residuals directory: {e}")))?
+        // disposition (the event chain is verified on load). The universe
+        // walks the CAPTURES (the evidence — every residual leaf lives in
+        // its run), never the top-level residuals/ namespace (which is a
+        // DERIVED index: it self-heals on read, so the committed universe
+        // must not depend on its completeness).
+        let captures_dir = self.root.join("captures");
+        if captures_dir.is_dir() {
+            let mut names: Vec<String> = std::fs::read_dir(&captures_dir)
+                .map_err(|e| FrfError::new(format!("cannot read captures directory: {e}")))?
                 .flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|n| n.ends_with(".json") && !n.ends_with(".token.json"))
+                .filter(|n| !n.starts_with('.'))
                 .collect();
             names.sort();
-            for name in names {
-                let id = name.trim_end_matches(".json").to_string();
-                // Producer path: the snapshot COMMITS the residual's content
-                // address + fingerprint (computed from the record's own
-                // fields); the blocker scan re-verifies each committed head
-                // and refuses on mismatch before the scope may drive the
-                // claim.
-                let record = self.load_residual(&id)?.into_inner();
-                let events = self.disposition_events(&id)?;
-                let disposition = events
-                    .last()
-                    .map(|e| e.disposition.clone())
-                    .unwrap_or(Disposition::Open);
-                snapshot.residual_heads.push(SnapshotResidualHead {
-                    record_cid: crate::semantics::record_content_identity(&record)?,
-                    fingerprint: crate::semantics::residual_fingerprint(&record)?,
-                    id,
-                    disposition: disposition.as_str().to_string(),
-                    disposition_event_id: events.last().map(|e| e.event_id.clone()),
-                });
+            for run in names {
+                let capture = self.load_capture(&run)?.into_inner();
+                for id in &capture.residuals {
+                    // Producer path: the snapshot COMMITS the residual's
+                    // content address + fingerprint (computed from the
+                    // record's own fields); the blocker scan re-verifies
+                    // each committed head and refuses on mismatch before
+                    // the scope may drive the claim.
+                    let record = self.load_residual(id)?.into_inner();
+                    let events = self.disposition_events(id)?;
+                    let disposition = events
+                        .last()
+                        .map(|e| e.disposition.clone())
+                        .unwrap_or(Disposition::Open);
+                    snapshot.residual_heads.push(SnapshotResidualHead {
+                        record_cid: crate::semantics::record_content_identity(&record)?,
+                        fingerprint: crate::semantics::residual_fingerprint(&record)?,
+                        id: id.clone(),
+                        disposition: disposition.as_str().to_string(),
+                        disposition_event_id: events.last().map(|e| e.event_id.clone()),
+                    });
+                }
             }
             snapshot.residual_heads.sort_by(|a, b| a.id.cmp(&b.id));
+            snapshot.residual_heads.dedup_by(|a, b| a.id == b.id);
         }
 
         // The other members of the universe, as typed content references.
@@ -2247,20 +2294,164 @@ impl Store {
     }
 
     /// Raw-parse a residual record: canonical document, NO identity/derivation
-    /// proof (the record is not content-addressed — its id is a sequence). The
-    /// returned [`Unverified`] marker must be resolved through
-    /// `verify::load_residual_verified` before the record may drive a
-    /// semantic decision; [`Unverified::into_inner`] is reserved for
+    /// proof (the record's id is content-addressed, but the rederivation is
+    /// the verified loader's job). The returned [`Unverified`] marker must be
+    /// resolved through `verify::load_residual_verified` before the record may
+    /// drive a semantic decision; [`Unverified::into_inner`] is reserved for
     /// producers.
+    ///
+    /// The LEAF (inside the run, `captures/<run>/residuals/<id>.json`) is the
+    /// authoritative evidence; the top-level `residuals/<id>.json` is a
+    /// DERIVED INDEX copy naming its run. A missing index copy self-heals
+    /// (the index is derived from the evidence, never the other way around).
     pub fn load_residual(&self, id: &str) -> Result<Unverified<ResidualRecord>> {
-        let path = self.residual_path(id)?;
-        if !path.exists() {
+        let run = self.residual_run(id)?;
+        let leaf = self.residual_leaf_path(&run, id)?;
+        if !leaf.is_file() {
             return Err(FrfError::new(format!(
-                "no such residual '{id}' (missing {})",
-                path.display()
+                "residual '{id}' has no leaf at {} (the derived index names run {run} but the leaf is missing — the evidence tree is incomplete)",
+                leaf.display()
             )));
         }
-        Ok(Unverified::new(self.parse_evidence(&path)?))
+        let record: ResidualRecord = self.parse_evidence(&leaf)?;
+        if record.id != id {
+            return Err(FrfError::new(format!(
+                "residual leaf {} carries id {} — the name is a claim; refusing to consume",
+                leaf.display(),
+                record.id
+            )));
+        }
+        if record.run != run {
+            return Err(FrfError::new(format!(
+                "residual leaf {} names run {} but sits in run {run} — a residual leaf cannot move",
+                leaf.display(),
+                record.run
+            )));
+        }
+        Ok(Unverified::new(record))
+    }
+
+    /// Resolve the run a residual's leaf lives in, through the DERIVED
+    /// INDEX: the top-level `residuals/<id>.json` copy names the run. When
+    /// the copy is missing the index self-heals by scanning the verified
+    /// runs (the copy is derived from the leaf + the capture's residual
+    /// list, deterministically).
+    fn residual_run(&self, id: &str) -> Result<String> {
+        let index = self.residual_path(id)?;
+        if index.is_file() {
+            let record: ResidualRecord = self.parse_evidence(&index)?;
+            if record.id != id {
+                return Err(FrfError::new(format!(
+                    "the derived residual index {} carries id {} — a derived index entry must sit at the id it names",
+                    index.display(),
+                    record.id
+                )));
+            }
+            return Ok(record.run.clone());
+        }
+        let captures_dir = self.root.join("captures");
+        if captures_dir.is_dir() {
+            for entry in fs::read_dir(&captures_dir)
+                .map_err(|e| FrfError::new(format!("cannot read captures: {e}")))?
+            {
+                let entry = entry.map_err(|e| FrfError::new(format!("captures: {e}")))?;
+                if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let run = entry.file_name().to_string_lossy().into_owned();
+                if run.starts_with('.') {
+                    continue; // a staging tree, not a run
+                }
+                let leaf = self.residual_leaf_path(&run, id)?;
+                if !leaf.is_file() {
+                    continue;
+                }
+                // The capture must reference the residual (a stray leaf is
+                // not an index candidate). The capture is evidence, so the
+                // canonical loader parses it; a run whose capture refuses to
+                // parse is not an index candidate for THIS lookup (its
+                // corruption is a whole-store violation the verifier catches
+                // separately).
+                let cap_path = self.run_dir(&run)?.join("capture.json");
+                let Ok(cap) = self.parse_evidence::<crate::model::CaptureManifest>(&cap_path)
+                else {
+                    continue;
+                };
+                if !cap.residuals.iter().any(|r| r == id) {
+                    continue;
+                }
+                // Derive the index copy (idempotent; deterministic).
+                if let Ok(bytes) = fs::read(&leaf) {
+                    self.write_index_copy(id, &bytes)?;
+                }
+                return Ok(run);
+            }
+        }
+        Err(FrfError::new(format!(
+            "no such residual '{id}' (missing {})",
+            index.display()
+        )))
+    }
+
+    /// Write the DERIVED residual index copy for a record: a byte-identical
+    /// copy of the leaf, sitting at `residuals/<id>.json`, whose `run` field
+    /// names the leaf's run. Derived (rewriteable) — the leaf is the
+    /// evidence; this is the content-addressed lookup.
+    pub fn write_residual_index(&self, record: &ResidualRecord) -> Result<()> {
+        let json = self.to_evidence(record)?;
+        self.write_index_copy(&record.id, json.as_bytes())
+    }
+
+    /// Write one derived index copy, creating the namespace if needed (the
+    /// index is derived; its directory is not part of the evidence tree's
+    /// creation contract).
+    fn write_index_copy(&self, id: &str, bytes: &[u8]) -> Result<()> {
+        let index = self.residual_path(id)?;
+        if let Some(parent) = index.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| FrfError::new(format!("cannot create {}: {e}", parent.display())))?;
+        }
+        self.write_derived(&index, &String::from_utf8_lossy(bytes))
+    }
+
+    /// The index-consistency check: the top-level copy must be byte-identical
+    /// to the leaf (the index is DERIVED — a divergent copy is tampering, not
+    /// evidence). A MISSING copy is not an error here (the read path
+    /// self-heals the derived index); a present-but-divergent copy is a graph
+    /// violation.
+    pub fn verify_residual_index(&self, id: &str) -> Result<()> {
+        let index = self.residual_path(id)?;
+        if !index.is_file() {
+            return Ok(());
+        }
+        let record: ResidualRecord = self.parse_evidence(&index)?;
+        if record.id != id {
+            return Err(FrfError::new(format!(
+                "the derived residual index {} carries id {} — a derived index entry must sit at the id it names",
+                index.display(),
+                record.id
+            )));
+        }
+        let leaf = self.residual_leaf_path(&record.run, id)?;
+        if !leaf.is_file() {
+            return Err(FrfError::new(format!(
+                "the derived residual index {} names run {} but the leaf is missing — the evidence tree is incomplete",
+                index.display(),
+                &record.run[..16.min(record.run.len())]
+            )));
+        }
+        let index_bytes = fs::read(&index)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", index.display())))?;
+        let leaf_bytes = fs::read(&leaf)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", leaf.display())))?;
+        if index_bytes != leaf_bytes {
+            return Err(FrfError::new(format!(
+                "the derived residual index {} diverges from its leaf {} — the index is derived from the evidence; a divergent copy is tampering",
+                index.display(),
+                leaf.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Raw-parse a capture document: canonical, NO identity/derivation proof

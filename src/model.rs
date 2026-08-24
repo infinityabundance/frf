@@ -4940,8 +4940,7 @@ impl ReductionRecord {
                     let last = self
                         .attempts
                         .iter()
-                        .filter(|a| a.role == ReductionAttemptRole::FinalVerification)
-                        .last()
+                        .rfind(|a| a.role == ReductionAttemptRole::FinalVerification)
                         .ok_or("a proven boundary requires attempts")?;
                     if !last.accepted {
                         return Err(

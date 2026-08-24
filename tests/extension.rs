@@ -1118,11 +1118,12 @@ fn receipt_emit_and_dispose_refuse_tampered_evidence() {
         stderr(&out)
     );
 
-    // Tamper with a residual record: `dispose` must refuse (identity +
-    // derivation from the parent run are established before a disposition
-    // may be appended).
+    // Tamper with the residual LEAF (the authoritative evidence, inside its
+    // run — the run directory is the transactional root): `dispose` must
+    // refuse (identity + derivation from the parent run are established
+    // before a disposition may be appended).
     let exit_id = residual_id(&work, &run, "exit");
-    let residual_path = work.path(&format!("{ROOT}/residuals/{exit_id}.json"));
+    let residual_path = work.path(&format!("{ROOT}/captures/{run}/residuals/{exit_id}.json"));
     let mut residual: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&residual_path).unwrap()).unwrap();
     residual["raw_reference"] = serde_json::Value::String("9".into());
@@ -1150,6 +1151,7 @@ fn receipt_emit_and_dispose_refuse_tampered_evidence() {
     assert!(
         stderr(&out).contains("does not rederive")
             || stderr(&out).contains("does not derive")
+            || stderr(&out).contains("diverges from its leaf")
             || stderr(&out).contains("refusing"),
         "the refusal must name the verification failure: {}",
         stderr(&out)

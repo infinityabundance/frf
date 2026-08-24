@@ -545,7 +545,7 @@ pub fn run_identity(cap: &Value, residuals: &[Value]) -> String {
 
 /// FRF/DISPOSITION-EVENT/v1 over the event's own fields.
 pub fn disposition_event_identity(event: &Value) -> String {
-    let disposition = match s(&event["disposition"]).as_ref() {
+    let disposition = match s(&event["disposition"]) {
         "fixed" => json!({
             "kind": "fixed",
             "reason": s(&event["reason"]),
@@ -691,20 +691,20 @@ pub fn reduction_identity_from_doc(doc: &Value) -> String {
     use crate::as_str;
     let s = |key: &str| as_str(&doc[key]);
     reduction_identity(
-        &s("residual_id"),
-        &s("source_run"),
-        &s("axis"),
-        &s("kind"),
-        &s("court_semantic_identity"),
-        &s("authority_artifact_sha256"),
-        &s("candidate_artifact_sha256"),
-        &s("environment_digest"),
-        &s("comparator_semantic_id"),
-        &s("comparator_semantic_hash"),
-        &s("comparator_implementation_hash"),
+        s("residual_id"),
+        s("source_run"),
+        s("axis"),
+        s("kind"),
+        s("court_semantic_identity"),
+        s("authority_artifact_sha256"),
+        s("candidate_artifact_sha256"),
+        s("environment_digest"),
+        s("comparator_semantic_id"),
+        s("comparator_semantic_hash"),
+        s("comparator_implementation_hash"),
         &doc["argv_template"],
-        &s("original_fixture_sha256"),
-        &s("final_fixture_sha256"),
+        s("original_fixture_sha256"),
+        s("final_fixture_sha256"),
         &doc["attempts"],
         &doc["derivation"],
         &doc["transform"],

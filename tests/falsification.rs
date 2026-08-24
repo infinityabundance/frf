@@ -263,9 +263,18 @@ fn universe_omission_is_unproducible() {
         .unwrap();
     assert!(!heads.is_empty());
     let head_id = heads[0]["id"].as_str().unwrap();
-    let rec_path = work.path(&format!("{ROOT}/residuals/{head_id}.json"));
-    let rec = fs::read(&rec_path).unwrap();
-    fs::remove_file(&rec_path).unwrap();
+    // The residual LEAF is the evidence (it lives inside its run — the run
+    // directory is the transactional root); the top-level residuals/ entry
+    // is a DERIVED index that self-heals on read. Deleting the COPY would
+    // be healed; deleting the LEAF is the genuine omission.
+    let copy_path = work.path(&format!("{ROOT}/residuals/{head_id}.json"));
+    let copy: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&copy_path).unwrap()).unwrap();
+    let run = copy["run"].as_str().unwrap();
+    let leaf_path = work.path(&format!("{ROOT}/captures/{run}/residuals/{head_id}.json"));
+    let rec = fs::read(&leaf_path).unwrap();
+    fs::remove_file(&leaf_path).unwrap();
+    let _ = rec;
 
     // The claim VERIFICATION refuses: the committed universe cannot be
     // reproduced from the store (the head's record_cid no longer rederives).
@@ -289,7 +298,7 @@ fn universe_omission_is_unproducible() {
     );
 
     // Restore so later assertions on other tests' trees are unaffected.
-    fs::write(&rec_path, &rec).unwrap();
+    fs::write(&leaf_path, &rec).unwrap();
 }
 
 // ---------------------------------------------------------------------------

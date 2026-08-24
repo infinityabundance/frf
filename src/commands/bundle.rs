@@ -901,20 +901,34 @@ pub fn collect_closure(store: &Store, receipt_id: &str) -> Result<Closure> {
         }
 
         // Residual records + disposition-event chains; a `fixed` event adds
-        // its resolution run to the closure (the graph traversal).
+        // its resolution run to the closure (the graph traversal). The
+        // residual LEAF lives inside its run (the transactional root — the
+        // bundle carries it at its canonical path); the top-level
+        // `residuals/<id>.json` copy is the DERIVED INDEX, carried too so
+        // the unpacked store is immediately consistent (byte-identical).
         for id in &cap.residuals {
             if !seen_residuals.insert(id.clone()) {
                 continue;
             }
-            let rec_path = store.residual_path(id)?;
-            let bytes = read(&rec_path, "residual")?;
-            let rel = format!("residuals/{id}.json");
+            let leaf_path = store.residual_leaf_path(&cap.run, id)?;
+            let bytes = read(&leaf_path, "residual")?;
+            let rel = format!("captures/{}/residuals/{id}.json", cap.run);
             entries.insert(
                 rel.clone(),
                 ClosureEntry {
                     rel,
                     sha256: host::sha256_bytes(&bytes),
                     kind: "residual",
+                },
+            );
+            // The derived index copy (byte-identical to the leaf).
+            let idx_rel = format!("residuals/{id}.json");
+            entries.insert(
+                idx_rel.clone(),
+                ClosureEntry {
+                    rel: idx_rel,
+                    sha256: host::sha256_bytes(&bytes),
+                    kind: "residual-index",
                 },
             );
             // The verified event chain (identity rederives, parents link).

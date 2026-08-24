@@ -357,9 +357,18 @@ live in `fuzz/` with seed corpora checked in; they need nightly + clang +
 frf/
   authorities/   admitted once, never rewritten
   courts/        hand-authored court declarations (question, envelope, fixture)
-  captures/      raw observations, content-addressed, immutable
+  captures/      raw observations, content-addressed, immutable; the run
+                 directory is the TRANSACTIONAL ROOT — it carries the residual
+                 LEAVES inside it (captures/<run>/residuals/<id>.json), so the
+                 observation closure (capture + side files + residuals) is
+                 published by ONE atomic rename and can never appear half-written
   objects/       content-addressed execution snapshots (sha256/<H>), verified + sealed
-  residuals/     immutable observations + derived tokens + <id>.events/ dispositions
+  residuals/     the DERIVED INDEX over every residual: byte-identical copies
+                 of the leaves (residuals/<id>.json, whose `run` field names
+                 the leaf's run), derived tokens (residuals/<id>.token.json),
+                 and <id>.events/ dispositions. The index is DERIVED — the
+                 leaf inside the run is the evidence; a missing index entry
+                 self-heals on read, a divergent copy is tampering
   series/        ExecutionSeries records: the experiments (content-addressed;
                  every append is a new snapshot)
   trajectories/  derived residual trajectories: lineage × coordinate system × series

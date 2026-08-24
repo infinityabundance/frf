@@ -118,10 +118,10 @@ fn a_tampered_claim_refuses_the_whole_store_status() {
     );
 }
 
-/// An ORPHANED residual — a record no capture references — must refuse the
-/// whole-store status: the residuals/ namespace is enumerated independently
-/// of the capture walk, and a record whose parent run does not verify is
-/// corruption, not a harmless stray file.
+/// An ORPHANED residual — a residual whose parent run does not verify — must
+/// refuse the whole-store status: the residuals/ namespace is enumerated
+/// independently of the capture walk, and a residual whose parent run is
+/// missing is corruption, not a harmless stray file.
 #[test]
 fn an_orphaned_residual_refuses_the_whole_store_status() {
     let work = Workdir::new("whole-store-residual");
@@ -129,13 +129,30 @@ fn an_orphaned_residual_refuses_the_whole_store_status() {
     admit_reference(&work);
     let run = run_court(&work);
 
-    // A real residual record's bytes, planted under an id no run references
-    // (and whose content address does not rederive from its fields).
+    // Plant a genuine orphan: take the real exit residual, point it at a
+    // PHANTOM run, recompute its content address from its own fields (so the
+    // identity rederives), and write BOTH the leaf (inside the phantom run's
+    // residuals dir) and the derived index copy. The whole-store walk must
+    // refuse: the parent run does not exist and does not verify.
     let exit_id = residual_id(&work, &run, "exit");
-    let real = fs::read(work.path(&format!("{ROOT}/residuals/{exit_id}.json"))).unwrap();
+    let copy_path = work.path(&format!("{ROOT}/residuals/{exit_id}.json"));
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&copy_path).unwrap()).unwrap();
+    record["run"] = serde_json::Value::String(format!("run-orphan-{}", "0".repeat(60)));
+    let record: frf::model::ResidualRecord =
+        serde_json::from_value(record).expect("the rewritten record still deserializes");
+    let orphan_id = frf::semantics::residual_record_identity(&record).unwrap();
+    let orphan_canonical = frf::canon::canonical(&record).unwrap();
+    // The orphan's leaf inside its phantom run + the derived index copy.
+    let phantom_run = record.run.clone();
+    let leaf = work.path(&format!(
+        "{ROOT}/captures/{phantom_run}/residuals/{orphan_id}.json"
+    ));
+    fs::create_dir_all(leaf.parent().unwrap()).unwrap();
+    fs::write(&leaf, &orphan_canonical).unwrap();
     fs::write(
-        work.path(&format!("{ROOT}/residuals/cli-exit-9999.json")),
-        &real,
+        work.path(&format!("{ROOT}/residuals/{orphan_id}.json")),
+        &orphan_canonical,
     )
     .unwrap();
 
@@ -146,7 +163,11 @@ fn an_orphaned_residual_refuses_the_whole_store_status() {
     );
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(
-        text.contains("residual cli-exit-9999"),
+        text.contains(&format!("residual {orphan_id}")),
         "the refusal names the orphan: {text}"
+    );
+    assert!(
+        text.contains("no leaf") || text.contains("does not verify") || text.contains("incomplete"),
+        "the refusal names the missing parent run: {text}"
     );
 }

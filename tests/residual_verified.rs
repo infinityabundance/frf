@@ -53,18 +53,25 @@ fn golden_residuals(work: &Workdir) -> Vec<String> {
 
 /// Load the canonical JSON of a residual record, mutate one field, and write
 /// it back STILL canonical (so the refusal comes from the derivation checks,
-/// not from the canonical-bytes loader).
+/// not from the canonical-bytes loader). BOTH the derived index copy and the
+/// LEAF are rewritten identically: the byte-identity check between the two is
+/// the first line of defense, so a single-copy tamper is caught there before
+/// any derivation runs. Tampering both consistently forces the refusal to
+/// come from the derivation walk itself.
 fn rewrite_canonical_residual(
     work: &Workdir,
     id: &str,
     mutate: impl FnOnce(&mut serde_json::Value),
 ) {
-    let path = work.path(&format!("{ROOT}/residuals/{id}.json"));
-    let value = canon::parse_strict(&fs::read(&path).unwrap()).unwrap();
+    let copy_path = work.path(&format!("{ROOT}/residuals/{id}.json"));
+    let value = canon::parse_strict(&fs::read(&copy_path).unwrap()).unwrap();
     let mut value = serde_json::to_value(value).unwrap();
+    let run = value["run"].as_str().unwrap().to_string();
     mutate(&mut value);
     let canonical = canon::canonical(&value).unwrap();
-    fs::write(&path, canonical.into_bytes()).unwrap();
+    fs::write(&copy_path, &canonical).unwrap();
+    let leaf_path = work.path(&format!("{ROOT}/captures/{run}/residuals/{id}.json"));
+    fs::write(&leaf_path, &canonical).unwrap();
 }
 
 #[test]
@@ -159,6 +166,57 @@ fn an_undeclared_axis_is_refused() {
     assert!(
         err.contains("was not declared") || err.contains("does not rederive"),
         "unexpected refusal: {err}"
+    );
+}
+
+#[test]
+fn a_divergent_index_copy_is_refused() {
+    let work = Workdir::new("rv-divergent-index");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let ids = golden_residuals(&work);
+    let exit = exit_residual_id(&work, &ids);
+
+    // Tamper ONLY the derived index copy (the leaf stays authoritative): the
+    // byte-identity check must refuse before any derivation runs.
+    let copy_path = work.path(&format!("{ROOT}/residuals/{exit}.json"));
+    let value = canon::parse_strict(&fs::read(&copy_path).unwrap()).unwrap();
+    let mut value = serde_json::to_value(value).unwrap();
+    value["raw_candidate"] = serde_json::Value::String("999".to_string());
+    let canonical = canon::canonical(&value).unwrap();
+    fs::write(&copy_path, canonical.into_bytes()).unwrap();
+
+    let err = refusal(&store(&work), &exit);
+    assert!(
+        err.contains("diverges from its leaf"),
+        "unexpected refusal: {err}"
+    );
+}
+
+#[test]
+fn a_missing_index_copy_self_heals_on_read() {
+    let work = Workdir::new("rv-selfheal");
+    work.copy_canonical_tree();
+    admit_reference(&work);
+    let ids = golden_residuals(&work);
+    let exit = exit_residual_id(&work, &ids);
+
+    // Delete the DERIVED index copy: the leaf is the evidence, so the
+    // verified read must re-derive the copy (byte-identical) and succeed.
+    let copy_path = work.path(&format!("{ROOT}/residuals/{exit}.json"));
+    fs::remove_file(&copy_path).unwrap();
+    let verified = load_residual_verified(&store(&work), &exit)
+        .unwrap_or_else(|e| panic!("residual {exit} must verify after self-heal: {e}"));
+    assert_eq!(verified.id(), exit);
+
+    // The self-healed copy is byte-identical to the leaf.
+    let copy_bytes = fs::read(&copy_path).unwrap();
+    let run = verified.record().run.clone();
+    let leaf_path = work.path(&format!("{ROOT}/captures/{run}/residuals/{exit}.json"));
+    let leaf_bytes = fs::read(&leaf_path).unwrap();
+    assert_eq!(
+        copy_bytes, leaf_bytes,
+        "the self-healed index must match the leaf"
     );
 }
 

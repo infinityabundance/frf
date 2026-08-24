@@ -45,14 +45,15 @@ pub fn is_elf(bytes: &[u8]) -> bool {
 /// external parser); a malformed ELF is a refusal (an artifact that is not
 /// what it claims is not evidence).
 ///
-/// FAIL-CLOSED ARITHMETIC: every offset/range conversion is `usize::try_from`
-/// + `checked_mul`/`checked_add`, because every numeric field here is read
-/// from the artifact's own bytes. A wrapped header-table offset would read a
-/// `p_type` from a different, attacker-chosen position and record a
-/// wrong-but-plausible loader path as part of the runtime closure; a wrapped
-/// `PT_INTERP` range would make `start > end` and panic at the slice. Neither
-/// may happen: a malformed ELF is a refusal, never a misread and never a
-/// panic.
+/// FAIL-CLOSED ARITHMETIC — every offset/range conversion is `usize::try_from`
+/// plus `checked_mul`/`checked_add`, because every numeric field here is read
+/// from the artifact's own bytes.
+///
+/// A wrapped header-table offset would read a `p_type` from a different,
+/// attacker-chosen position and record a wrong-but-plausible loader path as
+/// part of the runtime closure; a wrapped `PT_INTERP` range would make
+/// `start > end` and panic at the slice. Neither may happen: a malformed ELF
+/// is a refusal, never a misread and never a panic.
 fn interp_path(bytes: &[u8]) -> Result<String> {
     if bytes.len() < 64 || bytes[..4] != ELF_MAGIC {
         return Err(FrfError::new("not an ELF executable"));

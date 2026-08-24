@@ -157,7 +157,7 @@ impl StagedRun {
         })?;
         fs::create_dir_all(root.join("captures").join(run))
             .map_err(|e| FrfError::new(format!("cannot create the staged run dir: {e}")))?;
-        fs::create_dir_all(root.join("residuals"))
+        fs::create_dir_all(root.join("captures").join(run).join("residuals"))
             .map_err(|e| FrfError::new(format!("cannot create the staged residuals dir: {e}")))?;
         Ok(StagedRun {
             root,
@@ -170,37 +170,29 @@ impl StagedRun {
         self.root.join("captures").join(run)
     }
 
-    /// The staged residual record path (`<staging>/residuals/<id>.json`).
-    fn residual_path(&self, id: &str) -> PathBuf {
-        self.root.join("residuals").join(format!("{id}.json"))
+    /// The staged residual LEAF path — INSIDE the staged run directory, so
+    /// the ONE rename publishes the observation closure (capture + residual
+    /// leaves) atomically: a half-written store can never appear.
+    fn residual_path(&self, run: &str, id: &str) -> PathBuf {
+        self.root
+            .join("captures")
+            .join(run)
+            .join("residuals")
+            .join(format!("{id}.json"))
     }
 
-    /// The staged token path (`<staging>/residuals/<id>.token.json`).
-    fn token_path(&self, id: &str) -> PathBuf {
-        self.root.join("residuals").join(format!("{id}.token.json"))
-    }
-
-    /// Publish: commit the content-addressed residual/token leaves
-    /// idempotently, then rename the run directory into its final path with
-    /// ONE atomic rename, and remove the (now empty) staging tree. The run
-    /// directory is the anchor: a committed run always has every referenced
-    /// residual present (they are committed first), and a crash before the
-    /// rename leaves only content-addressed orphan leaves that an identical
-    /// re-observation completes (the same divergence derives the same ids).
+    /// Publish: rename the run directory into its final path with ONE atomic
+    /// rename — the run directory IS the transactional root (capture.json +
+    /// side files + residual leaves all travel inside it). Then write the
+    /// DERIVED top-level artifacts: the residual index copies
+    /// (`residuals/<id>.json` — byte-identical copies whose `run` field is
+    /// the index) and the open tokens. Those are derived, not evidence: a
+    /// crash between the rename and the derived writes leaves the observation
+    /// closure complete and the index self-healing on read.
     fn publish(&mut self, store: &Store, run: &str, residuals: &[ResidualRecord]) -> Result<()> {
-        // 1. The residual records + their open tokens (content-addressed,
-        //    idempotent commit: absent -> write, identical -> no-op, different
-        //    -> refuse).
-        for r in residuals {
-            let json = store.to_evidence(r)?;
-            store.commit_content_addressed(&store.residual_path(&r.id)?, &json)?;
-            store.commit_content_addressed(
-                &store.token_path(&r.id)?,
-                &store.to_evidence(&crate::kappa::kappa(r, &Disposition::Open))?,
-            )?;
-        }
-        // 2. The run directory: ONE atomic rename. The capture.json inside it
-        //    is the anchor every reference points at.
+        // 1. ONE atomic rename: the whole observation closure appears at its
+        //    final path — or not at all. There is no window in which a run
+        //    exists without its residuals (or vice versa).
         let staged = self.run_dir(run);
         let final_dir = store.run_dir(run)?;
         fs::rename(&staged, &final_dir).map_err(|e| {
@@ -210,9 +202,15 @@ impl StagedRun {
                 final_dir.display()
             ))
         })?;
-        // 3. The staging tree is empty now (its run dir was renamed away and
-        //    its leaves were committed to their real paths); remove it so no
-        //    dot-directory lingers under captures/.
+        // 2. The DERIVED top-level artifacts (rewriteable; the leaves are the
+        //    evidence). A crash before this step leaves the run complete and
+        //    the index self-healing on the next read.
+        for r in residuals {
+            store.write_residual_index(r)?;
+            store.write_token(r, &Disposition::Open)?;
+        }
+        // 3. The staging tree is empty now; remove it so no dot-directory
+        //    lingers under captures/.
         let _ = fs::remove_dir_all(&self.root);
         self.committed = true;
         Ok(())
@@ -3012,8 +3010,10 @@ pub fn run_once(
     let staged_run = staged.run_dir(&run);
 
     // Fill in the run id + axis hashes + the CONTENT-ADDRESSED residual ids,
-    // then stage the immutable observation records and their (open)
-    // endoduction tokens.
+    // then stage the immutable observation records INSIDE the staged run
+    // directory (the run directory is the transactional root — the ONE
+    // rename publishes capture + residual leaves together). The open tokens
+    // are DERIVED and are written by the publish step after the rename.
     for r in &mut residuals {
         r.run = run.clone();
         r.raw_reference_sha256 = host::sha256_bytes(r.raw_reference.as_bytes());
@@ -3027,12 +3027,9 @@ pub fn run_once(
             &r.raw_candidate_sha256,
         )?;
         let json = store.to_evidence(r)?;
-        std::fs::write(staged.residual_path(&r.id), &json).map_err(|e| {
+        std::fs::write(staged.residual_path(&run, &r.id), &json).map_err(|e| {
             FrfError::new(format!("cannot stage the residual {}: {e}", &r.id[..16]))
         })?;
-        let token_json = store.to_evidence(&crate::kappa::kappa(r, &Disposition::Open))?;
-        std::fs::write(staged.token_path(&r.id), &token_json)
-            .map_err(|e| FrfError::new(format!("cannot stage the token {}: {e}", &r.id[..16])))?;
         let token = crate::kappa::kappa(r, &Disposition::Open);
         eprintln!(
             "residual {} ({}) open: reference={} candidate={} -> token {} -> {}",
