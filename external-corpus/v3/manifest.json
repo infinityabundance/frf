@@ -1,54 +1,82 @@
 {
-  "schema_version": "frf-external-corpus-v3",
-  "about": "Real historical software defects, from the ACTUAL upstream vulnerable and fixed releases. Each case is a court: the authority is the real FIXED release, the buggy candidate is the real VULNERABLE release, the fixture is a real interaction with the vulnerable code path, and the authority transition admits the vulnerable release as the pre-fix oracle. The committed builds/ artifacts are produced by the pinned, hermetic recipes in build/ (containerized native builds on fedora:41; Maven Central jars pinned by SHA-256). Build provenance is recorded in build/build-manifest.json.",
-  "cases": [
-    {
-      "id": "shellshock",
-      "name": "GNU bash 'Shellshock'",
-      "cve": "CVE-2014-6271",
-      "year": 2014,
-      "project": "GNU bash",
-      "domain": "native-cli",
-      "defect": "Function import from the environment evaluates trailing code",
-      "observables": ["stdout", "exit"],
-      "authority_name": "ref-bash",
-      "authority_version": "4.3.30",
-      "fixture_defect": "defect.import",
-      "fixture_clean": "clean.import",
-      "challenge": "builtin",
-      "clean_control": true
-    },
-    {
-      "id": "heartbleed",
-      "name": "OpenSSL 'Heartbleed'",
-      "cve": "CVE-2014-0160",
-      "year": 2014,
-      "project": "OpenSSL",
-      "domain": "native-library",
-      "defect": "Malformed heartbeat echoes process memory",
-      "observables": ["exit", "stderr"],
-      "authority_name": "ref-hb",
-      "authority_version": "1.0.1g",
-      "fixture_defect": "defect.conf",
-      "fixture_clean": "clean.conf",
-      "challenge": "builtin",
-      "clean_control": true
-    },
-    {
-      "id": "log4shell",
-      "name": "Apache Log4j 'Log4Shell'",
-      "cve": "CVE-2021-44228",
-      "year": 2021,
-      "project": "Apache Log4j",
-      "domain": "structured-runtime",
-      "defect": "JNDI lookup performed in log messages",
-      "observables": ["stdout", "exit"],
-      "authority_name": "ref-log4j",
-      "authority_version": "2.17.1",
-      "fixture_defect": "defect.conf",
-      "fixture_clean": "clean.conf",
-      "challenge": "builtin",
-      "clean_control": true
-    }
-  ]
+ "schema_version": "frf-external-corpus-v3",
+ "about": "Real historical software defects, from the ACTUAL upstream vulnerable and fixed releases. Each case is a court: the authority is the real FIXED release, the buggy candidate is the real VULNERABLE release, the fixture is a real interaction with the vulnerable code path, and the authority transition admits the vulnerable release as the pre-fix oracle. The committed builds/ artifacts are produced by the pinned, hermetic recipes in build/ (containerized native builds on fedora:41; Maven Central jars pinned by SHA-256). Build provenance is recorded in build/build-manifest.json.",
+ "cases": [
+  {
+   "id": "shellshock",
+   "name": "GNU bash 'Shellshock'",
+   "cve": "CVE-2014-6271",
+   "year": 2014,
+   "project": "GNU bash",
+   "domain": "native-cli",
+   "defect": "Function import from the environment evaluates trailing code",
+   "observables": [
+    "stdout",
+    "exit"
+   ],
+   "authority_name": "ref-bash",
+   "authority_version": "4.3.30",
+   "fixture_defect": "defect.import",
+   "fixture_clean": "clean.import",
+   "challenge": "builtin",
+   "clean_control": true
+  },
+  {
+   "id": "heartbleed",
+   "name": "OpenSSL 'Heartbleed'",
+   "cve": "CVE-2014-0160",
+   "year": 2014,
+   "project": "OpenSSL",
+   "domain": "native-library",
+   "defect": "Malformed heartbeat echoes process memory",
+   "observables": [
+    "exit",
+    "stderr"
+   ],
+   "authority_name": "ref-hb",
+   "authority_version": "1.0.1g",
+   "fixture_defect": "defect.conf",
+   "fixture_clean": "clean.conf",
+   "challenge": "builtin",
+   "clean_control": true
+  },
+  {
+   "id": "log4shell",
+   "name": "Apache Log4j 'Log4Shell'",
+   "cve": "CVE-2021-44228",
+   "year": 2021,
+   "project": "Apache Log4j",
+   "domain": "structured-runtime",
+   "defect": "JNDI lookup performed in log messages",
+   "observables": [
+    "stdout",
+    "exit"
+   ],
+   "authority_name": "ref-log4j",
+   "authority_version": "2.17.1",
+   "fixture_defect": "defect.conf",
+   "fixture_clean": "clean.conf",
+   "challenge": "builtin",
+   "clean_control": true
+  },
+  {
+   "id": "goto-fail",
+   "name": "Apple Secure Transport 'goto fail'",
+   "cve": "CVE-2014-1266",
+   "year": 2014,
+   "project": "Apple Secure Transport",
+   "domain": "tls-verdict",
+   "defect": "Duplicated goto skips the signature comparison, accepting every handshake",
+   "observables": [
+    "tls.verdict"
+   ],
+   "authority_name": "ref-ssl-2014",
+   "authority_version": "1.0.1",
+   "fixture_defect": "defect.conf",
+   "fixture_clean": "clean.conf",
+   "challenge": "signature-skip",
+   "clean_control": true,
+   "semantic": true
+  }
+ ]
 }

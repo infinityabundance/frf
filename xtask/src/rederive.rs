@@ -585,6 +585,12 @@ pub fn kappa_next(residual: &Value) -> String {
         "exit" => "cli-exit-minimize".to_string(),
         "stderr" => "cli-diagnostic-minimize".to_string(),
         "stdout" => "cli-stdout-minimize".to_string(),
+        // The semantic-domain axes (external-corpus/v3): routed rows like
+        // the built-ins, mirroring the reference engine's kappa table.
+        "tls.heartbeat.illegal_response" | "memory.leak.seeded_canary" => {
+            "leak-minimize".to_string()
+        }
+        "tls.verdict" => "ssl-handshake-minimize".to_string(),
         _ => "none".to_string(),
     }
 }
@@ -600,6 +606,12 @@ pub fn expected_token(residual: &Value) -> String {
             "stdout-routing".to_string(),
             "first-line-token-change".to_string(),
         ),
+        // The semantic-domain axes: verdict/canary surfaces, observed
+        // magnitude.
+        "tls.heartbeat.illegal_response" | "tls.verdict" => {
+            ("verdict-scan".to_string(), "observed".to_string())
+        }
+        "memory.leak.seeded_canary" => ("canary-scan".to_string(), "observed".to_string()),
         other => (format!("{other}-divergence"), "observed".to_string()),
     };
     format!(

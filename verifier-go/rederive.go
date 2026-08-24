@@ -969,7 +969,8 @@ func knowledgeSnapshotIdentity(snapshot *jcs.Object) (string, error) {
 }
 
 // The κ routing table (spec/kappa.md): the surface/magnitude/next-court of a
-// divergence, per axis.
+// divergence, per axis. The semantic-domain axes (external-corpus/v3) are
+// routed rows like the built-ins, mirroring the reference engine's table.
 func tokenShape(axis string) (surface, magnitude, nextCourt string) {
 	switch axis {
 	case "exit":
@@ -978,6 +979,13 @@ func tokenShape(axis string) (surface, magnitude, nextCourt string) {
 		return "diagnostic-routing", "first-line-token-change", "cli-diagnostic-minimize"
 	case "stdout":
 		return "stdout-routing", "first-line-token-change", "cli-stdout-minimize"
+	case "tls.heartbeat.illegal_response", "memory.leak.seeded_canary":
+		if axis == "memory.leak.seeded_canary" {
+			return "canary-scan", "observed", "leak-minimize"
+		}
+		return "verdict-scan", "observed", "leak-minimize"
+	case "tls.verdict":
+		return "verdict-scan", "observed", "ssl-handshake-minimize"
 	default:
 		return axis + "-divergence", "observed", "none"
 	}

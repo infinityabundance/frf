@@ -1,0 +1,3 @@
+#!/bin/sh
+printf '%s\n' 'tls: handshake accepted'
+exit 0

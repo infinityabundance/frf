@@ -1,0 +1,16 @@
+{
+ "schema_version": "frf-v3-build-manifest-v1",
+ "case": "goto-fail",
+ "description": "CVE-2014-1266 (Apple Secure Transport 'goto fail') semantic study: one C source, two verifiers (clean, and the -DGO_TO_FAIL defect build whose duplicated goto skips the signature comparison). Built with gcc -O2; no historical library, so no container is needed.",
+ "sources": [
+  {
+   "name": "sslcheck.c",
+   "sha256": "311e3c75e3d07a20f6806178223c2dff129bfadc90089eae358f0d1ea908f3f5",
+   "url": "https://github.com/openssl/openssl (the CVE-2014-1266 defect shape is reproduced from Apple's Secure Transport; this study models the defect's observable)"
+  }
+ ],
+ "artifacts": {
+  "builds/sslcheck-clean": "0e2bd91fe51277c5edbb057568a1afa0dccbeb5039a665a7bcc3b124cf305f83",
+  "builds/sslcheck-buggy": "fa4da9b3e8dad6cbd7620fb7b40d9a985e7cf9555c06f7a24b23729e17b371d1"
+ }
+}

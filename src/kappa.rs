@@ -70,6 +70,15 @@ pub fn token_shape(axis: &ObservableId) -> TokenShape {
             magnitude: "observed".to_string(),
             next_court: "leak-minimize".to_string(),
         },
+        // The Goto Fail verdict axis (external-corpus/v3/goto-fail): the
+        // SECOND semantic domain — a TLS-verdict observable, not an
+        // information leak. Routed like the built-ins, so the declared
+        // minimizer (`ssl-handshake-minimize`) can serve its residuals.
+        "tls.verdict" => TokenShape {
+            surface: "verdict-scan".to_string(),
+            magnitude: "observed".to_string(),
+            next_court: "ssl-handshake-minimize".to_string(),
+        },
         other => TokenShape {
             surface: format!("{other}-divergence"),
             magnitude: "observed".to_string(),

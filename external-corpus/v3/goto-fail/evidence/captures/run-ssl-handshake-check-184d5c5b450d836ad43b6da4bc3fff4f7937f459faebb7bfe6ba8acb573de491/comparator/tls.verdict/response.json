@@ -1,0 +1,1 @@
+{"equivalent":false,"failure":null,"indeterminate":false,"request_id":"1f8b35708dd901637563a9ec76c03d3421e7a3c59685e6dbda6a8ad77143aa16","residuals":[{"raw_candidate":"tls: handshake accepted","raw_reference":"tls: signature mismatch (got 71, expected 14)","surface":"verdict-scan"}],"schema_version":"frf-comparator-response-v2"}

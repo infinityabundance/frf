@@ -1,0 +1,74 @@
+court:
+  id: ssl-handshake-check
+  question: >-
+    For the TLS handshake record family, does the candidate's verifier accept
+    exactly the records the fixed reference accepts (CVE-2014-1266) — judged
+    SEMANTICALLY on the tls.verdict observable, never by a byte diff?
+  falsifier: >-
+    The candidate accepts a handshake record whose signature does not match
+    its data where the fixed reference refuses it (the signature comparison
+    is skipped).
+  authority: ref-ssl-2014-1.0.1
+  candidate:
+    name: cand-ssl
+    version_or_commit: "1.0.1x"
+    build_profile: release
+    path: {candidate}
+  fixture:
+    id: defect.conf
+    path: fixtures/defect.conf
+    arguments: ["{fixture}"]
+  environment:
+    PATH: /usr/bin:/bin
+  environment_points:
+    utc:
+      TZ: UTC
+      LANG: C
+    new-york:
+      TZ: America/New_York
+      LANG: en_US.UTF-8
+    tokyo:
+      TZ: Asia/Tokyo
+      LANG: ja_JP.UTF-8
+  admissibility_envelope:
+    fixture_family: tls-handshake
+    platforms: ["x86_64-linux"]
+    observables: [tls.verdict]
+    normalizers: []
+    replay_scope: single-run
+comparators:
+  - axis: tls.verdict
+    relation: eq
+    extractor: verdict-scan
+    residual_classifier: text
+    relation_version: "v1"
+    program: comparators/tls-verdict.py
+minimizers:
+  - id: ssl-handshake-minimize
+    relation: reduce-record-length
+    relation_version: "v1"
+    program: minimizers/record-length.py
+mutations:
+  - id: signature-skip
+    relation: seed-signature-skip
+    relation_version: "v1"
+    target_axes: [tls.verdict]
+    program: mutations/signature-skip.py
+# The capture surface — the publication boundary, declared per observed
+# stream (spec/publication-surface.md). The verifier's streams are pure
+# verdict lines (acceptance on stdout, the mismatch diagnostic on stderr) —
+# no record bytes ever reach an observed stream. The declaration makes that
+# contract part of the OBSERVATION.
+capture_surface:
+  - side: candidate
+    stream: stdout
+    policy: inline
+  - side: reference
+    stream: stdout
+    policy: inline
+  - side: candidate
+    stream: stderr
+    policy: inline
+  - side: reference
+    stream: stderr
+    policy: inline
