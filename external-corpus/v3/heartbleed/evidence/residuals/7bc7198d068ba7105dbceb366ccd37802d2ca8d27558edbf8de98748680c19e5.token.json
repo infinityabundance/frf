@@ -1,1 +1,0 @@
-{"authority":"ref-hb-1.0.1g","blocks_claims":["heartbeat memory.leak.seeded_canary parity"],"disposition":"open","kind":"text","magnitude":"observed","next_court":"leak-minimize","residual_id":"7bc7198d068ba7105dbceb366ccd37802d2ca8d27558edbf8de98748680c19e5","schema_version":"frf-token-v1","scope":"heartbeat","surface":"canary-scan","token":"text/canary-scan/observed/open"}

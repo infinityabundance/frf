@@ -1,1 +1,0 @@
-{"authority":"ref-cli-1.8.2","blocks_claims":["malformed-input exit parity"],"disposition":"open","kind":"exit","magnitude":"class-change","next_court":"cli-exit-minimize","residual_id":"aaf8afc76ae6dccfe5b618a70ecfe35c1fbd57e8bf47b5ea7e4831ee2a7b9182","schema_version":"frf-token-v1","scope":"malformed-input","surface":"exit-class","token":"exit/exit-class/class-change/open"}

@@ -99,10 +99,16 @@ jobs:
       - name: The empirical program — seeded mutations over the cross-domain corpus
         run: |
           cargo xtask experiment golden/work/experiment.json
-      - name: The external empirical program — real historical defects across domains
+      # The v1/v2 external programs below run RECONSTRUCTED reproducers of
+      # the historical defects — model reconstructions in external-corpus/
+      # that behave like the defect, never the historical vulnerable software
+      # itself. The v3–v5 programs (experiment_external_v3..v5) DO construct
+      # and run historically vulnerable software, which hosted CI therefore
+      # deliberately does NOT execute (see the v3-gate job below).
+      - name: The external empirical program — reconstructed reproducers of historical defects across domains
         run: |
           cargo xtask external-experiment golden/work/external-experiment.json
-      - name: The external empirical program v2 — version ladders, environment matrices, authority transitions
+      - name: The external empirical program v2 — trajectory axes over the reconstructed reproducers: version ladders, environment matrices, authority transitions
         run: |
           cargo xtask external-experiment-v2 golden/work/external-experiment-v2.json
       - name: The OCI execution profile — the side runs inside the digest-pinned image
