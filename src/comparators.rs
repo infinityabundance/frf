@@ -773,14 +773,14 @@ pub fn build_request<'a>(
         axis,
         reference: crate::model::ComparatorObservation {
             exit: &reference.exit,
-            stdout_base64: b64(&reference.stdout),
-            stderr_base64: b64(&reference.stderr),
+            stdout_base64: b64(&reference.stdout.bytes()),
+            stderr_base64: b64(&reference.stderr.bytes()),
             adapted: reference_adapted,
         },
         candidate: crate::model::ComparatorObservation {
             exit: &candidate.exit,
-            stdout_base64: b64(&candidate.stdout),
-            stderr_base64: b64(&candidate.stderr),
+            stdout_base64: b64(&candidate.stdout.bytes()),
+            stderr_base64: b64(&candidate.stderr.bytes()),
             adapted: candidate_adapted,
         },
         context: crate::model::ComparatorContext {
@@ -850,11 +850,11 @@ pub fn run_external(
     // The protocol says canonical JSON: the response must BE its own
     // canonical serialization (one semantic response, one evidence identity).
     let response: ComparatorResponse =
-        crate::ext::parse_canonical_response(&out.stdout, "comparator response")
+        crate::ext::parse_canonical_response(&out.stdout.bytes(), "comparator response")
             .map_err(|e| FrfError::new(format!("comparator for axis {}: {e}", axis.as_str())))?;
     let outcome = interpret(&response, request_cid)
         .map_err(|e| FrfError::new(format!("comparator for axis {}: {e}", axis.as_str())))?;
-    Ok((outcome, out.stdout))
+    Ok((outcome, out.stdout.bytes()))
 }
 
 /// The invocation evidence for one externally served axis: written at court

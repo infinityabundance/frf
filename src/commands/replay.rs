@@ -697,8 +697,8 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                 side,
                 outcome: crate::model::CaptureAdapterOutcome {
                     exit: &raw_outcome.exit,
-                    stdout_base64: crate::ext::b64(&raw_outcome.stdout),
-                    stderr_base64: crate::ext::b64(&raw_outcome.stderr),
+                    stdout_base64: crate::ext::b64(&raw_outcome.stdout.bytes()),
+                    stderr_base64: crate::ext::b64(&raw_outcome.stderr.bytes()),
                     produced: None,
                 },
                 context: crate::model::NormalizerContext {

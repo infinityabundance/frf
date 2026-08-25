@@ -2611,8 +2611,8 @@ pub fn run_once(
     let mut normalize_side = |side: &str,
                               outcome: &host::ProcessOutcome|
      -> Result<host::ProcessOutcome> {
-        let mut stdout = outcome.stdout.clone();
-        let mut stderr = outcome.stderr.clone();
+        let mut stdout = outcome.stdout.bytes();
+        let mut stderr = outcome.stderr.bytes();
         for (decl, snap) in &normalizer_hosts {
             let semantic = crate::normalizers::declared_semantic(decl)?;
             let request = crate::normalizers::build_request(
@@ -2660,8 +2660,8 @@ pub fn run_once(
             stderr = new_stderr;
         }
         Ok(host::ProcessOutcome {
-            stdout,
-            stderr,
+            stdout: host::CapturedStream::from_bytes(stdout),
+            stderr: host::CapturedStream::from_bytes(stderr),
             exit: outcome.exit.clone(),
             violation: None,
         })
@@ -2707,8 +2707,8 @@ pub fn run_once(
                 side,
                 outcome: crate::model::CaptureAdapterOutcome {
                     exit: &raw_outcome.exit,
-                    stdout_base64: crate::ext::b64(&raw_outcome.stdout),
-                    stderr_base64: crate::ext::b64(&raw_outcome.stderr),
+                    stdout_base64: crate::ext::b64(&raw_outcome.stdout.bytes()),
+                    stderr_base64: crate::ext::b64(&raw_outcome.stderr.bytes()),
                     produced: None,
                 },
                 context: crate::model::NormalizerContext {
@@ -3879,15 +3879,8 @@ pub fn challenge(
 
 impl SideCapture {
     pub(crate) fn from_outcome(outcome: &host::ProcessOutcome) -> SideCapture {
-        let first_line = |bytes: &[u8]| -> String {
-            String::from_utf8_lossy(bytes)
-                .split('\n')
-                .next()
-                .unwrap_or("")
-                .to_string()
-        };
-        let stderr_first_line = first_line(&outcome.stderr);
-        let stdout_first_line = first_line(&outcome.stdout);
+        let stderr_first_line = outcome.stderr.first_line.clone();
+        let stdout_first_line = outcome.stdout.first_line.clone();
         SideCapture {
             exit: outcome.exit.clone(),
             exit_sha256: host::sha256_bytes(outcome.exit.as_bytes()),
@@ -3895,12 +3888,12 @@ impl SideCapture {
             stderr_first_line_sha256: host::sha256_bytes(stderr_first_line.as_bytes()),
             stdout_first_line: stdout_first_line.clone(),
             stdout_first_line_sha256: host::sha256_bytes(stdout_first_line.as_bytes()),
-            stdout_sha256: host::sha256_bytes(&outcome.stdout),
-            stderr_sha256: host::sha256_bytes(&outcome.stderr),
+            stdout_sha256: outcome.stdout.sha256.clone(),
+            stderr_sha256: outcome.stderr.sha256.clone(),
             produced: None,
             adapted: None,
-            stdout_bytes: outcome.stdout.clone(),
-            stderr_bytes: outcome.stderr.clone(),
+            stdout_bytes: outcome.stdout.bytes(),
+            stderr_bytes: outcome.stderr.bytes(),
         }
     }
 }
@@ -3913,8 +3906,24 @@ fn write_side_files(
     outcome: &host::ProcessOutcome,
     capture: &SideCapture,
 ) -> Result<()> {
-    for (name, bytes) in [("stdout", &outcome.stdout), ("stderr", &outcome.stderr)] {
-        write_once(run_dir.join(format!("{side}.{name}")), bytes)?;
+    for (name, stream) in [("stdout", &outcome.stdout), ("stderr", &outcome.stderr)] {
+        // The evidence file is written by STREAMING from the captured stream
+        // (inline or spilled), never by re-materializing the whole stream.
+        let path = run_dir.join(format!("{side}.{name}"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut f) => stream
+                .write_to(&mut f)
+                .and_then(|_| f.flush())
+                .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display()))),
+            Err(e) => Err(FrfError::new(format!(
+                "cannot create {}: {e}",
+                path.display()
+            ))),
+        }?;
     }
     for (name, text) in [
         ("exit", &capture.exit),

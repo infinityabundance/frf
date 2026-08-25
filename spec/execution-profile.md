@@ -49,6 +49,20 @@ exits, times out, or overflows a stream cap, the **entire group** is
 terminated, so a descendant cannot hold the capture pipes open past the
 direct process.
 
+### Streaming stream capture
+
+Capture is STREAMING: stdout/stderr are drained incrementally (concurrently
+with the wait loop), with the stream length, the first line, and the
+SHA-256 computed on the fly. A stream at or below the in-memory threshold
+is kept inline; a larger stream SPILLS to a temp file as it is read, so
+harness memory is bounded to the threshold + one read chunk regardless of
+the stream's size — a very large output (a raised capture cap) does not
+buffer the whole stream in RAM, and the evidence files are written by
+streaming from the same source. The evidence invariants are unchanged:
+overflow still kills the group and REFUSES the run (truncated output is
+never evidence), and the recorded digest + first line derive from the exact
+bytes.
+
 ### Sealed-image execution (the verify→execute race is closed)
 
 An executable image is bound to its verified bytes **at execution time**:

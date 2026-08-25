@@ -112,7 +112,7 @@ pub fn run_program(
             out.exit
         )));
     }
-    Ok(out.stdout)
+    Ok(out.stdout.bytes())
 }
 
 /// The content address of a canonical request document: SHA-256 of its exact

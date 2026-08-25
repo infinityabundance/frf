@@ -222,7 +222,7 @@ fn resolve_dependencies(
         )));
     }
     let mut resolved: Vec<String> = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
+    for line in String::from_utf8_lossy(&out.stdout.bytes()).lines() {
         // glibc's format: `libfoo.so.6 => /path/to/libfoo.so.6 (0x...)`
         // A line with no `=>` is the executable itself (or a not-found
         // report) — a `not found` line means the closure is UNRESOLVED.

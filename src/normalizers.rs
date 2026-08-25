@@ -250,8 +250,8 @@ pub fn apply_capture_normalizers(
     profile: host::ExecProfile,
     env: &std::collections::BTreeMap<String, String>,
 ) -> Result<host::ProcessOutcome> {
-    let mut stdout = raw_outcome.stdout.clone();
-    let mut stderr = raw_outcome.stderr.clone();
+    let mut stdout = raw_outcome.stdout.bytes();
+    let mut stderr = raw_outcome.stderr.bytes();
     for (idx, semantic) in capture.normalizer_semantics.iter().enumerate() {
         let implementation = capture
             .provenance
@@ -303,8 +303,8 @@ pub fn apply_capture_normalizers(
         stderr = new_stderr;
     }
     Ok(host::ProcessOutcome {
-        stdout,
-        stderr,
+        stdout: host::CapturedStream::from_bytes(stdout),
+        stderr: host::CapturedStream::from_bytes(stderr),
         exit: raw_outcome.exit.clone(),
         violation: None,
     })

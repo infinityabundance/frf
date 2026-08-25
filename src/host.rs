@@ -1051,11 +1051,210 @@ impl From<FrfError> for RunError {
 /// records the harness event).
 #[derive(Debug, Clone)]
 pub struct ProcessOutcome {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
+    pub stdout: CapturedStream,
+    pub stderr: CapturedStream,
     pub exit: String,
     /// Present when a resource-limit bound fired (the CPU limit's SIGXCPU).
     pub violation: Option<Box<HarnessViolation>>,
+}
+
+/// The in-memory threshold for a captured stream: a stream at or below this
+/// size is kept INLINE (the common case — verdict lines, first lines); a
+/// larger stream SPILLS to a temp file as it is read. Memory is therefore
+/// bounded to the threshold + one read chunk regardless of the stream's
+/// size, so very large outputs (a raised capture cap) do not buffer the
+/// whole stream in RAM.
+const STREAM_INLINE_LIMIT: usize = 64 * 1024;
+
+/// A captured output stream's exact bytes: inline (small streams) or a temp
+/// file (large streams, removed when the last reference drops).
+#[derive(Debug)]
+enum StreamSource {
+    Inline(Vec<u8>),
+    File(Arc<TempFile>),
+}
+
+/// A temporary stream file, removed on drop (reference-counted: the file
+/// lives until the last [`CapturedStream`] clone is gone).
+#[derive(Debug)]
+struct TempFile(PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A captured output stream: the EXACT bytes (inline or spilled to a temp
+/// file), with the length, the first line, and the SHA-256 computed
+/// INCREMENTALLY during the capture. The evidence invariants are unchanged:
+/// the run is refused on overflow (truncated output is never evidence), and
+/// the recorded first line and digest are exactly the stream's own.
+#[derive(Debug, Clone)]
+pub struct CapturedStream {
+    source: Arc<StreamSource>,
+    /// The exact stream length in bytes.
+    pub length: u64,
+    /// The first line (the text up to the first newline, exactly as the
+    /// capture records it).
+    pub first_line: String,
+    /// SHA-256 of the exact stream bytes.
+    pub sha256: String,
+}
+
+impl CapturedStream {
+    /// Build a captured stream from bytes already in memory (the extension
+    /// paths: normalizer output, a constructed outcome).
+    pub fn from_bytes(bytes: Vec<u8>) -> CapturedStream {
+        let length = bytes.len() as u64;
+        let first_line = first_line_of(&bytes);
+        let sha256 = sha256_bytes(&bytes);
+        CapturedStream {
+            source: Arc::new(StreamSource::Inline(bytes)),
+            length,
+            first_line,
+            sha256,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    /// The exact bytes as a materialized buffer (the consumers that need the
+    /// whole stream: comparators, normalizers, base64 requests).
+    pub fn bytes(&self) -> Vec<u8> {
+        match &*self.source {
+            StreamSource::Inline(b) => b.clone(),
+            StreamSource::File(f) => std::fs::read(&f.0)
+                .unwrap_or_else(|e| panic!("cannot read the spilled capture stream: {e}")),
+        }
+    }
+
+    /// Write the exact bytes to `w`, streaming from the source (no whole-
+    /// stream materialization).
+    pub fn write_to(&self, w: &mut impl std::io::Write) -> std::io::Result<()> {
+        match &*self.source {
+            StreamSource::Inline(b) => w.write_all(b),
+            StreamSource::File(f) => {
+                let mut r = std::fs::File::open(&f.0)?;
+                std::io::copy(&mut r, w)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The first line of a byte stream: the text up to the first newline
+/// (inclusive of nothing else), lossily decoded — the capture record's
+/// projection.
+pub(crate) fn first_line_of(bytes: &[u8]) -> String {
+    let end = bytes
+        .iter()
+        .position(|b| *b == b'\n')
+        .unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
+/// Drain a capture pipe into a [`CapturedStream`]: bytes are kept inline up
+/// to [`STREAM_INLINE_LIMIT`] and spilled to a temp file beyond it, with the
+/// length, first line, and SHA-256 computed incrementally. On exceeding the
+/// per-stream cap the whole process group is terminated, the overflow flag
+/// set, and the FIRST overflowing stream + observed size recorded: the
+/// caller refuses the run (truncated output is never evidence) and writes
+/// the harness event, and killing the group frees the peer pipes so every
+/// other drain reaches EOF and the scope can join.
+#[allow(clippy::too_many_arguments)]
+fn drain_capped(
+    pipe: &mut impl Read,
+    max: usize,
+    group: u32,
+    overflow: &AtomicBool,
+    overflow_detail: &Mutex<Option<(String, usize)>>,
+    stream: &'static str,
+) -> CapturedStream {
+    use sha2::Digest as _;
+    let mut inline: Vec<u8> = Vec::new();
+    let mut file: Option<std::fs::File> = None;
+    let mut file_path: Option<PathBuf> = None;
+    let mut hasher = sha2::Sha256::new();
+    let mut first_line: Vec<u8> = Vec::new();
+    let mut first_line_done = false;
+    let mut length: u64 = 0;
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let bytes = &chunk[..n];
+                let new_length = length + n as u64;
+                if new_length as usize > max {
+                    overflow.store(true, Ordering::SeqCst);
+                    let mut guard = overflow_detail.lock().expect("overflow detail lock");
+                    if guard.is_none() {
+                        *guard = Some((stream.to_string(), new_length as usize));
+                    }
+                    drop(guard);
+                    #[cfg(unix)]
+                    terminate_process_group(group);
+                    break;
+                }
+                length = new_length;
+                hasher.update(bytes);
+                if !first_line_done {
+                    for (i, b) in bytes.iter().enumerate() {
+                        if *b == b'\n' {
+                            first_line.extend_from_slice(&bytes[..i]);
+                            first_line_done = true;
+                            break;
+                        }
+                    }
+                    if !first_line_done {
+                        first_line.extend_from_slice(bytes);
+                    }
+                }
+                // Spill once the inline threshold is exceeded: the bytes
+                // buffered so far move to the temp file, and everything after
+                // streams straight to disk.
+                if file.is_none() && length as usize > STREAM_INLINE_LIMIT {
+                    let path = std::env::temp_dir().join(format!(
+                        "frf-stream-{}-{}-{stream}.tmp",
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    ));
+                    let mut f = std::fs::File::create(&path)
+                        .unwrap_or_else(|e| panic!("cannot create the capture spill file: {e}"));
+                    f.write_all(&inline)
+                        .unwrap_or_else(|e| panic!("cannot spill the capture stream: {e}"));
+                    file = Some(f);
+                    file_path = Some(path);
+                    inline.clear();
+                }
+                if let Some(f) = file.as_mut() {
+                    f.write_all(bytes)
+                        .unwrap_or_else(|e| panic!("cannot write the capture spill file: {e}"));
+                } else {
+                    inline.extend_from_slice(bytes);
+                }
+            }
+            Err(_) => break, // the group-kill path closes the pipe
+        }
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    let sha256 = hex(&digest);
+    let source = match file_path {
+        Some(path) => StreamSource::File(Arc::new(TempFile(path))),
+        None => StreamSource::Inline(inline),
+    };
+    CapturedStream {
+        source: Arc::new(source),
+        length,
+        first_line: String::from_utf8_lossy(&first_line).into_owned(),
+        sha256,
+    }
 }
 
 /// Execute `image` with `args`, capturing stdout/stderr without a shell,
@@ -1290,23 +1489,20 @@ fn run_oci(
     let overflow = Arc::new(AtomicBool::new(false));
     let overflow_detail: Arc<Mutex<Option<(String, usize)>>> = Arc::new(Mutex::new(None));
 
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
     let timeout = exec_timeout();
     let max_bytes = max_stream_bytes();
     let mut stdin_pipe = child.stdin.take();
     let mut stdout_pipe = child.stdout.take().expect("stdout is piped");
     let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
-    let status = std::thread::scope(|s| {
+    let (status, stdout, stderr) = std::thread::scope(|s| {
         if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin.map(|b| b.to_vec())) {
             s.spawn(move || {
                 let _ = pipe.write_all(&bytes);
             });
         }
-        let _drain_out = s.spawn(|| {
+        let drain_out = s.spawn(|| {
             drain_capped(
                 &mut stdout_pipe,
-                &mut stdout,
                 max_bytes,
                 group,
                 &overflow,
@@ -1314,10 +1510,9 @@ fn run_oci(
                 "stdout",
             )
         });
-        let _drain_err = s.spawn(|| {
+        let drain_err = s.spawn(|| {
             drain_capped(
                 &mut stderr_pipe,
-                &mut stderr,
                 max_bytes,
                 group,
                 &overflow,
@@ -1362,8 +1557,13 @@ fn run_oci(
         // capture streams reach EOF and the drains can join.
         #[cfg(unix)]
         terminate_process_group(group);
-        result
-    })?;
+        (
+            result,
+            drain_out.join().expect("the stdout drain must join"),
+            drain_err.join().expect("the stderr drain must join"),
+        )
+    });
+    let status = status?;
 
     if overflow.load(Ordering::SeqCst) {
         let (target, observed) = overflow_detail
@@ -1633,8 +1833,6 @@ fn run_impl(
     let mut stderr_pipe = child.stderr.take().expect("stderr is piped");
     let mut stdin_pipe = child.stdin.take();
     let stdin_bytes = stdin.map(|b| b.to_vec());
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
     let timeout = exec_timeout();
     let max_bytes = max_stream_bytes();
     // The process group id is the direct child's pid, captured BEFORE the
@@ -1648,7 +1846,7 @@ fn run_impl(
     // one record is enough — the refusal names the bound that fired).
     let overflow_detail: Arc<Mutex<Option<(String, usize)>>> = Arc::new(Mutex::new(None));
 
-    let status = std::thread::scope(|s| {
+    let (status, stdout, stderr) = std::thread::scope(|s| {
         if let (Some(mut pipe), Some(bytes)) = (stdin_pipe.take(), stdin_bytes) {
             // `pipe` is dropped when the thread ends, closing stdin: the
             // comparator sees EOF after its request.
@@ -1656,10 +1854,9 @@ fn run_impl(
                 let _ = pipe.write_all(&bytes);
             });
         }
-        let _drain_out = s.spawn(|| {
+        let drain_out = s.spawn(|| {
             drain_capped(
                 &mut stdout_pipe,
-                &mut stdout,
                 max_bytes,
                 group,
                 &overflow,
@@ -1667,10 +1864,9 @@ fn run_impl(
                 "stdout",
             )
         });
-        let _drain_err = s.spawn(|| {
+        let drain_err = s.spawn(|| {
             drain_capped(
                 &mut stderr_pipe,
-                &mut stderr,
                 max_bytes,
                 group,
                 &overflow,
@@ -1740,10 +1936,15 @@ fn run_impl(
                 }
             }
         }
-        result
-        // `scope` joins all threads here (stdin writer + both drains), so the
-        // buffers are complete before the caller sees them.
-    })?;
+        // `scope` joins the stdin writer + both drains here, so the captured
+        // streams are complete before the caller sees them.
+        (
+            result,
+            drain_out.join().expect("the stdout drain must join"),
+            drain_err.join().expect("the stderr drain must join"),
+        )
+    });
+    let status = status?;
 
     // Evidentiary overflow: a stream exceeded the profile's capture cap and
     // the side was killed. The captured bytes are TRUNCATED — recording them
@@ -1792,45 +1993,6 @@ fn run_impl(
         exit,
         violation,
     })
-}
-
-/// Drain a capture pipe up to `max` bytes. On exceeding the cap the whole
-/// process group is terminated, the overflow flag set, and the FIRST
-/// overflowing stream + observed size recorded: the caller refuses the run
-/// (truncated output is never evidence) and writes the harness event, and
-/// killing the group frees the peer pipes so every other drain reaches EOF
-/// and the scope can join.
-#[allow(clippy::too_many_arguments)]
-fn drain_capped(
-    pipe: &mut impl Read,
-    out: &mut Vec<u8>,
-    max: usize,
-    group: u32,
-    overflow: &AtomicBool,
-    overflow_detail: &Mutex<Option<(String, usize)>>,
-    stream: &'static str,
-) {
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                if out.len() + n > max {
-                    overflow.store(true, Ordering::SeqCst);
-                    let mut guard = overflow_detail.lock().expect("overflow detail lock");
-                    if guard.is_none() {
-                        *guard = Some((stream.to_string(), out.len() + n));
-                    }
-                    drop(guard);
-                    #[cfg(unix)]
-                    terminate_process_group(group);
-                    break;
-                }
-                out.extend_from_slice(&chunk[..n]);
-            }
-            Err(_) => break, // the group-kill path closes the pipe
-        }
-    }
 }
 
 /// Apply one child resource limit (inside the pre-exec hook). Lowering a
@@ -2278,8 +2440,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.exit, "7");
-        assert_eq!(out.stdout, b"out\n");
-        assert_eq!(out.stderr, b"err\n");
+        assert_eq!(out.stdout.bytes(), b"out\n");
+        assert_eq!(out.stderr.bytes(), b"err\n");
         let _ = std::fs::remove_file(&script);
     }
 
@@ -2298,7 +2460,11 @@ mod tests {
 
         let out = run_process(&image, &[], ExecProfile::LinuxV1, &test_env(), None).unwrap();
         assert_eq!(out.exit, "0");
-        assert_eq!(out.stdout, b"sealed-A\n", "the sealed bytes must run");
+        assert_eq!(
+            out.stdout.bytes(),
+            b"sealed-A\n",
+            "the sealed bytes must run"
+        );
         assert_eq!(
             image.argv0(),
             materialized.as_path(),
@@ -2311,7 +2477,8 @@ mod tests {
         std::fs::write(&materialized, b"#!/bin/sh\necho TAMPERED\n").unwrap();
         let out2 = run_process(&image, &[], ExecProfile::LinuxV1, &test_env(), None).unwrap();
         assert_eq!(
-            out2.stdout, b"sealed-A\n",
+            out2.stdout.bytes(),
+            b"sealed-A\n",
             "the executed image must be the sealed verified bytes, not the mutated pathname"
         );
         let _ = std::fs::remove_file(&materialized);
@@ -2377,7 +2544,8 @@ echo "zero=$0 one=$1"
             None,
         )
         .unwrap();
-        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stdout_bytes = out.stdout.bytes();
+        let stdout = String::from_utf8_lossy(&stdout_bytes);
         let stdout = stdout.trim();
         assert!(
             stdout.starts_with("zero=/proc/self/fd/"),
@@ -2514,7 +2682,8 @@ echo "zero=$0 one=$1"
             )
             .unwrap();
             assert_eq!(out.exit, "0");
-            let text = String::from_utf8_lossy(&out.stdout);
+            let stdout_bytes = out.stdout.bytes();
+            let text = String::from_utf8_lossy(&stdout_bytes);
             let mut my_pid = "";
             let mut procs = "";
             let mut pids_max = "";
@@ -2751,11 +2920,63 @@ echo "zero=$0 one=$1"
             assert_eq!(out.exit, "0");
             let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
             assert_eq!(
-                out.stdout.len(),
+                out.stdout.length as usize,
                 (line.len() + 1) * 20_000,
                 "full stream must be drained"
             );
             assert!(out.stderr.is_empty());
+        });
+        let _ = std::fs::remove_file(&script);
+    }
+
+    #[test]
+    fn a_large_stream_spills_and_stays_exact() {
+        // The streaming capture path: a stream beyond the in-memory threshold
+        // spills to a temp file as it is read, and the outcome still carries
+        // the EXACT bytes, the incremental SHA-256, the first line, and the
+        // length — the evidence projections derive from the exact stream.
+        // ~820 KiB is far beyond STREAM_INLINE_LIMIT, so the drain MUST have
+        // taken the spill path.
+        let script = temp_script("spill");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nawk 'BEGIN{for(i=0;i<20000;i++) print \"0123456789abcdefghijklmnopqrstuvwxyz0123456789\"}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        with_default_hooks(|| {
+            let out = run_process(
+                &ExecImage::from_path(&script),
+                &[],
+                ExecProfile::LinuxV1,
+                &test_env(),
+                None,
+            )
+            .unwrap();
+            assert_eq!(out.exit, "0");
+            let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
+            let expected: Vec<u8> = (0..20_000)
+                .flat_map(|_| {
+                    let mut l = line.as_bytes().to_vec();
+                    l.push(b'\n');
+                    l
+                })
+                .collect();
+            assert!(
+                expected.len() > STREAM_INLINE_LIMIT,
+                "the fixture must spill"
+            );
+            // The exact bytes round-trip (inline or spilled, same contract).
+            assert_eq!(out.stdout.bytes(), expected);
+            // The incremental digest equals the whole-stream digest.
+            assert_eq!(out.stdout.sha256, sha256_bytes(&expected));
+            // The first line is the exact projection.
+            assert_eq!(out.stdout.first_line, line);
+            assert_eq!(out.stdout.length, expected.len() as u64);
         });
         let _ = std::fs::remove_file(&script);
     }
@@ -2839,7 +3060,10 @@ echo "zero=$0 one=$1"
             )
             .unwrap();
             assert_eq!(out.exit, "0");
-            assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child-done");
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout.bytes()).trim(),
+                "child-done"
+            );
             assert!(
                 start.elapsed() < Duration::from_millis(1500),
                 "harness must not wait for a descendant to release the pipes (took {:?})",
@@ -2985,7 +3209,8 @@ echo "zero=$0 one=$1"
                 None,
             )
             .unwrap();
-            let text = String::from_utf8_lossy(&out.stdout);
+            let stdout_bytes = out.stdout.bytes();
+            let text = String::from_utf8_lossy(&stdout_bytes);
             let line = text
                 .lines()
                 .find(|l| l.contains("Max processes"))
