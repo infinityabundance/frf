@@ -304,181 +304,6 @@
   ],
   "identities": [
     {
-      "domain": "FRF/RUN/v2",
-      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity \u2014 the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/OBSERVATION/v1",
-      "meaning": "Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION/v1",
-      "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION-CONTEXT/v1",
-      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) \u2014 the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/HARNESS-EVENT/v1",
-      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash \u2014 the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/EXECUTION-ATTEMPT/v1",
-      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted \u2014 a deterministic function of the cited set), and refusal reason \u2014 the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/ENVIRONMENT/v2",
-      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map \u2014 a declared variable is content-addressed input",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/FIXTURE/v1",
-      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments \u2014 claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COURT/v2",
-      "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-SPEC/v2",
-      "meaning": "Comparator semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-SPEC/v2",
-      "meaning": "Normalizer semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-SPEC/v2",
-      "meaning": "Minimizer semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2",
-      "meaning": "Capture-adapter semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/WITNESS-SPEC/v2",
-      "meaning": "Witness semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-SPEC/v1",
-      "meaning": "Mutation semantic specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL/v1",
-      "meaning": "Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) \u2014 collision-free under concurrent courts and idempotent under re-observation",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
-      "meaning": "The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/RESIDUAL-LINEAGE/v1",
-      "meaning": "Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME \u2014 deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/KIND/v1",
-      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) \u2014 the registered kind vocabulary",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/SERIES/v3",
-      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points \u2014 each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/SERIES/v2",
-      "meaning": "Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities)",
-      "status": "superseded"
-    },
-    {
-      "domain": "FRF/COORDINATE/v1",
-      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value \u2014 for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/REDUCTION/v3",
-      "meaning": "Reduction record identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/REDUCTION/v2",
-      "meaning": "Previous reduction record identity (superseded by v3)",
-      "status": "superseded"
-    },
-    {
-      "domain": "FRF/KNOWLEDGE/v2",
-      "meaning": "Knowledge snapshot (evidence universe U) identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/CHALLENGE/v1",
-      "meaning": "CourtChallenge identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/DISPOSITION-EVENT/v1",
-      "meaning": "Disposition event identity (hash-chained)",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-INVOCATION/v1",
-      "meaning": "Comparator invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/COMPARATOR-RESULT/v1",
-      "meaning": "Comparator result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-INVOCATION/v1",
-      "meaning": "Normalizer invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/NORMALIZER-RESULT/v1",
-      "meaning": "Normalizer result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-INVOCATION/v1",
-      "meaning": "Minimizer invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MINIMIZER-RESULT/v1",
-      "meaning": "Minimizer result evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-INVOCATION/v1",
-      "meaning": "Mutation invocation evidence identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/MUTATION-RESULT/v1",
-      "meaning": "Mutation result evidence identity",
-      "status": "active"
-    },
-    {
       "domain": "FRF/CAPTURE-ADAPTER-INVOCATION/v1",
       "meaning": "Capture-adapter invocation evidence identity",
       "status": "active"
@@ -489,23 +314,13 @@
       "status": "active"
     },
     {
-      "domain": "FRF/WITNESS-IDENTITY/v1",
-      "meaning": "Witness identity (the stable WHO: semantic + implementation)",
+      "domain": "FRF/CAPTURE-ADAPTER-SPEC/v2",
+      "meaning": "Capture-adapter semantic specification",
       "status": "active"
     },
     {
-      "domain": "FRF/WITNESS-STATEMENT/v1",
-      "meaning": "Witness statement identity",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/INDEPENDENCE-SPEC/v1",
-      "meaning": "Independence relation specification",
-      "status": "active"
-    },
-    {
-      "domain": "FRF/INDEPENDENCE/v1",
-      "meaning": "Independence evidence record identity",
+      "domain": "FRF/CHALLENGE/v1",
+      "meaning": "CourtChallenge identity",
       "status": "active"
     },
     {
@@ -519,8 +334,203 @@
       "status": "active"
     },
     {
+      "domain": "FRF/COMPARATOR-INVOCATION/v1",
+      "meaning": "Comparator invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COMPARATOR-RESULT/v1",
+      "meaning": "Comparator result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COMPARATOR-SPEC/v2",
+      "meaning": "Comparator semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COORDINATE/v1",
+      "meaning": "Series-point coordinate identity: the canonical-JSON formula over the coordinate system and the system-specific value \u2014 for candidate_revision the candidate ARTIFACT identity, for authority_version the authority record's content address, for environment the effective environment digest, for repeat_index the index, for time the declared label. A trajectory says what EXACTLY varied, not merely what the point was labelled",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/COURT/v2",
+      "meaning": "Court semantic identity (question, falsifier, authority artifact, fixture, envelope, comparator + normalizer + capture-adapter semantics)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/DISPOSITION-EVENT/v1",
+      "meaning": "Disposition event identity (hash-chained)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/ED25519-KEY/v1",
+      "meaning": "The key identity of an external signing key (spec/witness.md \u00a77): the canonical-JSON formula over {algorithm, public_key} \u2014 a key-based witness signer's implementation hash is this identity, so the witness identity and statement id commit the public key and a signature cannot be re-attributed to a different key.",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/ENVIRONMENT/v2",
+      "meaning": "Environment digest: the canonical-JSON formula over the host strata (os/arch/kernel/locale/timezone/umask) AND the declared execution environment map \u2014 a declared variable is content-addressed input",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/EXECUTION-ATTEMPT/v1",
+      "meaning": "Refused execution-attempt identity: the canonical-JSON formula over the attempt's court + semantic identity, bound artifacts, fixture, argv, environment digest, execution contract (profile + capture bounds as enforced), side, cited harness events (sorted \u2014 a deterministic function of the cited set), and refusal reason \u2014 the content address of the refusal-root (a failed observation attempt is itself a first-class portable observation)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/EXECUTION-CONTEXT/v1",
+      "meaning": "Declared execution-context closure identity: the canonical-JSON formula over the closure's schema version and its artifacts sorted by path (each a declared path + protocol role + snapshot SHA-256) \u2014 the content address of the DECLARED runtime machinery a side's execution depends on beyond its own bytes",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/EXECUTION/v1",
+      "meaning": "Execution identity: under exactly what machinery/contract the observation was made (profile, effective capture bounds, runner, interpreters, implementation hashes)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/FIXTURE/v1",
+      "meaning": "Exact fixture input identity: the canonical-JSON formula over the fixture's semantic id, content SHA-256, and declared arguments \u2014 claim scopes and residual surfaces carry this identity in their fixtures dimension, so two different files that share a fixture id are different exact inputs",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/HARNESS-EVENT/v1",
+      "meaning": "Harness-event identity: the canonical-JSON formula over an enforced-bound record's event_kind, side, court, execution profile, cap, observed value, target, detail, and the enforcing runner hash \u2014 the content address of the evidentiary overflow record (a declared bound the harness ENFORCED during an observation attempt)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/INDEPENDENCE-SPEC/v1",
+      "meaning": "Independence relation specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/INDEPENDENCE/v1",
+      "meaning": "Independence evidence record identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/KIND/v1",
+      "meaning": "Residual-kind protocol record (id, meaning, surface grammar, comparator family) \u2014 the registered kind vocabulary",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/KNOWLEDGE/v2",
+      "meaning": "Knowledge snapshot (evidence universe U) identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-INVOCATION/v1",
+      "meaning": "Minimizer invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-RESULT/v1",
+      "meaning": "Minimizer result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MINIMIZER-SPEC/v2",
+      "meaning": "Minimizer semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-INVOCATION/v1",
+      "meaning": "Mutation invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-RESULT/v1",
+      "meaning": "Mutation result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/MUTATION-SPEC/v1",
+      "meaning": "Mutation semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-INVOCATION/v1",
+      "meaning": "Normalizer invocation evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-RESULT/v1",
+      "meaning": "Normalizer result evidence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/NORMALIZER-SPEC/v2",
+      "meaning": "Normalizer semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/OBSERVATION/v1",
+      "meaning": "Observation identity: what was observed (the semantic question, inputs, effective environment, and the observed answer)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/REDUCTION/v2",
+      "meaning": "Previous reduction record identity (superseded by v3)",
+      "status": "superseded"
+    },
+    {
+      "domain": "FRF/REDUCTION/v3",
+      "meaning": "Reduction record identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL-FINGERPRINT/v1",
+      "meaning": "The EXACT observed divergence: kind + axis + surface + hashed raw projections. Two observations with the same fingerprint are the same bytes diverging the same way; two fingerprints on one lineage are DIFFERENT answers to the same question. A replay must reproduce the fingerprint byte-for-byte; a trajectory pins one per observed point",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL-LINEAGE/v1",
+      "meaning": "Stable comparison surface / QUESTION CLASS: kind + axis + surface + fixture + fixture family + authority NAME \u2014 deliberately NOT the exact observed bytes. One lineage spans candidate revisions, authority versions, environments, and time (many fingerprints, one trajectory); it is the trajectory subject and the blocker-scan scope key, never a claim about exact divergence identity",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RESIDUAL/v1",
+      "meaning": "Residual record content address: the divergence is the evidence, so the id is a function of (run, kind, axis, surface, raw projection hashes) \u2014 collision-free under concurrent courts and idempotent under re-observation",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/RUN/v2",
+      "meaning": "Run (capture) identity: the FRF/RUN/v2 composition of the observation identity and the execution identity \u2014 the capture is the complete content-addressed evidence object, and its identity commits BOTH what was observed and under exactly what machinery/contract it was observed",
+      "status": "active"
+    },
+    {
       "domain": "FRF/RUNTIME-CLOSURE/v1",
       "meaning": "Native runtime closure identity (the dynamic loader + resolved dependency closure of an ELF executable)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/SERIES/v2",
+      "meaning": "Previous ExecutionSeries snapshot identity (superseded by v3: the points now commit their coordinate identities)",
+      "status": "superseded"
+    },
+    {
+      "domain": "FRF/SERIES/v3",
+      "meaning": "ExecutionSeries snapshot identity: the canonical-JSON formula over the experiment key, the parent snapshot, the court, the coordinate system, and the ordered points \u2014 each point committing its point index, coordinate label, COORDINATE IDENTITY (FRF/COORDINATE/v1), and content-addressed run",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/TRAJECTORY/v1",
+      "meaning": "The content address of a trajectory record (frf-trajectory-v6): SHA-256 of FRF/TRAJECTORY/v1 over the canonical document minus the id \u2014 the derived movement classification, the transform declaration included",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-IDENTITY/v1",
+      "meaning": "Witness identity (the stable WHO: semantic + implementation)",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-SPEC/v2",
+      "meaning": "Witness semantic specification",
+      "status": "active"
+    },
+    {
+      "domain": "FRF/WITNESS-STATEMENT/v1",
+      "meaning": "Witness statement identity",
       "status": "active"
     },
     {
@@ -532,11 +542,6 @@
       "domain": "FRF/Y/v1",
       "meaning": "Reserved for the domain-separation unit test; never a protocol domain",
       "status": "test-only"
-    },
-    {
-      "domain": "FRF/TRAJECTORY/v1",
-      "meaning": "The content address of a trajectory record (frf-trajectory-v6): SHA-256 of FRF/TRAJECTORY/v1 over the canonical document minus the id \u2014 the derived movement classification, the transform declaration included",
-      "status": "active"
     }
   ],
   "schemas": [
@@ -1097,7 +1102,19 @@
           "status": "active"
         }
       ]
-    }
+    },
+    "witness": [
+      {
+        "id": "sign",
+        "meaning": "The external key holder signed the subject document's exact canonical bytes (spec/witness.md \u00a77)",
+        "status": "active"
+      },
+      {
+        "id": "attest",
+        "meaning": "An external witness program attested the subject (the attestation relation; the witness protocol's default)",
+        "status": "active"
+      }
+    ]
   },
   "policies": [
     {

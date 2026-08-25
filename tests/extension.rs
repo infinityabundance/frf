@@ -1032,6 +1032,7 @@ json.dump(response, sys.stdout, sort_keys=True, separators=(\",\", \":\"))\n\n",
             authority: &without.authority,
             statement: &without.statement,
             attestation: &without.attestation,
+            signature: &without.signature,
             request_cid: &without.request_cid,
             response_cid: &without.response_cid,
         })

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +16,48 @@ import (
 func fail(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "frf-verifier-go: "+format+"\n", args...)
 	os.Exit(1)
+}
+
+// verifyWitnessSignature verifies a SIGNED witness statement inside a bundle
+// (spec/witness.md §7): the ed25519 signature must verify over the subject
+// document's exact canonical bytes (read from the bundle:
+// receipts/<id>.json or claims/<id>.json), and the recorded implementation
+// hash must commit the signature's public key (FRF/ED25519-KEY/v1) — a
+// signature cannot be re-attributed to a different key or document without
+// breaking the statement's content address.
+func verifyWitnessSignature(bundle, wid string, stmt *jcs.Object) {
+	sig := obj(recVal(stmt, "signature"))
+	if str(sig, "algorithm") != "ed25519" {
+		fail("witness %s: signature algorithm %v is not admitted (the protocol admits ed25519)", wid, str(sig, "algorithm"))
+	}
+	pub, err := base64.StdEncoding.DecodeString(str(sig, "public_key"))
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		fail("witness %s: the recorded public key is not a 32-byte ed25519 key", wid)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(str(sig, "value"))
+	if err != nil || len(sigBytes) != ed25519.SignatureSize {
+		fail("witness %s: the recorded signature value is not a 64-byte ed25519 signature", wid)
+	}
+	subj := obj(recVal(stmt, "subject"))
+	kind := str(subj, "kind")
+	subjectID := str(subj, "id")
+	var rel string
+	switch kind {
+	case "receipt":
+		rel = "receipts/" + subjectID + ".json"
+	case "claim":
+		rel = "claims/" + subjectID + ".json"
+	default:
+		fail("witness %s: subject kind %s is not a signable document (the signing protocol admits receipt or claim)", wid, kind)
+	}
+	canonical := readFile(safeJoin(bundle, rel))
+	if !ed25519.Verify(ed25519.PublicKey(pub), canonical, sigBytes) {
+		fail("witness %s: the ed25519 signature does NOT verify over the %s %s's exact canonical bytes", wid, kind, subjectID)
+	}
+	expected, err := ed25519KeyIdentity(str(sig, "algorithm"), str(sig, "public_key"))
+	if err != nil || expected != str(obj(recVal(stmt, "witness_implementation")), "implementation_hash") {
+		fail("witness %s: the recorded implementation hash does not commit the signature's public key — the signature cannot be re-attributed to this statement", wid)
+	}
 }
 
 func readFile(path string) []byte {
@@ -1178,6 +1222,13 @@ func verifyClaimPolicy(bundle string, claim, body *jcs.Object, receiptID string)
 					if jcs.Sha256Hex(b) != str(stmt, cidField) {
 						fail("claim %s: witness %s preserved %s does not hash to its cid", receiptID, wid, f)
 					}
+				}
+				// A SIGNED witness statement: the ed25519 signature must verify
+				// over the subject document's exact canonical bytes from the
+				// bundle, and the recorded implementation hash must commit the
+				// signature's public key.
+				if sig, ok := stmt.Get("signature"); ok && sig != nil {
+					verifyWitnessSignature(bundle, wid, stmt)
 				}
 				if str(obj(recVal(stmt, "attestation")), "outcome") == "affirm" {
 					affirmedThis = true

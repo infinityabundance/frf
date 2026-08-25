@@ -180,13 +180,29 @@ func witnessIdentity(semantic, implementation *jcs.Object) (string, error) {
 
 // witnessStatementIdentity: FRF/WITNESS-STATEMENT/v1 over the statement's own
 // fields (v3: the witness identity and the declared authority enter the
-// preimage).
+// preimage; the SIGNATURE enters it only when present — a plain
+// attestation's identity is unchanged, per spec/versioning.md §1).
 func witnessStatementIdentity(stmt *jcs.Object) (string, error) {
-	doc := &jcs.Object{
-		Keys:   []string{"subject", "witness_semantic", "witness_implementation", "witness_identity", "authority", "statement", "attestation", "request_cid", "response_cid"},
-		Values: []jcs.Value{recVal(stmt, "subject"), recVal(stmt, "witness_semantic"), recVal(stmt, "witness_implementation"), str(stmt, "witness_identity"), recVal(stmt, "authority"), str(stmt, "statement"), recVal(stmt, "attestation"), str(stmt, "request_cid"), str(stmt, "response_cid")},
+	keys := []string{"subject", "witness_semantic", "witness_implementation", "witness_identity", "authority", "statement", "attestation", "request_cid", "response_cid"}
+	values := []jcs.Value{recVal(stmt, "subject"), recVal(stmt, "witness_semantic"), recVal(stmt, "witness_implementation"), str(stmt, "witness_identity"), recVal(stmt, "authority"), str(stmt, "statement"), recVal(stmt, "attestation"), str(stmt, "request_cid"), str(stmt, "response_cid")}
+	if sig, ok := stmt.Get("signature"); ok {
+		keys = append(keys, "signature")
+		values = append(values, sig)
 	}
+	doc := &jcs.Object{Keys: keys, Values: values}
 	return hashPreimage("FRF/WITNESS-STATEMENT/v1", doc)
+}
+
+// ed25519KeyIdentity: FRF/ED25519-KEY/v1 over {algorithm, public_key} — the
+// key identity of an external signing key (spec/witness.md §7). A key-based
+// witness signer's implementation hash is this identity, so the witness
+// identity and statement id commit the public key.
+func ed25519KeyIdentity(algorithm, publicKey string) (string, error) {
+	doc := &jcs.Object{
+		Keys:   []string{"algorithm", "public_key"},
+		Values: []jcs.Value{algorithm, publicKey},
+	}
+	return hashPreimage("FRF/ED25519-KEY/v1", doc)
 }
 
 // independenceSpecHash: FRF/INDEPENDENCE-SPEC/v1 over {relation,

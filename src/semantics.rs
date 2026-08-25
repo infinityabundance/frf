@@ -1500,6 +1500,8 @@ pub struct WitnessStatementContent<'a> {
     pub authority: &'a Option<WitnessAuthority>,
     pub statement: &'a str,
     pub attestation: &'a WitnessAttestation,
+    /// The cryptographic signature (None for a plain attestation).
+    pub signature: &'a Option<WitnessSignature>,
     pub request_cid: &'a str,
     pub response_cid: &'a str,
 }
@@ -1508,7 +1510,10 @@ pub struct WitnessStatementContent<'a> {
 /// `FRF/WITNESS-IDENTITY/v1` over the relation's specification and the
 /// program's exact bytes + interpreter chain. Two attestations with the same
 /// identity were made by the same instrument; a different identity is a
-/// different instrument, and nothing more.
+/// different instrument, and nothing more. A KEY-BASED signer (no program)
+/// binds the key instead: its implementation hash is the key identity
+/// ([`ed25519_key_identity`]), so the witness identity commits the public
+/// key.
 pub fn witness_identity(
     semantic: &WitnessSemantic,
     implementation: &WitnessImplementation,
@@ -1527,27 +1532,81 @@ pub fn witness_identity(
     hash_preimage("FRF/WITNESS-IDENTITY/v1", &doc)
 }
 
+/// The KEY IDENTITY of an external signing key: SHA-256 of
+/// `FRF/ED25519-KEY/v1` over `{algorithm, public_key}`. A key-based signer's
+/// witness implementation hash is this identity, so the witness identity
+/// (and therefore the statement id) cryptographically commits the public
+/// key — a signature cannot be re-attributed to a different key without
+/// changing the statement's content address.
+pub fn ed25519_key_identity(algorithm: &str, public_key: &str) -> Result<String> {
+    hash_preimage(
+        "FRF/ED25519-KEY/v1",
+        &json!({ "algorithm": algorithm, "public_key": public_key }),
+    )
+}
+
 /// The identity of a witness statement record: SHA-256 of
 /// `FRF/WITNESS-STATEMENT/v1` over its content. Rederivable from the record's
 /// own fields. v3: the witness identity and the declared authority enter the
-/// preimage.
+/// preimage. v3+signature: the cryptographic signature enters the preimage
+/// ONLY when present — a plain attestation's identity is unchanged (additive
+/// field, per spec/versioning.md §1).
 pub fn witness_statement_identity(c: &WitnessStatementContent) -> Result<String> {
-    let doc = json!({
-        "subject": serde_json::to_value(c.subject)
-            .map_err(|e| FrfError::new(format!("cannot serialize the subject: {e}")))?,
-        "witness_semantic": serde_json::to_value(c.witness_semantic)
-            .map_err(|e| FrfError::new(format!("cannot serialize the witness semantic: {e}")))?,
-        "witness_implementation": serde_json::to_value(c.witness_implementation)
-            .map_err(|e| FrfError::new(format!("cannot serialize the witness implementation: {e}")))?,
-        "witness_identity": c.witness_identity,
-        "authority": c.authority,
-        "statement": c.statement,
-        "attestation": serde_json::to_value(c.attestation)
-            .map_err(|e| FrfError::new(format!("cannot serialize the attestation: {e}")))?,
-        "request_cid": c.request_cid,
-        "response_cid": c.response_cid,
-    });
-    hash_preimage("FRF/WITNESS-STATEMENT/v1", &doc)
+    let mut doc = serde_json::Map::new();
+    for (k, v) in [
+        (
+            "subject",
+            serde_json::to_value(c.subject)
+                .map_err(|e| FrfError::new(format!("cannot serialize the subject: {e}")))?,
+        ),
+        (
+            "witness_semantic",
+            serde_json::to_value(c.witness_semantic).map_err(|e| {
+                FrfError::new(format!("cannot serialize the witness semantic: {e}"))
+            })?,
+        ),
+        (
+            "witness_implementation",
+            serde_json::to_value(c.witness_implementation).map_err(|e| {
+                FrfError::new(format!("cannot serialize the witness implementation: {e}"))
+            })?,
+        ),
+        (
+            "witness_identity",
+            serde_json::Value::String(c.witness_identity.to_string()),
+        ),
+        (
+            "authority",
+            serde_json::to_value(c.authority).unwrap_or(serde_json::Value::Null),
+        ),
+        (
+            "statement",
+            serde_json::Value::String(c.statement.to_string()),
+        ),
+        (
+            "attestation",
+            serde_json::to_value(c.attestation)
+                .map_err(|e| FrfError::new(format!("cannot serialize the attestation: {e}")))?,
+        ),
+        (
+            "request_cid",
+            serde_json::Value::String(c.request_cid.to_string()),
+        ),
+        (
+            "response_cid",
+            serde_json::Value::String(c.response_cid.to_string()),
+        ),
+    ] {
+        doc.insert(k.to_string(), v);
+    }
+    if let Some(signature) = c.signature.as_ref() {
+        doc.insert(
+            "signature".to_string(),
+            serde_json::to_value(signature)
+                .map_err(|e| FrfError::new(format!("cannot serialize the signature: {e}")))?,
+        );
+    }
+    hash_preimage("FRF/WITNESS-STATEMENT/v1", &serde_json::Value::Object(doc))
 }
 
 /// The specification hash of an INDEPENDENCE relation: SHA-256 of

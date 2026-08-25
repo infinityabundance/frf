@@ -270,6 +270,28 @@ IND_ID=$("$FRF_BIN" --root "$ROOT" witness independence "$WIT_RECEIPT_ID" \
 echo "independence evidence: $IND_ID"
 echo "-- the independence record is content-addressed and binds the statement:"
 grep -o '"relation":"[^"]*"' "$ROOT"/independence/"$IND_ID".json
+
+step "9e. signatures — an external key signs the receipt (spec/witness.md §7)"
+# The strongest attestation form: an EXTERNAL ed25519 key signs the receipt's
+# EXACT canonical bytes; the signed statement is recorded like an attestation
+# (with the signing request/response preserved). Signed BEFORE the claim
+# compiles so the claim and its bundles carry the signed statement — the
+# independent verifiers then check the signature against the bundle's own
+# copy of the receipt. The key file is a TEST fixture
+# (golden/witnesses/signing-test-key.hex — 64 hex chars = the 32-byte Ed25519
+# seed); FRF never stores the key.
+SIGN_ID=$("$FRF_BIN" --root "$ROOT" witness sign receipt "$RECEIPT_FINAL" \
+  --id release-signer \
+  --relation sign \
+  --key golden/witnesses/signing-test-key.hex \
+  --statement "the resolution receipt is signed by the release key holder")
+echo "signed witness statement: $SIGN_ID"
+echo "-- the signed statement is content-addressed and carries the signature:"
+grep -o '"algorithm":"[^"]*"' "$ROOT"/witnesses/"$SIGN_ID".json
+echo "-- verification recomputes the receipt's canonical bytes and checks the signature:"
+"$FRF_BIN" --root "$ROOT" witness verify "$SIGN_ID"
+"$FRF_BIN" --root "$ROOT" witness verify "$WIT_RECEIPT_ID" >/dev/null
+
 COMPILE_OUT=$("$FRF_BIN" --root "$ROOT" claim compile "$RECEIPT_FINAL" --policy high-assurance 2>&1) || {
   echo "FAIL: the high-assurance claim did not compile" >&2
   echo "$COMPILE_OUT" >&2
@@ -300,8 +322,12 @@ echo "-- the renderer VERIFIES the claim before presenting it (a hand-written cl
 "$FRF_BIN" --root "$ROOT" claim render "$CLAIM_ID" --format ci
 "$FRF_BIN" --root "$ROOT" claim render "$RECEIPT_FINAL" --format prose >/dev/null
 BUNDLE=golden/work/portable.frf
-"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
 BUNDLE_SINGLE=golden/work/portable-single.frf
+# The step-7 bundles predate the witness/independence evidence: re-export
+# FRESH bundles so the final portable bundles carry the claim's capability
+# evidence (challenge ids, witness statement, independence record).
+rm -rf "$BUNDLE" "$BUNDLE_SINGLE"
+"$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE"
 "$FRF_BIN" --root "$ROOT" bundle export "$RECEIPT_FINAL" --output "$BUNDLE_SINGLE" --single
 (cd golden/work && \
   "$FRF_BIN" bundle verify portable.frf && \

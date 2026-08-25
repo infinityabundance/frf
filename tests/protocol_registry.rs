@@ -107,7 +107,7 @@ fn scan_domain_tokens(text: &str) -> BTreeSet<String> {
 }
 
 /// The domain-tag shape: `FRF/<NAME>/v<N>` where NAME is one or more
-/// uppercase letters/hyphens (no slashes) and N is one or more digits.
+/// uppercase letters/hyphens/digits (no slashes) and N is one or more digits.
 fn is_domain_tag(token: &str) -> bool {
     let Some((head, ver)) = token.rsplit_once("/v") else {
         return false;
@@ -118,7 +118,10 @@ fn is_domain_tag(token: &str) -> bool {
     let Some(name) = head.strip_prefix("FRF/") else {
         return false;
     };
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '-')
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '-' || c.is_ascii_digit())
 }
 
 fn collect(registry: &serde_json::Value, key: &str, id_key: &str) -> BTreeSet<String> {

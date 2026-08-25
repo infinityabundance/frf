@@ -1,6 +1,6 @@
 [package]
 name = "xtask"
-version = "0.1.81"
+version = "0.1.82"
 edition = "2021"
 description = "The independent FRF verifier — a deliberately small SECOND implementation of the FRF protocol, with no dependency on the frf reference engine."
 license = "MIT OR Apache-2.0"
@@ -15,6 +15,9 @@ sha2 = "0.10"
 # container the reference engine ships.
 tar = "0.4"
 base64 = "0.22"
+# Witness signatures (spec/witness.md §7): independent ed25519 verification
+# of signed witness statements inside bundles.
+ed25519-dalek = "2"
 # The v5 benchmark protocol measures child CPU time (getrusage(RUSAGE_CHILDREN)
 # deltas) — a platform crate, not a parsing library; the verifier's
 # independence claim is about evidence parsing, not libc.

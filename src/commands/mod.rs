@@ -225,6 +225,33 @@ pub fn dispatch(store: &Store, command: Command) -> Result<()> {
                 println!("{id}");
                 Ok(())
             }
+            WitnessCmd::Sign {
+                kind,
+                subject_id,
+                id,
+                relation,
+                relation_version,
+                key,
+                statement,
+            } => {
+                let id = witness::sign(
+                    store,
+                    &kind,
+                    &subject_id,
+                    &id,
+                    &relation,
+                    &relation_version,
+                    &key,
+                    &statement,
+                )?;
+                println!("{id}");
+                Ok(())
+            }
+            WitnessCmd::Verify { statement_id } => {
+                let verdict = witness::verify(store, &statement_id)?;
+                println!("{verdict}");
+                Ok(())
+            }
         },
         Command::Evidence { sub } => match sub {
             EvidenceCmd::Status {} => evidence::status(store),

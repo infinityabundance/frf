@@ -347,6 +347,42 @@ pub enum WitnessCmd {
         #[arg(long, value_name = "TEXT")]
         detail: Option<String>,
     },
+    /// Sign a subject document (a receipt or a claim) with an EXTERNAL
+    /// ed25519 key (spec/witness.md §7): the key signs the document's exact
+    /// canonical bytes, and the statement is recorded like an attestation
+    /// with the signature + public key preserved as evidence. The key file
+    /// is the 32-byte Ed25519 seed as 64 hex characters; FRF never stores
+    /// the key.
+    Sign {
+        /// The subject kind: `receipt` or `claim`
+        #[arg(value_name = "receipt|claim")]
+        kind: String,
+        /// The subject id (printed by `frf receipt emit` / `frf claim compile`)
+        subject_id: String,
+        /// The witness semantic id (the signing relation's name)
+        #[arg(long, value_name = "ID")]
+        id: String,
+        /// The signing relation family (part of the semantic identity)
+        #[arg(long, value_name = "RELATION")]
+        relation: String,
+        /// The relation version (part of the semantic identity)
+        #[arg(long, value_name = "VERSION", default_value = "v1")]
+        relation_version: String,
+        /// Path to the signing key file (64 hex chars = the Ed25519 seed)
+        #[arg(long, value_name = "PATH")]
+        key: PathBuf,
+        /// The exact statement the key holder signs
+        #[arg(long, value_name = "TEXT")]
+        statement: String,
+    },
+    /// Verify a witness statement: the statement id rederives, the subject
+    /// rebinds to the verified evidence object, and — for a signed statement
+    /// — the ed25519 signature verifies over the subject's exact canonical
+    /// bytes against the recorded public key
+    Verify {
+        /// Witness statement id (printed by `frf witness attest`/`sign`)
+        statement_id: String,
+    },
 }
 
 #[derive(Subcommand)]

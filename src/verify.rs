@@ -1284,9 +1284,18 @@ pub fn rebind_subject(
             let verified = load_residual_verified(store, &subject.id)?;
             crate::semantics::residual_fingerprint(verified.record())?
         }
+        "claim" => {
+            // A claim is content-addressed: the store loader rederives the
+            // id from the canonical document minus the id — the cid IS the
+            // claim id (spec/witness.md §7 adds claims as a signable
+            // subject).
+            let claim = store.load_claim(&subject.id)?;
+            let _ = claim;
+            subject.id.clone()
+        }
         other => {
             return Err(FrfError::new(format!(
-                "witness statement {id}: subject kind {other:?} is not run, receipt, or residual — a statement can only attest a verified evidence object"
+                "witness statement {id}: subject kind {other:?} is not run, receipt, residual, or claim — a statement can only attest a verified evidence object"
             )))
         }
     };

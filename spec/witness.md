@@ -158,3 +158,87 @@ DECLARATION is the evidence. A claim compiled under a witness-requiring
 policy carries the independence records bound to its attestations
 (`independence_evidence`, claim v7), so the declared independence claims
 are as portable as the attestations they qualify.
+
+## 7. Signatures: external-key signing of receipts and claims
+
+A *signature* is the strongest attestation form: an EXTERNAL key holder
+signs a content-addressed evidence DOCUMENT — a receipt or a claim — with
+its Ed25519 private key, and the signature is recorded and verified by the
+core (spec/witness.md §7, `frf-witness-request-v1` /
+`frf-witness-response-v3` / `frf-witness-statement-v3`, additive optional
+fields: no schema bump, per spec/versioning.md §1).
+
+```sh
+frf witness sign receipt RECEIPT_ID \
+  --id release-signer \
+  --relation sign \
+  --key golden/witnesses/signing-test-key.hex \
+  --statement "the release receipt is signed by the release key holder"
+```
+
+### The signing request
+
+The request is the attestation request plus the subject's EXACT canonical
+document bytes:
+
+```json
+{
+  "schema_version": "frf-witness-request-v1",
+  "witness": { "id": "release-signer", "relation_id": "sign", "relation_version": "v1", "specification_hash": "<64-hex>" },
+  "subject": { "kind": "receipt", "id": "receipt-...-<digest>", "cid": "<the rederived digest>" },
+  "statement": "the release receipt is signed by the release key holder",
+  "subject_canonical": "<base64 of the subject document's exact canonical bytes>",
+  "context": { "evidence_root": "..." }
+}
+```
+
+`subject_canonical` is present ONLY in a signing request — the signature
+binds the exact document, never a typed projection. The subject's canonical
+bytes and content address are REDERIVED by the core (a receipt through the
+verified receipt loader, a claim through the content-addressed claim
+loader), never read from the caller.
+
+### The signature
+
+The core computes the Ed25519 signature over the subject's exact canonical
+bytes with the provided key file (the 32-byte Ed25519 SEED as 64 hex
+characters; the key is never stored in the tree) and records the response:
+
+```json
+{
+  "schema_version": "frf-witness-response-v3",
+  "request_id": "<request cid>",
+  "attestation": { "statement": "...", "outcome": "affirm", "detail": "the key holder signed the subject document's exact canonical bytes" },
+  "indeterminate": false,
+  "signature": {
+    "algorithm": "ed25519",
+    "public_key": "<base64, 32 bytes>",
+    "value": "<base64, 64 bytes>"
+  }
+}
+```
+
+The key-based signer has NO program artifact: its witness implementation
+hash is the KEY IDENTITY — `FRF/ED25519-KEY/v1` over `{algorithm,
+public_key}` — so the witness identity (`FRF/WITNESS-IDENTITY/v1`) and the
+statement id (`FRF/WITNESS-STATEMENT/v1`) cryptographically commit the
+public key, and a signature cannot be re-attributed to a different key
+without changing the statement's content address. The statement record
+carries the signature (additive field; a plain attestation carries none),
+and the signing request/response are preserved under `witnesses/<id>/`
+exactly like an attestation's.
+
+### Verification
+
+```sh
+frf witness verify WITNESS_STATEMENT_ID
+```
+
+Verification recomputes the subject's canonical bytes from the evidence
+tree and checks the Ed25519 signature against the recorded public key
+(strict verification), checks the key-identity binding, and rederives the
+statement id. The independent verifiers (xtask, Go) run the same checks
+inside bundle verification — a signed statement in a bundle whose signature
+does not verify over the bundle's own copy of the subject document is
+refused, exactly like a mismatched content address. The signing relation is
+registered (`protocol/registry.json`, relations.witness.sign).

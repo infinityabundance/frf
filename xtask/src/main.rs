@@ -867,6 +867,14 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
                         );
                     }
                 }
+                // A SIGNED witness statement: the ed25519 signature must
+                // verify over the subject document's exact canonical bytes
+                // from the bundle, and the recorded implementation hash must
+                // commit the signature's public key.
+                if let Some(sig) = stmt.get("signature") {
+                    verify_witness_signature(bundle, &wid, &stmt);
+                    let _ = sig;
+                }
                 if as_str(&stmt["attestation"]["outcome"]) == "affirm" {
                     affirmed_this = true;
                 }
@@ -936,9 +944,17 @@ fn verify_claim_policy(bundle: &Path, claim: &Value, _body: &Value, receipt_id: 
     }
 
     if policy == "high-assurance" {
+        // The reference capture contract — the EXACT capture bounds the
+        // reference profile enforces (mirroring the reference engine's
+        // `host::reference_capture_bounds`, v19 included the produced-tree
+        // caps). High assurance requires the exact contract, never a
+        // superset.
         let reference = serde_json::json!({
             "timeout_ms": "60000",
             "max_stream_bytes": "16777216",
+            "produced_max_files": "4096",
+            "produced_max_bytes": "268435456",
+            "produced_max_file_bytes": "16777216",
             "rlimit_as_mb": "2048",
             "rlimit_cpu_s": "30",
             "rlimit_nofile": "1024",
@@ -1128,6 +1144,62 @@ fn verify_manifest_schema(m: &Value) {
     }
     if !problems.is_empty() {
         panic!("invalid bundle manifest:\n  {}", problems.join("\n  "));
+    }
+}
+
+/// Verify a SIGNED witness statement inside a bundle (spec/witness.md §7):
+/// the ed25519 signature must verify over the subject document's EXACT
+/// canonical bytes (read from the bundle: `receipts/<id>.json` or
+/// `claims/<id>.json`), and the recorded implementation hash must commit the
+/// signature's public key (FRF/ED25519-KEY/v1) — a signature cannot be
+/// re-attributed to a different key or document without breaking the
+/// statement's content address.
+fn verify_witness_signature(bundle: &Path, wid: &str, stmt: &Value) {
+    use base64::Engine as _;
+    let sig = &stmt["signature"];
+    if as_str(&sig["algorithm"]) != "ed25519" {
+        panic!(
+            "witness {wid}: signature algorithm {:?} is not admitted (the protocol admits ed25519)",
+            as_str(&sig["algorithm"])
+        );
+    }
+    let public_key = base64::engine::general_purpose::STANDARD
+        .decode(as_str(&sig["public_key"]))
+        .unwrap_or_else(|e| {
+            panic!("witness {wid}: the recorded public key is not valid base64: {e}")
+        });
+    let signature_value = base64::engine::general_purpose::STANDARD
+        .decode(as_str(&sig["value"]))
+        .unwrap_or_else(|e| {
+            panic!("witness {wid}: the recorded signature value is not valid base64: {e}")
+        });
+    let public_key: [u8; 32] = public_key
+        .try_into()
+        .unwrap_or_else(|_| panic!("witness {wid}: an ed25519 public key is exactly 32 bytes"));
+    let signature_value: [u8; 64] = signature_value
+        .try_into()
+        .unwrap_or_else(|_| panic!("witness {wid}: an ed25519 signature is exactly 64 bytes"));
+    // The subject document's exact canonical bytes from the bundle.
+    let kind = as_str(&stmt["subject"]["kind"]);
+    let subject_id = as_str(&stmt["subject"]["id"]);
+    let rel = match kind {
+        "receipt" => format!("receipts/{subject_id}.json"),
+        "claim" => format!("claims/{subject_id}.json"),
+        other => panic!("witness {wid}: subject kind {other:?} is not a signable document (the signing protocol admits receipt or claim)"),
+    };
+    let canonical = read(&safe_rel(bundle, &rel));
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key).unwrap_or_else(|e| {
+        panic!("witness {wid}: the recorded public key is not a valid ed25519 key: {e}")
+    });
+    let signature = ed25519_dalek::Signature::from_bytes(&signature_value);
+    verifying_key
+        .verify_strict(&canonical, &signature)
+        .unwrap_or_else(|e| panic!("witness {wid}: the ed25519 signature does NOT verify over the {kind} {subject_id}'s exact canonical bytes: {e}"));
+    // The key-identity binding.
+    let expected =
+        rederive::ed25519_key_identity(as_str(&sig["algorithm"]), as_str(&sig["public_key"]));
+    if as_str(&stmt["witness_implementation"]["implementation_hash"]) != expected {
+        panic!("witness {wid}: the recorded implementation hash does not commit the signature's public key — the signature cannot be re-attributed to this statement");
     }
 }
 

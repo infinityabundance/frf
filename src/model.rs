@@ -1512,7 +1512,7 @@ pub struct WitnessImplementation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WitnessSubject {
-    /// `run` | `receipt` | `residual`.
+    /// `run` | `receipt` | `residual` | `claim`.
     pub kind: String,
     pub id: String,
     /// The subject's content address (the run identity digest, the receipt
@@ -1527,6 +1527,11 @@ pub struct WitnessRequest<'a> {
     pub witness: &'a WitnessSemantic,
     pub subject: &'a WitnessSubject,
     pub statement: &'a str,
+    /// The subject document's EXACT canonical bytes, base64 — present only
+    /// when the witness is asked to SIGN the subject (spec/witness.md §7), so
+    /// the signature binds the exact document, never a projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_canonical: Option<String>,
     pub context: WitnessContext<'a>,
 }
 
@@ -1550,6 +1555,27 @@ pub struct WitnessResponse {
     /// authority is or whether the declaration is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<WitnessAuthority>,
+    /// The cryptographic signature, when the witness signs the subject's
+    /// exact canonical bytes (spec/witness.md §7). Optional: an attestation
+    /// response carries none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<WitnessSignature>,
+}
+
+/// A cryptographic signature over a subject document's exact canonical
+/// bytes, made by an EXTERNAL key holder (spec/witness.md §7). The signature
+/// is verified by recomputing the subject's canonical bytes and checking the
+/// public key — FRF records and verifies; it never holds the private key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSignature {
+    /// The signature algorithm; the protocol currently admits `ed25519`
+    /// (Ed25519 over the exact canonical document bytes).
+    pub algorithm: String,
+    /// The signer's public key, base64 (standard alphabet, padded).
+    pub public_key: String,
+    /// The signature value, base64 (standard alphabet, padded).
+    pub value: String,
 }
 
 /// The declared authority a witness acts for (the witness's own
@@ -1625,6 +1651,13 @@ pub struct WitnessStatement {
     pub authority: Option<WitnessAuthority>,
     pub statement: String,
     pub attestation: WitnessAttestation,
+    /// The cryptographic SIGNATURE, when the statement is a signature
+    /// (spec/witness.md §7): an external key holder signed the subject
+    /// document's exact canonical bytes. Optional: a plain attestation
+    /// carries none (additive field — the statement identity commits the
+    /// signature only when present).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<WitnessSignature>,
     pub request_cid: String,
     pub response_cid: String,
     pub created_by: RunnerIdentity,

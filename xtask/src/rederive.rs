@@ -205,19 +205,33 @@ pub fn witness_identity(semantic: &Value, implementation: &Value) -> String {
 /// FRF/WITNESS-STATEMENT/v1 over the statement's own fields (v3: the witness
 /// identity and the declared authority enter the preimage).
 pub fn witness_statement_identity(stmt: &Value) -> String {
+    let mut doc = json!({
+        "subject": stmt["subject"],
+        "witness_semantic": stmt["witness_semantic"],
+        "witness_implementation": stmt["witness_implementation"],
+        "witness_identity": s(&stmt["witness_identity"]),
+        "authority": stmt["authority"],
+        "statement": s(&stmt["statement"]),
+        "attestation": stmt["attestation"],
+        "request_cid": s(&stmt["request_cid"]),
+        "response_cid": s(&stmt["response_cid"]),
+    });
+    // spec/versioning.md §1: the SIGNATURE enters the preimage only when
+    // present — a plain attestation's identity is unchanged.
+    if let Some(signature) = stmt.get("signature") {
+        doc["signature"] = signature.clone();
+    }
+    preimage("FRF/WITNESS-STATEMENT/v1", &doc)
+}
+
+/// FRF/ED25519-KEY/v1 over {algorithm, public_key} — the key identity of an
+/// external signing key (spec/witness.md §7). A key-based witness signer's
+/// implementation hash is this identity, so the witness identity and
+/// statement id commit the public key.
+pub fn ed25519_key_identity(algorithm: &str, public_key: &str) -> String {
     preimage(
-        "FRF/WITNESS-STATEMENT/v1",
-        &json!({
-            "subject": stmt["subject"],
-            "witness_semantic": stmt["witness_semantic"],
-            "witness_implementation": stmt["witness_implementation"],
-            "witness_identity": s(&stmt["witness_identity"]),
-            "authority": stmt["authority"],
-            "statement": s(&stmt["statement"]),
-            "attestation": stmt["attestation"],
-            "request_cid": s(&stmt["request_cid"]),
-            "response_cid": s(&stmt["response_cid"]),
-        }),
+        "FRF/ED25519-KEY/v1",
+        &json!({ "algorithm": algorithm, "public_key": public_key }),
     )
 }
 
