@@ -731,10 +731,9 @@ pub fn run(store: &Store, id: &str, policy_str: &str, side_cwd: &Path) -> Result
                     .map_err(|e| {
                     FrfError::new(format!("capture adapter for axis {}: {e}", semantic.id))
                 })?;
-            if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
+            if let Err(e) = crate::schema::admit("capture-response", &response.schema_version) {
                 return Err(FrfError::new(format!(
-                    "capture adapter response has unsupported schema version {:?}",
-                    response.schema_version
+                    "capture adapter response has unsupported schema version: {e}"
                 )));
             }
             if response.request_id != request_cid {

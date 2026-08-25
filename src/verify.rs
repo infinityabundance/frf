@@ -120,12 +120,8 @@ pub fn load_stream_publication_verified(
                 disp_path.display()
             ))
         })?;
-    if record.schema_version != crate::model::SCHEMA_STREAM_PUBLICATION {
-        return Err(FrfError::new(format!(
-            "{} has an unsupported schema {:?}",
-            disp_path.display(),
-            record.schema_version
-        )));
+    if let Err(e) = crate::schema::admit("stream-publication", &record.schema_version) {
+        return Err(FrfError::new(format!("{}: {e}", disp_path.display())));
     }
     if record.side != side || record.stream != stream {
         return Err(FrfError::new(format!(
@@ -242,10 +238,10 @@ pub fn load_publication_manifest_verified(
             path.display()
         ))
     })?;
-    if manifest.schema_version != crate::model::SCHEMA_PUBLICATION_MANIFEST {
+    if let Err(e) = crate::schema::admit("publication-manifest", &manifest.schema_version) {
         return Err(FrfError::new(format!(
-            "the publication manifest has an unsupported schema {:?}",
-            manifest.schema_version
+            "the publication manifest {}: {e}",
+            path.display()
         )));
     }
     let mut seen: std::collections::BTreeSet<(String, String, String)> =
@@ -665,10 +661,9 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     //     bytes are content-addressed objects — a declared runtime
     //     dependency is bound to the exact bytes, never assumed.
     if let Some(closure) = &capture.execution_context {
-        if closure.schema_version != SCHEMA_EXECUTION_CONTEXT {
+        if let Err(e) = crate::schema::admit("execution-context", &closure.schema_version) {
             return Err(FrfError::new(format!(
-                "capture {run}: the execution-context closure carries schema_version {:?}, expected {SCHEMA_EXECUTION_CONTEXT}",
-                closure.schema_version
+                "capture {run}: the execution-context closure: {e}"
             )));
         }
         let rederived = crate::semantics::execution_context_identity(closure)?;
@@ -1540,11 +1535,9 @@ fn disposition_of(res: &ReceiptResidual) -> Option<Disposition> {
 /// time (machine-specific, like interpreter hashes); the CID rederives in
 /// any implementation.
 pub fn verify_runtime_closure(closure: &crate::model::NativeRuntimeClosure) -> Result<()> {
-    if closure.schema_version != crate::model::SCHEMA_RUNTIME_CLOSURE {
+    if let Err(e) = crate::schema::admit("runtime-closure", &closure.schema_version) {
         return Err(FrfError::new(format!(
-            "unsupported runtime closure schema {:?} (this implementation speaks {})",
-            closure.schema_version,
-            crate::model::SCHEMA_RUNTIME_CLOSURE
+            "unsupported runtime closure schema: {e}"
         )));
     }
     let rederived = crate::semantics::runtime_closure_identity(closure)?;
@@ -3034,14 +3027,8 @@ impl Receipt {
     pub fn validate_semantics(&self) -> Result<()> {
         let mut violations: Vec<String> = Vec::new();
 
-        if self.schema_version != SCHEMA_RECEIPT {
-            fail(
-                &mut violations,
-                format!(
-                    "schema_version is {:?}, expected {SCHEMA_RECEIPT}",
-                    self.schema_version
-                ),
-            );
+        if let Err(e) = crate::schema::admit("receipt", &self.schema_version) {
+            fail(&mut violations, e);
         }
 
         // One fixture per court (v0).
@@ -3832,14 +3819,8 @@ impl Receipt {
         // rederiving from the document's own artifacts. A closure that
         // cannot rederive its own identity is not evidence.
         if let Some(closure) = &self.execution_context {
-            if closure.schema_version != SCHEMA_EXECUTION_CONTEXT {
-                fail(
-                    &mut violations,
-                    format!(
-                        "the execution-context closure carries schema_version {:?}, expected {SCHEMA_EXECUTION_CONTEXT}",
-                        closure.schema_version
-                    ),
-                );
+            if let Err(e) = crate::schema::admit("execution-context", &closure.schema_version) {
+                fail(&mut violations, e);
             }
             let mut prev: Option<&str> = None;
             for a in &closure.artifacts {
@@ -4645,14 +4626,14 @@ fn verify_reduction_minimizer_evidence(
             "minimizer request evidence is not strict JSON: {e}"
         ))
     })?;
-    if request.get("schema_version")
-        != Some(&serde_json::Value::String(
-            crate::model::SCHEMA_MINIMIZER_REQUEST.to_string(),
-        ))
-    {
-        return Err(FrfError::new(
-            "the minimizer request evidence has an unsupported schema version",
-        ));
+    let request_version = request
+        .get("schema_version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| FrfError::new("the minimizer request evidence has no schema_version"))?;
+    if let Err(e) = crate::schema::admit("minimizer-request", request_version) {
+        return Err(FrfError::new(format!(
+            "the minimizer request evidence: {e}"
+        )));
     }
     let response_bytes = fs::read(dir.join("response.json"))
         .map_err(|e| FrfError::new(format!("missing minimizer response evidence: {e}")))?;

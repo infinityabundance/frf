@@ -166,10 +166,9 @@ pub fn attest(
     let response: WitnessResponse =
         crate::ext::parse_canonical_response(&response_bytes, "witness response")
             .map_err(|e| FrfError::new(format!("witness {id}: {e}")))?;
-    if response.schema_version != SCHEMA_WITNESS_RESPONSE {
+    if let Err(e) = crate::schema::admit("witness-response", &response.schema_version) {
         return Err(FrfError::new(format!(
-            "witness response has unsupported schema version {:?}",
-            response.schema_version
+            "witness response has unsupported schema version: {e}"
         )));
     }
     if response.request_id != request_cid {

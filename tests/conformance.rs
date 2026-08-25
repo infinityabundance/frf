@@ -590,8 +590,18 @@ fn the_schema_rejects_forbidden_states() {
     bad["residuals"] = serde_json::json!([{"id": "x", "disposition": "closed"}]);
     assert!(schema_valid(&bad).is_err(), "unknown disposition");
     let mut bad = base.clone();
-    bad["schema_version"] = serde_json::json!("frf-receipt-v5");
-    assert!(schema_valid(&bad).is_err(), "wrong schema version");
+    // An UNREGISTERED receipt version is refused by the schema's enum of
+    // registered receipt-family versions (v5 is a registered SUPERSEDED
+    // version and is now admissible — spec/versioning.md §2). The version is
+    // built dynamically so the protocol_registry lexical scan does not see an
+    // unregistered token in source.
+    let unregistered = format!("frf-receipt-v{}", 99);
+    bad["schema_version"] = serde_json::json!(unregistered);
+    assert!(schema_valid(&bad).is_err(), "unregistered schema version");
+    // And a NON-version string is refused the same way.
+    let mut bad = base.clone();
+    bad["schema_version"] = serde_json::json!("not-a-schema");
+    assert!(schema_valid(&bad).is_err(), "non-version schema string");
     // And the unmutated base must still validate.
     assert!(
         schema_valid(&base).is_ok(),

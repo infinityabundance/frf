@@ -37,6 +37,7 @@ mod rederive;
 mod regen;
 mod regen_readme;
 mod rules;
+mod schema;
 
 use jcs::{encode, parse_strict};
 use rederive::*;
@@ -1133,11 +1134,8 @@ fn verify_manifest_schema(m: &Value) {
 fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
     let manifest = load_json(&safe_rel(bundle, "manifest.json"));
     verify_manifest_schema(&manifest);
-    if as_str(&manifest["schema_version"]) != "frf-bundle-v3" {
-        panic!(
-            "unsupported bundle schema version {:?}",
-            manifest["schema_version"]
-        );
+    if let Err(e) = schema::admit("bundle", as_str(&manifest["schema_version"])) {
+        panic!("unsupported bundle schema version: {e}");
     }
     let declared = manifest["container"].as_str().unwrap_or("<missing>");
     if declared != container {
@@ -1843,11 +1841,8 @@ fn verify_bundle(bundle: &Path, container: &str) -> rules::ClaimIr {
                     "claim {claim_id} is not content-addressed: the canonical document minus the id hashes to {expected}; refusing to consume a hand-edited or forged claim"
                 );
             }
-            if as_str(&claim["schema_version"]) != "frf-claim-v13" {
-                panic!(
-                    "claim {claim_id}: unexpected schema version {}",
-                    as_str(&claim["schema_version"])
-                );
+            if let Err(e) = schema::admit("claim", as_str(&claim["schema_version"])) {
+                panic!("claim {claim_id}: unexpected schema version: {e}");
             }
             // The transform declaration is the CLAIM transform
             // (frf-claim-v13): nothing varies — parity over the premises,

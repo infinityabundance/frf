@@ -380,7 +380,21 @@ pub fn regen_corpus(dir: &Path) {
         // constants the bump must not touch).
         let is_receipt = !name.starts_with("detached-") && !name.starts_with("reduction-");
         if is_receipt {
-            bump(&mut doc, true, true);
+            // The old-evidence fixture (spec/versioning.md §2): a CURRENT-shape
+            // receipt carrying a REGISTERED SUPERSEDED schema version — the
+            // corpus's executable form of "old records remain verifiable
+            // whenever the parser keeps accepting them". Its schema label is
+            // the fixture's whole point, so the bump must not relabel it.
+            if name == "receipt-v19-legacy.json" {
+                let version = doc["schema_version"]
+                    .as_str()
+                    .expect("the legacy fixture declares a schema version")
+                    .to_string();
+                bump(&mut doc, true, true);
+                doc["schema_version"] = json!(version);
+            } else {
+                bump(&mut doc, true, true);
+            }
         }
         // A REDUCTION record's `id` is its content address: it must rederive
         // from the record's own (possibly changed) fields, so the regen

@@ -21,6 +21,7 @@ pub mod normalizers;
 pub mod produced;
 pub mod render;
 pub mod sandbox;
+pub mod schema;
 pub mod scope;
 pub mod semantics;
 pub mod sentences;

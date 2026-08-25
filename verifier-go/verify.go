@@ -196,8 +196,8 @@ func verifyBundle(bundle string) ClaimIR {
 	manifest := loadEvidenceNoCanonical(safeJoin(bundle, "manifest.json"))
 	m := obj(manifest)
 	verifyManifestSchema(m)
-	if str(m, "schema_version") != "frf-bundle-v3" {
-		fail("unsupported bundle schema version %v", str(m, "schema_version"))
+	if err := admitSchemaVersion("bundle", str(m, "schema_version")); err != nil {
+		fail("unsupported bundle schema version: %v", err)
 	}
 	receiptID := str(m, "receipt_id")
 	run := str(m, "run")
@@ -418,8 +418,8 @@ func verifyBundle(bundle string) ClaimIR {
 			if err != nil || claimCID != claimID {
 				fail("claim %s is not content-addressed: the canonical document minus the id hashes to %s; refusing to consume a hand-edited or forged claim", claimID, claimCID)
 			}
-			if str(obj(claim), "schema_version") != "frf-claim-v13" {
-				fail("claim %s: unexpected schema version %s", claimID, str(obj(claim), "schema_version"))
+			if err := admitSchemaVersion("claim", str(obj(claim), "schema_version")); err != nil {
+				fail("claim %s: unexpected schema version: %v", claimID, err)
 			}
 			// The transform declaration is the CLAIM transform
 			// (frf-claim-v13): nothing varies — parity over the premises,
@@ -751,8 +751,8 @@ func verifyTrajectoryEvidence(bundle string, body *jcs.Object, run string) {
 			// the id, the transform declaration included) and the transform
 			// declaration is the trajectory transform (only the coordinate
 			// varies). A relabeled or hand-edited trajectory is refused.
-			if str(t, "schema_version") != "frf-trajectory-v6" {
-				fail("residual %s: trajectory schema %s (expected frf-trajectory-v6)", rid, str(t, "schema_version"))
+			if err := admitSchemaVersion("trajectory", str(t, "schema_version")); err != nil {
+				fail("residual %s: trajectory schema: %v", rid, err)
 			}
 			if tid := str(t, "id"); tid != trajectoryIdentity(t) {
 				fail("residual %s: trajectory is not content-addressed (id %s does not rederive); refusing a hand-edited or relabeled trajectory", rid, tid)

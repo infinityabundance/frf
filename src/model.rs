@@ -4390,12 +4390,7 @@ impl DetachedObjects {
     /// policy, and every CID a well-formed 64-hex content address, unique,
     /// with a non-empty role/publication/recipe.
     pub fn validate_semantics(&self) -> std::result::Result<(), String> {
-        if self.schema_version != SCHEMA_DETACHED_OBJECTS {
-            return Err(format!(
-                "unsupported schema version {:?} (expected {SCHEMA_DETACHED_OBJECTS})",
-                self.schema_version
-            ));
-        }
+        crate::schema::admit("detached-objects", &self.schema_version)?;
         if self.policy.trim().is_empty() {
             return Err("policy must be non-empty".to_string());
         }
@@ -4905,12 +4900,7 @@ impl ReductionRecord {
     ///   band); `proven` requires the control to be LOST and the final
     ///   verification ACCEPTED.
     pub fn validate_semantics(&self) -> std::result::Result<(), String> {
-        if self.schema_version != SCHEMA_REDUCTION {
-            return Err(format!(
-                "unsupported schema version {:?} (expected {SCHEMA_REDUCTION})",
-                self.schema_version
-            ));
-        }
+        crate::schema::admit("reduction", &self.schema_version)?;
         let m = &self.derivation.minimality;
         if !ReductionMinimality::KINDS.contains(&m.kind.as_str()) {
             return Err(format!(
@@ -5486,9 +5476,13 @@ pub struct Receipt {
     pub execution_context: Option<ExecutionContextClosure>,
 }
 
-/// Deserialize the receipt schema version, refusing anything but the
-/// current protocol version: an OpenReceipt from another version is not
-/// interpreted, it is rejected with a clear error.
+/// Deserialize the receipt schema version through the admission rule
+/// (spec/versioning.md §2): a REGISTERED receipt-family version (active or
+/// superseded) is accepted — old records of a parseable shape remain
+/// verifiable — and everything else (unregistered, reserved-invalid,
+/// wrong-family) is rejected at deserialization with a clear error naming
+/// the version. This is the receipt family's parse-time gate; the semantic
+/// validators apply the same rule again on the document.
 pub(crate) fn expect_receipt_schema<'de, D>(
     deserializer: D,
 ) -> std::result::Result<String, D::Error>
@@ -5496,13 +5490,8 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    if s == SCHEMA_RECEIPT {
-        Ok(s)
-    } else {
-        Err(serde::de::Error::custom(format!(
-            "unsupported receipt schema '{s}' (this implementation speaks {SCHEMA_RECEIPT})"
-        )))
-    }
+    crate::schema::admit("receipt", &s).map_err(serde::de::Error::custom)?;
+    Ok(s)
 }
 
 /// The closed set of dispositions a receipt entry may carry; anything else

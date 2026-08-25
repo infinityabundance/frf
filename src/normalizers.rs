@@ -20,7 +20,7 @@ use crate::host;
 use crate::model::{
     CaptureManifest, NormalizerContext, NormalizerDeclaration, NormalizerInvocation,
     NormalizerRequest, NormalizerResponse, NormalizerResult, NormalizerSemantic,
-    SCHEMA_NORMALIZER_REQUEST, SCHEMA_NORMALIZER_RESPONSE,
+    SCHEMA_NORMALIZER_REQUEST,
 };
 use crate::semantics;
 use crate::store::Store;
@@ -89,10 +89,9 @@ pub fn interpret(
     raw_stdout: &[u8],
     raw_stderr: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>)> {
-    if response.schema_version != SCHEMA_NORMALIZER_RESPONSE {
+    if let Err(e) = crate::schema::admit("normalizer-response", &response.schema_version) {
         return Err(FrfError::new(format!(
-            "normalizer response has unsupported schema version {:?} (expected {SCHEMA_NORMALIZER_RESPONSE})",
-            response.schema_version
+            "normalizer response has unsupported schema version: {e}"
         )));
     }
     if response.request_id != expected_request_id {

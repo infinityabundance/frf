@@ -143,8 +143,8 @@ func structuralViolations(doc jcs.Value) []string {
 	if !ok {
 		return []string{"receipt is not an object"}
 	}
-	if str(o, "schema_version") != "frf-receipt-v20" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v20", str(o, "schema_version")))
+	if err := admitSchemaVersion("receipt", str(o, "schema_version")); err != nil {
+		push(&v, err.Error())
 	}
 	for _, k := range requiredReceiptKeys {
 		if _, ok := o.Get(k); !ok {
@@ -260,6 +260,12 @@ func structuralViolations(doc jcs.Value) []string {
 	}
 	if fixtures, ok := o.Get("fixtures"); ok {
 		for i, f := range arr(fixtures) {
+			fo := obj(f)
+			for _, k := range fixtureKeys {
+				if _, ok := fo.Get(k); !ok {
+					push(&v, fmt.Sprintf("missing required field %q on fixtures[%d]", k, i))
+				}
+			}
 			for _, k := range unknownKeys(f, fixtureKeys) {
 				push(&v, fmt.Sprintf("unknown property %q on fixtures[%d]", k, i))
 			}
@@ -372,8 +378,8 @@ func containsString(list []string, s string) bool {
 func semanticViolations(rec jcs.Value) []string {
 	var v []string
 	o := obj(rec)
-	if str(o, "schema_version") != "frf-receipt-v20" {
-		push(&v, fmt.Sprintf("schema_version is %v, expected frf-receipt-v20", str(o, "schema_version")))
+	if err := admitSchemaVersion("receipt", str(o, "schema_version")); err != nil {
+		push(&v, err.Error())
 	}
 	fixtures := arr(recVal(o, "fixtures"))
 	if len(fixtures) != 1 {
@@ -772,8 +778,8 @@ func semanticViolations(rec jcs.Value) []string {
 	// artifact names a protocol role, the artifacts are strictly sorted by
 	// path, and the cid rederives from the document's own artifacts.
 	if ec, ok := o.Get("execution_context"); ok && ec != nil {
-		if str(ec, "schema_version") != "frf-execution-context-v1" {
-			push(&v, fmt.Sprintf("the execution-context closure has unsupported schema_version %v", str(ec, "schema_version")))
+		if err := admitSchemaVersion("execution-context", str(ec, "schema_version")); err != nil {
+			push(&v, fmt.Sprintf("the execution-context closure: %v", err))
 		}
 		var prev *string
 		for _, a := range arr(recVal(obj(ec), "artifacts")) {
@@ -867,8 +873,8 @@ func semanticViolations(rec jcs.Value) []string {
 			if interp != nil {
 				push(&v, fmt.Sprintf("%s artifact carries BOTH an interpreter chain and a native runtime closure", who))
 			}
-			if str(closure, "schema_version") != "frf-runtime-closure-v1" {
-				push(&v, fmt.Sprintf("%s runtime closure has unsupported schema_version %v", who, str(closure, "schema_version")))
+			if err := admitSchemaVersion("runtime-closure", str(closure, "schema_version")); err != nil {
+				push(&v, fmt.Sprintf("%s runtime closure: %v", who, err))
 			}
 			expected := runtimeClosureIdentity(closure)
 			if expected != str(closure, "cid") {
@@ -927,8 +933,8 @@ func semanticIDs(sems []*jcs.Object) []string {
 func detachedSemanticViolations(doc jcs.Value) []string {
 	var out []string
 	o := obj(doc)
-	if str(o, "schema_version") != "frf-detached-objects-v1" {
-		out = append(out, "schema_version must be frf-detached-objects-v1")
+	if err := admitSchemaVersion("detached-objects", str(o, "schema_version")); err != nil {
+		out = append(out, err.Error())
 	}
 	if str(o, "policy") == "" {
 		out = append(out, "policy must be non-empty")
@@ -967,8 +973,8 @@ func detachedSemanticViolations(doc jcs.Value) []string {
 func reductionSemanticViolations(doc jcs.Value) []string {
 	var out []string
 	o := obj(doc)
-	if str(o, "schema_version") != "frf-reduction-v5" {
-		out = append(out, "schema_version must be frf-reduction-v5")
+	if err := admitSchemaVersion("reduction", str(o, "schema_version")); err != nil {
+		out = append(out, err.Error())
 	}
 	m := obj(recVal(obj(recVal(o, "derivation")), "minimality"))
 	kind := str(m, "kind")

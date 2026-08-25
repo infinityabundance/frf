@@ -1118,10 +1118,9 @@ fn minimize_external(
     let response: MinimizerResponse =
         crate::ext::parse_canonical_response(&response_bytes, "minimizer response")
             .map_err(|e| FrfError::new(format!("minimizer {}: {e}", semantic.id)))?;
-    if response.schema_version != crate::model::SCHEMA_MINIMIZER_RESPONSE {
+    if let Err(e) = crate::schema::admit("minimizer-response", &response.schema_version) {
         return Err(FrfError::new(format!(
-            "minimizer response has unsupported schema version {:?}",
-            response.schema_version
+            "minimizer response has unsupported schema version: {e}"
         )));
     }
     if response.request_id != request_cid {
@@ -2734,10 +2733,9 @@ pub fn run_once(
                     .map_err(|e| {
                     FrfError::new(format!("capture adapter for axis {}: {e}", decl.axis))
                 })?;
-            if response.schema_version != crate::model::SCHEMA_CAPTURE_ADAPTER_RESPONSE {
+            if let Err(e) = crate::schema::admit("capture-response", &response.schema_version) {
                 return Err(FrfError::new(format!(
-                    "capture adapter response has unsupported schema version {:?}",
-                    response.schema_version
+                    "capture adapter response has unsupported schema version: {e}"
                 )));
             }
             if response.request_id != crate::ext::request_cid(&request_bytes) {
@@ -3640,10 +3638,11 @@ pub fn challenge(
                         .map_err(|e| {
                             FrfError::new(format!("mutation provider {id}: {e}", id = decl.id))
                         })?;
-                if response.schema_version != SCHEMA_MUTATION_RESPONSE {
+                if let Err(e) = crate::schema::admit("mutation-response", &response.schema_version)
+                {
                     failures.push(format!(
-                        "mutation provider {}: response has unsupported schema version {:?}",
-                        decl.id, response.schema_version
+                        "mutation provider {}: response has unsupported schema version: {e}",
+                        decl.id
                     ));
                     continue;
                 }

@@ -139,10 +139,9 @@ pub fn parse_bundle_manifest(bytes: &[u8]) -> Result<BundleManifest> {
             "manifest.json carries an unknown property or an invalid value: {e}"
         ))
     })?;
-    if manifest.schema_version != SCHEMA_BUNDLE {
+    if let Err(e) = crate::schema::admit("bundle", &manifest.schema_version) {
         return Err(FrfError::new(format!(
-            "unsupported bundle schema version {:?} (expected {SCHEMA_BUNDLE})",
-            manifest.schema_version
+            "unsupported bundle schema version: {e}"
         )));
     }
     if !matches!(manifest.container.as_str(), "directory" | "single-tar") {

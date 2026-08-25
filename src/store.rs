@@ -779,7 +779,7 @@ impl Store {
                 path.display()
             )));
         }
-        let claim: crate::model::ClaimRecord = self.parse_evidence(&path)?;
+        let claim: crate::model::ClaimRecord = self.parse_evidence_admitted(&path, "claim")?;
         if claim.id != id {
             return Err(FrfError::new(format!(
                 "claim {id}: the id inside the document is {} — the name is a claim",
@@ -1630,7 +1630,7 @@ impl Store {
                 path.display()
             )));
         }
-        self.parse_evidence(&path)
+        self.parse_evidence_admitted(&path, "trajectory")
     }
 
     /// `series/<id>.json` — the content-addressed ExecutionSeries record.
@@ -1648,7 +1648,7 @@ impl Store {
                 path.display()
             )));
         }
-        let series: ExecutionSeries = self.parse_evidence(&path)?;
+        let series: ExecutionSeries = self.parse_evidence_admitted(&path, "series")?;
         if series.id != id {
             return Err(FrfError::new(format!(
                 "series {id}: the id inside the record is {} — the name is a claim; refusing to consume",
@@ -2005,6 +2005,39 @@ impl Store {
             .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
         crate::canon::require_canonical_bytes(&bytes, &format!("{}", path.display()))?;
         serde_json::from_slice(&bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
+    }
+
+    /// The canonical evidence loader WITH schema-version admission
+    /// (spec/versioning.md §2): the document must be strict canonical JSON,
+    /// its `schema_version` must be a REGISTERED id of `family` with status
+    /// active or superseded, and only then is it deserialized. The admission
+    /// runs on the RAW document before deserialization, so a document that
+    /// cannot deserialize is refused WITH ITS VERSION NAMED, and a document
+    /// whose version is unregistered / reserved-invalid / wrong-family is
+    /// refused naming the version — never silently reinterpreted.
+    pub fn parse_evidence_admitted<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &Path,
+        family: &str,
+    ) -> Result<T> {
+        let bytes = fs::read(path)
+            .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
+        crate::canon::require_canonical_bytes(&bytes, &format!("{}", path.display()))?;
+        let value = crate::canon::parse_strict(&bytes)
+            .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))?;
+        let version = value
+            .get("schema_version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                FrfError::new(format!(
+                    "{}: no schema_version — every protocol object declares its schema",
+                    path.display()
+                ))
+            })?;
+        crate::schema::admit(family, version)
+            .map_err(|e| FrfError::new(format!("{}: {e}", path.display())))?;
+        serde_json::from_value(value)
             .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
     }
 
@@ -2474,7 +2507,9 @@ impl Store {
                 path.display()
             )));
         }
-        Ok(Unverified::new(self.parse_evidence(&path)?))
+        Ok(Unverified::new(
+            self.parse_evidence_admitted(&path, "capture")?,
+        ))
     }
 
     /// Raw-parse a receipt document: canonical, NO identity/derivation proof.

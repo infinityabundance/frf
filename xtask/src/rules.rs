@@ -94,11 +94,8 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     if !doc.is_object() {
         return vec!["receipt is not an object".to_string()];
     }
-    if as_str(&doc["schema_version"]) != "frf-receipt-v20" {
-        v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v20",
-            doc["schema_version"]
-        ));
+    if let Err(e) = crate::schema::admit("receipt", as_str(&doc["schema_version"])) {
+        v.push(e);
     }
     for k in REQUIRED_RECEIPT_KEYS {
         if doc.get(k).is_none() {
@@ -301,6 +298,11 @@ pub fn structural_violations(doc: &Value) -> Vec<String> {
     }
     if let Some(fixtures) = doc["fixtures"].as_array() {
         for (i, f) in fixtures.iter().enumerate() {
+            for k in FIXTURE_KEYS {
+                if f.get(k).is_none() {
+                    v.push(format!("missing required field {k:?} on fixtures[{i}]"));
+                }
+            }
             for k in unknown_keys(f, FIXTURE_KEYS) {
                 v.push(format!("unknown property {k:?} on fixtures[{i}]"));
             }
@@ -549,11 +551,8 @@ pub fn kind_identity_parts(
 
 pub fn semantic_violations(rec: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&rec["schema_version"]) != "frf-receipt-v20" {
-        v.push(format!(
-            "schema_version is {:?}, expected frf-receipt-v20",
-            rec["schema_version"]
-        ));
+    if let Err(e) = crate::schema::admit("receipt", as_str(&rec["schema_version"])) {
+        v.push(e);
     }
     let fixtures = rec["fixtures"].as_array().cloned().unwrap_or_default();
     if fixtures.len() != 1 {
@@ -1175,11 +1174,10 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
             ));
         }
         if let Some(closure) = artifact.get("native_runtime").filter(|n| !n.is_null()) {
-            if as_str(&closure["schema_version"]) != "frf-runtime-closure-v1" {
-                v.push(format!(
-                    "the {who} runtime closure has unsupported schema_version {:?}",
-                    closure["schema_version"]
-                ));
+            if let Err(e) =
+                crate::schema::admit("runtime-closure", as_str(&closure["schema_version"]))
+            {
+                v.push(format!("the {who} runtime closure: {e}"));
             }
             let expected = crate::rederive::runtime_closure_identity(closure);
             if expected != as_str(&closure["cid"]) {
@@ -1218,11 +1216,10 @@ pub fn semantic_violations(rec: &Value) -> Vec<String> {
     // artifact names a protocol role, the artifacts are strictly sorted by
     // path, and the cid rederives from the document's own artifacts.
     if let Some(closure) = rec.get("execution_context").filter(|n| !n.is_null()) {
-        if as_str(&closure["schema_version"]) != "frf-execution-context-v1" {
-            v.push(format!(
-                "the execution-context closure has unsupported schema_version {:?}",
-                closure["schema_version"]
-            ));
+        if let Err(e) =
+            crate::schema::admit("execution-context", as_str(&closure["schema_version"]))
+        {
+            v.push(format!("the execution-context closure: {e}"));
         }
         if let Some(artifacts) = closure["artifacts"].as_array() {
             let mut prev: Option<&str> = None;
@@ -1578,11 +1575,8 @@ pub fn claim_ir(rec: &Value, bundle: &Path) -> ClaimIr {
 /// `detached-*` family.
 pub fn detached_semantic_violations(doc: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    if as_str(&doc["schema_version"]) != "frf-detached-objects-v1" {
-        v.push(format!(
-            "schema_version is {:?}, expected frf-detached-objects-v1",
-            doc["schema_version"]
-        ));
+    if let Err(e) = crate::schema::admit("detached-objects", as_str(&doc["schema_version"])) {
+        v.push(e);
     }
     if as_str(&doc["policy"]).is_empty() {
         v.push("policy must be non-empty".to_string());

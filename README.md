@@ -253,6 +253,7 @@ not these tables.
 | frf-normalizer-response-v1 | active |  |
 | frf-normalizer-result-v1 | active |  |
 | frf-produced-v1 | active |  |
+| frf-protocol-registry-v1 | active |  |
 | frf-provenance-v3 | active |  |
 | frf-publication-manifest-v1 | active |  |
 | frf-receipt-v12 | superseded |  |

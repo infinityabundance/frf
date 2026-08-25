@@ -313,11 +313,9 @@ pub fn interpret(
     response: &ComparatorResponse,
     expected_request_id: &str,
 ) -> Result<ComparatorOutcome> {
-    if response.schema_version != crate::model::SCHEMA_COMPARATOR_RESPONSE {
+    if let Err(e) = crate::schema::admit("comparator-response", &response.schema_version) {
         return Err(FrfError::new(format!(
-            "comparator response has unsupported schema version {:?} (expected {})",
-            response.schema_version,
-            crate::model::SCHEMA_COMPARATOR_RESPONSE
+            "comparator response has unsupported schema version: {e}"
         )));
     }
     if response.request_id != expected_request_id {

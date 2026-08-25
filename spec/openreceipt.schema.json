@@ -27,7 +27,18 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "frf-receipt-v20"
+      "description": "The registered receipt-family schema the document carries. The SHAPE below is the current (v20) shape; per spec/versioning.md §2 a document of this shape carrying any REGISTERED receipt-family version (active or superseded) is admissible — a genuinely older SHAPE fails the shape rules below and is refused.",
+      "enum": [
+        "frf-receipt-v5",
+        "frf-receipt-v7",
+        "frf-receipt-v12",
+        "frf-receipt-v15",
+        "frf-receipt-v16",
+        "frf-receipt-v17",
+        "frf-receipt-v18",
+        "frf-receipt-v19",
+        "frf-receipt-v20"
+      ]
     },
     "run": {
       "type": "string"
