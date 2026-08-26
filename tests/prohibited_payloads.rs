@@ -186,6 +186,8 @@ fn assert_stream_admissible(rel: &str, probe: &str, stream: &str, bytes: &[u8]) 
         ("heartbleed", "stderr") => hb_stderr_admissible(bytes),
         ("goto-fail", "stdout") => gf_stdout_admissible(bytes),
         ("goto-fail", "stderr") => gf_stderr_admissible(bytes),
+        ("log4shell", "stdout") => l4s_stdout_admissible(bytes),
+        ("log4shell", "stderr") => l4s_stderr_admissible(bytes),
         (probe, _) => {
             panic!(
                 "captured stream {rel} belongs to probe {probe}, which has no declared \
@@ -397,6 +399,62 @@ fn gf_stderr_admissible(bytes: &[u8]) -> bool {
         return is_lower_hex(got) && expected.len() == 2 && is_lower_hex(expected);
     }
     false
+}
+
+/// Log4Shell stdout: the deterministic lookup verdict (Log4ShellProbe.java
+/// lines 137-146) — exactly `JNDI_LOOKUP_NOT_ATTEMPTED` (no lookup was
+/// attempted) or `JNDI_LOOKUP_ATTEMPTED` followed by the captured
+/// StatusLogger diagnostic: the `Error looking up JNDI resource [uri].`
+/// line and, when the throwable carried one, its summary
+/// `javax.naming.CommunicationException: endpoint`. Every line is
+/// newline-terminated; the uri is the lookup expression's target (no
+/// newlines or brackets), the endpoint the resolved host:port.
+fn l4s_stdout_admissible(bytes: &[u8]) -> bool {
+    if bytes == b"JNDI_LOOKUP_NOT_ATTEMPTED\n" {
+        return true;
+    }
+    let Some(rest) = bytes.strip_prefix(b"JNDI_LOOKUP_ATTEMPTED\n") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(b"Error looking up JNDI resource [") else {
+        return false;
+    };
+    let Some(close) = rest.iter().position(|&b| b == b']') else {
+        return false;
+    };
+    let (uri, after) = rest.split_at(close);
+    let after = &after[1..]; // skip the ']'
+    if uri.is_empty() || uri.contains(&b'\n') || uri.contains(&b'[') {
+        return false;
+    }
+    let Some(after) = after.strip_prefix(b".\n") else {
+        return false;
+    };
+    if after.is_empty() {
+        return true;
+    }
+    // The optional throwable summary: `javax.naming.CommunicationException:
+    // <endpoint>` — the resolved host:port (no newlines).
+    let Some(endpoint) = after.strip_prefix(b"javax.naming.CommunicationException: ") else {
+        return false;
+    };
+    let Some(endpoint) = endpoint.strip_suffix(b"\n") else {
+        return false;
+    };
+    !endpoint.is_empty()
+        && !endpoint.contains(&b'\n')
+        && endpoint
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b':' | b'-' | b'_' | b'/'))
+}
+
+/// Log4Shell stderr: the logged message line — the ConsoleAppender writes
+/// `%m%n` to SYSTEM_ERR (Log4ShellProbe.java), so stderr is exactly one
+/// newline-terminated line whose content is the fixture-declared message
+/// suffix. The constraint is the single-line shape: a multi-line stream
+/// (any raw dump, any additional diagnostic) is refused.
+fn l4s_stderr_admissible(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.ends_with(b"\n") && !bytes[..bytes.len() - 1].contains(&b'\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +687,65 @@ fn goto_fail_stderr_vocabulary() {
     ));
     // The error lines are a closed set.
     assert!(!gf_stderr_admissible(b"tls: something new\n"));
+}
+
+#[test]
+fn log4shell_stdout_vocabulary() {
+    // The two deterministic verdict shapes.
+    assert!(l4s_stdout_admissible(b"JNDI_LOOKUP_NOT_ATTEMPTED\n"));
+    assert!(l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [ldap://127.0.0.1:1/a].\njavax.naming.CommunicationException: 127.0.0.1:1\n"
+    ));
+    // The diagnostic line alone (a throwable-less diagnostic) is admissible.
+    assert!(l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [ldap://127.0.0.1:1/a].\n"
+    ));
+    // A raw dump is refused: the verdict line is exact, not a prefix.
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_NOT_ATTEMPTED\n\x00\x01\x02\n"
+    ));
+    assert!(!l4s_stdout_admissible(&vec![b'J'; 16384]));
+    assert!(!l4s_stdout_admissible(b"JNDI_LOOKUP_ATTEMPTED\n"));
+    // The verdicts are a closed set.
+    assert!(!l4s_stdout_admissible(b"JNDI_LOOKUP_INTERRUPTED\n"));
+    assert!(!l4s_stdout_admissible(b"JNDI_LOOKUP_NOT_ATTEMPTED")); // no trailing newline
+                                                                   // The diagnostic line is the probe's exact phrasing with a bracketed uri.
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource ldap://127.0.0.1:1/a.\n"
+    ));
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [ldap://127.0.0.1:1/a]\n"
+    ));
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [].\n"
+    ));
+    // A nested or multiline uri is refused.
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [a[b]].\n"
+    ));
+    // The throwable summary is the exact class + a single-line endpoint.
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [ldap://127.0.0.1:1/a].\njava.io.IOException: boom\n"
+    ));
+    assert!(!l4s_stdout_admissible(
+        b"JNDI_LOOKUP_ATTEMPTED\nError looking up JNDI resource [ldap://127.0.0.1:1/a].\njavax.naming.CommunicationException: \n"
+    ));
+}
+
+#[test]
+fn log4shell_stderr_vocabulary() {
+    // The logged message line (single line, newline-terminated).
+    assert!(l4s_stderr_admissible(
+        b"connectivity check ${jndi:ldap://127.0.0.1:1/a}\n"
+    ));
+    assert!(l4s_stderr_admissible(b"nnectivity check ok\n"));
+    // A multi-line stream (any raw dump, any extra diagnostic) is refused.
+    assert!(!l4s_stderr_admissible(&vec![0x90u8; 8192]));
+    assert!(!l4s_stderr_admissible(
+        b"connectivity check ${jndi:ldap://127.0.0.1:1/a}\n\x00\x01\n"
+    ));
+    assert!(!l4s_stderr_admissible(b""));
+    assert!(!l4s_stderr_admissible(b"no trailing newline"));
 }
 
 #[test]
