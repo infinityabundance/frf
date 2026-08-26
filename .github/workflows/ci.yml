@@ -108,7 +108,7 @@ jobs:
       - name: The external empirical program — reconstructed reproducers of historical defects across domains
         run: |
           cargo xtask external-experiment golden/work/external-experiment.json
-      - name: The external empirical program v2 — trajectory axes over the reconstructed reproducers: version ladders, environment matrices, authority transitions
+      - name: "The external empirical program v2 — trajectory axes over the reconstructed reproducers: version ladders, environment matrices, authority transitions"
         run: |
           cargo xtask external-experiment-v2 golden/work/external-experiment-v2.json
       - name: The OCI execution profile — the side runs inside the digest-pinned image
@@ -143,6 +143,8 @@ jobs:
           echo "  ✓ detached-object references resolve structurally"
           echo "  ℹ empirical replay intentionally not executed in hosted CI"
           cargo test --test v3_publication_integrity -- --nocapture
+          cargo test --test v3_goto_fail_publication
+          cargo test --test v4_log4shell_publication
           cargo test --test prohibited_payloads
 
   go-verifier:
