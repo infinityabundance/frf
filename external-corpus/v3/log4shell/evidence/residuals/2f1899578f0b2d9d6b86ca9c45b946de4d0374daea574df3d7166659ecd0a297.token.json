@@ -1,0 +1,1 @@
+{"authority":"ref-log4j-2.17.1","blocks_claims":["jndi jndi.lookup parity"],"disposition":"open","kind":"text","magnitude":"observed","next_court":"jndi-message-minimize","residual_id":"2f1899578f0b2d9d6b86ca9c45b946de4d0374daea574df3d7166659ecd0a297","schema_version":"frf-token-v1","scope":"jndi","surface":"jndi-scan","token":"text/jndi-scan/observed/open"}
