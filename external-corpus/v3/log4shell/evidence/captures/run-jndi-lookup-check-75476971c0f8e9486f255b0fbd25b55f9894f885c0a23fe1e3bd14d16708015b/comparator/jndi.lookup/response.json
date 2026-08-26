@@ -1,0 +1,1 @@
+{"equivalent":false,"failure":null,"indeterminate":false,"request_id":"710920714d07bc6f947aa156cd43c81fcbcc866927905afff638319c9a016379","residuals":[{"raw_candidate":"JNDI_LOOKUP_ATTEMPTED","raw_reference":"JNDI_LOOKUP_NOT_ATTEMPTED","surface":"jndi-scan"}],"schema_version":"frf-comparator-response-v2"}

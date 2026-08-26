@@ -1,11 +1,13 @@
 court:
-  id: jndi-check
+  id: jndi-lookup-check
   question: >-
     For the JNDI-lookup trigger in fixture family log4shell, does the
-    candidate's Log4j preserve the fixed reference's stdout and exit class?
+    candidate's logging stack perform the lookup exactly when the fixed
+    reference performs it (CVE-2021-44228) — judged SEMANTICALLY on the
+    jndi.lookup observable, never by a byte diff?
   falsifier: >-
-    The candidate's Log4j performs the JNDI lookup at log time
-    (CVE-2021-44228), diverging on stdout.
+    The candidate resolves a JNDI lookup expression in a log message at log
+    time where the fixed reference logs it literally.
   authority: ref-log4j-2.17.1
   candidate:
     name: cand-log4j-2.14.1
@@ -13,13 +15,9 @@ court:
     build_profile: release
     path: {candidate}
   fixture:
-    id: message.conf
-    path: fixtures/{fixture}
+    id: defect.conf
+    path: fixtures/defect.conf
     arguments: ["{fixture}"]
-  # The DECLARED execution environment: the sides run under EXACTLY this
-  # environment (the ambient host environment is never inherited — it is
-  # not evidence). PATH resolves `java` for the launcher; the
-  # environment-matrix coordinates are declared below.
   environment:
     PATH: /usr/bin:/bin
   environment_points:
@@ -35,6 +33,42 @@ court:
   admissibility_envelope:
     fixture_family: jndi
     platforms: ["x86_64-linux"]
-    observables: [stdout, exit]
+    observables: [jndi.lookup]
     normalizers: []
     replay_scope: single-run
+comparators:
+  - axis: jndi.lookup
+    relation: eq
+    extractor: jndi-scan
+    residual_classifier: text
+    relation_version: "v1"
+    program: comparators/jndi-lookup.py
+minimizers:
+  - id: jndi-message-minimize
+    relation: reduce-message-suffix
+    relation_version: "v1"
+    program: minimizers/jndi-message.py
+mutations:
+  - id: jndi-inject
+    relation: seed-jndi-lookup
+    relation_version: "v1"
+    target_axes: [jndi.lookup]
+    program: mutations/jndi-inject.py
+# The capture surface — the publication boundary, declared per observed
+# stream (spec/publication-surface.md). The probe's streams are pure verdict
+# lines (the lookup verdict on stdout, the identical log line on stderr) —
+# no lookup payloads or class-path internals ever reach an observed stream.
+# The declaration makes that contract part of the OBSERVATION.
+capture_surface:
+  - side: candidate
+    stream: stdout
+    policy: inline
+  - side: reference
+    stream: stdout
+    policy: inline
+  - side: candidate
+    stream: stderr
+    policy: inline
+  - side: reference
+    stream: stderr
+    policy: inline

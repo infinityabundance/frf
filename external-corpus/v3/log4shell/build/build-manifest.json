@@ -1,0 +1,15 @@
+{
+ "schema_version": "frf-v3-build-manifest-v1",
+ "case": "log4shell",
+ "description": "CVE-2021-44228 (Apache Log4j 'Log4Shell') semantic study: the probe logs a fixture message through the pinned Log4j release under test and reports whether the JNDI lookup error path fired. The probe is compiled BYTE-REPRODUCIBLY inside the shared pinned builder image (external-corpus/v3/build/Containerfile: fedora:41 by OCI digest + exact package NEVRAs + the pinned java-17-openjdk-devel; fixed jar entry timestamps) and the log4j jars are Maven Central artifacts pinned by SHA-256 — both in external-corpus/v3/build/build-manifest.json (the shared v3 corpus manifest, which pins every produced artifact: probe.jar, the eight jars, the four launchers). The produced artifacts are NOT committed; the reconstruction recipe (same source bytes + same pinned image + the recorded flags) reproduces the pinned bytes exactly.",
+ "sources": [
+  {
+   "name": "Log4ShellProbe.java",
+   "sha256": "4557a511487ce06392cc91aaecc3d83e255f1bfd6cd53673f2933e5c99902df1",
+   "path": "external-corpus/v3/log4shell/src/Log4ShellProbe.java",
+   "provenance_kind": "synthetic-model",
+   "provenance": "The probe is a LOCAL SYNTHETIC MODEL of the CVE-2021-44228 observable (a JNDI lookup expression resolved at log time): it logs the fixture message through the REAL pinned Log4j release under test and reports whether the lookup error path fired. It is not and never was Apache Log4j or any historical artifact, and no upstream repository URL is claimed for it. The study models the defect's observable behavior through the real affected stacks, not the historical artifact."
+  }
+ ],
+ "note": "artifact SHA-256 pins live in external-corpus/v3/build/build-manifest.json (the shared v3 corpus manifest): probe.jar, the eight log4j jars (2.14.1 / 2.15.0 / 2.16.0 / 2.17.1 x api/core), and the four launchers (run-vuln.sh / run-v150.sh / run-v160.sh / run-fixed.sh) — 13 log4shell artifacts."
+}

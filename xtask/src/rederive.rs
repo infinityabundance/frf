@@ -605,6 +605,7 @@ pub fn kappa_next(residual: &Value) -> String {
             "leak-minimize".to_string()
         }
         "tls.verdict" => "ssl-handshake-minimize".to_string(),
+        "jndi.lookup" => "jndi-message-minimize".to_string(),
         _ => "none".to_string(),
     }
 }
@@ -626,6 +627,7 @@ pub fn expected_token(residual: &Value) -> String {
             ("verdict-scan".to_string(), "observed".to_string())
         }
         "memory.leak.seeded_canary" => ("canary-scan".to_string(), "observed".to_string()),
+        "jndi.lookup" => ("jndi-scan".to_string(), "observed".to_string()),
         other => (format!("{other}-divergence"), "observed".to_string()),
     };
     format!(

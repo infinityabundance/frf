@@ -1,0 +1,57 @@
+court:
+  id: jndi-lookup-check-clean
+  question: >-
+    For the clean message in fixture family log4shell, does the candidate's
+    logging stack perform the lookup exactly when the fixed reference
+    performs it (CVE-2021-44228) — judged SEMANTICALLY on the jndi.lookup
+    observable, never by a byte diff?
+  falsifier: >-
+    A lookup is performed for a message that contains no lookup expression.
+  authority: ref-log4j-2.17.1
+  candidate:
+    name: cand-log4j-2.14.1
+    version_or_commit: "2.14.1"
+    build_profile: release
+    path: {candidate}
+  fixture:
+    id: clean.conf
+    path: fixtures/clean.conf
+    arguments: ["{fixture}"]
+  environment:
+    PATH: /usr/bin:/bin
+  environment_points:
+    utc:
+      TZ: UTC
+      LANG: C
+    new-york:
+      TZ: America/New_York
+      LANG: en_US.UTF-8
+    tokyo:
+      TZ: Asia/Tokyo
+      LANG: ja_JP.UTF-8
+  admissibility_envelope:
+    fixture_family: jndi
+    platforms: ["x86_64-linux"]
+    observables: [jndi.lookup]
+    normalizers: []
+    replay_scope: single-run
+comparators:
+  - axis: jndi.lookup
+    relation: eq
+    extractor: jndi-scan
+    residual_classifier: text
+    relation_version: "v1"
+    program: comparators/jndi-lookup.py
+capture_surface:
+  - side: candidate
+    stream: stdout
+    policy: inline
+  - side: reference
+    stream: stdout
+    policy: inline
+  - side: candidate
+    stream: stderr
+    policy: inline
+  - side: reference
+    stream: stderr
+    policy: inline

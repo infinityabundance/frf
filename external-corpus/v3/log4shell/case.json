@@ -7,12 +7,14 @@
   "domain": "structured-runtime",
   "defect": "A JNDI lookup in a log message is performed at log time, contacting an attacker-controlled LDAP endpoint. The vulnerable release is Log4j 2.14.1; the fixed release is 2.17.1 (JNDI lookups disabled by default). The probe (src/Log4ShellProbe.java) logs a fixture message containing '${jndi:ldap://127.0.0.1:1/a}' through Log4j 2 and reports whether the lookup error path fired.",
   "build": {
-    "recipe": "build/build-all.sh (Maven Central jars, SHA-256-pinned)",
+    "recipe": "build/build-all.sh (Maven Central jars, SHA-256-pinned; the probe is compiled in the pinned-JDK container)",
     "vulnerable": "2.14.1",
+    "intermediate": ["2.15.0", "2.16.0"],
     "fixed": "2.17.1"
   },
   "sides": {
     "vulnerable": "builds/run-vuln.sh",
+    "intermediate": ["builds/run-v150.sh", "builds/run-v160.sh"],
     "fixed": "builds/run-fixed.sh"
   },
   "authority_name": "ref-log4j",
@@ -23,6 +25,7 @@
   },
   "trigger": "jndi-lookup",
   "observables": ["stdout", "exit"],
+  "semantic_axis": "jndi.lookup",
   "challenge": "builtin",
   "clean_control": {
     "manifest": "manifest-clean.yaml",

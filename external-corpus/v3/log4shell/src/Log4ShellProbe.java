@@ -74,6 +74,35 @@ public final class Log4ShellProbe {
                 .findFirst()
                 .orElse("");
 
+        // The DECLARED message-suffix length (spec/reduction.md — the
+        // ordered-integer domain projection of the jndi.lookup trigger): if
+        // the fixture's first line begins with a `len=N ` directive, the
+        // message is the LAST N characters of the line. The minimizer reduces
+        // N to the empirical floor at which the lookup trigger still fires
+        // (the bare lookup token); one character below — the token without
+        // its closing brace — is left literal by the substitutor and the
+        // lookup is never attempted. A malformed directive is REFUSED (exit
+        // 2), never silently mis-evaluated; a line without a directive is the
+        // whole message (the probe remains a general instrument).
+        String message = line;
+        if (line.startsWith("len=")) {
+            int space = line.indexOf(' ');
+            int n = -1;
+            if (space > 4) {
+                try {
+                    n = Integer.parseInt(line.substring(4, space));
+                } catch (NumberFormatException e) {
+                    n = -1;
+                }
+            }
+            if (n < 0) {
+                System.err.println("Log4ShellProbe: malformed len= directive in fixture " + args[0]);
+                System.exit(2);
+            }
+            int take = Math.min(n, line.length());
+            message = line.substring(line.length() - take);
+        }
+
         CapturingListener capture = new CapturingListener();
         StatusLogger.getLogger().registerListener(capture);
 
@@ -94,7 +123,7 @@ public final class Log4ShellProbe {
         LoggerContext ctx = Configurator.initialize(builder.build());
 
         Logger logger = LogManager.getLogger("frf.probe");
-        logger.info(line);
+        logger.info(message);
         System.out.flush();
         System.err.flush();
         ctx.stop();

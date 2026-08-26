@@ -10,6 +10,7 @@
 //! | stdout  | stdout-routing      | first-line-token-change | cli-stdout-minimize     | byte-identical stdout               |
 //! | tls.heartbeat.illegal_response | verdict-scan | observed    | leak-minimize           | `{scope} tls.heartbeat.illegal_response parity` |
 //! | memory.leak.seeded_canary | canary-scan  | observed                | leak-minimize           | `{scope} memory.leak.seeded_canary parity` |
+//! | jndi.lookup | jndi-scan | observed               | jndi-message-minimize   | `{scope} jndi.lookup parity` |
 //! | (other) | `{axis}-divergence` | observed                | none                    | `{scope} {axis} parity`             |
 //!
 //! The generic row is deterministic and honest: an axis the built-in router
@@ -78,6 +79,16 @@ pub fn token_shape(axis: &ObservableId) -> TokenShape {
             surface: "verdict-scan".to_string(),
             magnitude: "observed".to_string(),
             next_court: "ssl-handshake-minimize".to_string(),
+        },
+        // The Log4Shell lookup axis (external-corpus/v3/log4shell): the
+        // THIRD semantic domain — a structured-runtime observable (did the
+        // logging stack perform the JNDI lookup?), not an information leak
+        // and not a TLS verdict. Routed like the built-ins, so the declared
+        // minimizer (`jndi-message-minimize`) can serve its residuals.
+        "jndi.lookup" => TokenShape {
+            surface: "jndi-scan".to_string(),
+            magnitude: "observed".to_string(),
+            next_court: "jndi-message-minimize".to_string(),
         },
         other => TokenShape {
             surface: format!("{other}-divergence"),

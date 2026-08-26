@@ -1,122 +1,148 @@
 {
-  "about": "Provenance of the PINNED v3 corpus artifacts (NOT committed \u2014 materialized by build/build-all.sh; a fresh clone builds them once; CI does not build them): pinned upstream sources, a digest- and version-pinned toolchain (the container base pinned by OCI manifest digest, the exact package NEVRAs, and a pinned JDK \u2014 see Containerfile), the compat patches, and the SHA-256 of every produced artifact. Rebuilding with build/build-all.sh from these exact inputs reproduces the PINNED bytes: rebuilt and verified byte-for-byte on 2026-08-23 for all 16 artifacts: the seven heartbleed probes changed because the probe source gained the RAW-MEMORY PUBLICATION BOUNDARY (it now plants a deterministic synthetic canary and emits a projection \u2014 len, sha256, canary, fraction \u2014 and never writes the echoed process memory to any observed stream); every untouched artifact (bash 4.3.0/4.3.30, the log4j jars, probe.jar, the launcher scripts) reproduced byte-for-byte from the same pinned recipe. The recipe's only live input is the FEDORA PACKAGE REPOSITORY itself (live metadata, not a frozen snapshot): the NEVRA pins make the toolchain deterministic while the repository continues to serve those exact packages, so a rebuild needs network for dnf exactly as it needs network for the source fetch. A repository-snapshot-pinned build or a published OCI image by digest would remove even that dependency; the PINNED artifact hashes remain the corpus's ground truth either way. The seven probes changed again on 2026-08-23 (rebuild #2) because the probe source made a failed fork a RETRYABLE load race: under memory-commit pressure (Committed_AS over CommitLimit) fork(2) can fail transiently; the probe now retries the whole flow silently like its other load races, so a court run can never fabricate an hb: indeterminate (fork) divergence.",
-  "artifacts": {
-    "heartbleed/builds/hb-1.0.1a": "69714ba0e9c614997a9a2fb92de58bf36ffa33a9b447fef9847e2c1803ec9e7e",
-    "heartbleed/builds/hb-1.0.1b": "68e663ba2f27216e9b9b39905dd92c2ef0334afd4db58829300a76ee92dd0a73",
-    "heartbleed/builds/hb-1.0.1c": "fde8a3371e818c8ffb9d26d17cdca00ef98fc3268702bb5fa4b46268c60c05a5",
-    "heartbleed/builds/hb-1.0.1d": "2238a01d7366adf91700d00fa05f6f90cbea793072346140e1ca76fb9d1920ae",
-    "heartbleed/builds/hb-1.0.1e": "45e07132cd1a497a422c47c6c6aecca8e3f041d56d8efd6b5b456b449b1f5346",
-    "heartbleed/builds/hb-1.0.1f": "718fc54fc4129413de42e4e6b567431f654fcb8590459ae9bd67d4ee217ba810",
-    "heartbleed/builds/hb-1.0.1g": "cd059abe7075c1a6e468d5c49574dffdace85ac225c1131c49baa37f0cafe6ee",
-    "log4shell/builds/lib/log4j-api-2.14.1.jar": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
-    "log4shell/builds/lib/log4j-api-2.17.1.jar": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
-    "log4shell/builds/lib/log4j-core-2.14.1.jar": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
-    "log4shell/builds/lib/log4j-core-2.17.1.jar": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
-    "log4shell/builds/probe.jar": "a5ef8071096e32b981c209b7e139cef95a30f7839691bc6dab05916ccd0b2b47",
-    "log4shell/builds/run-fixed.sh": "8cb2e2952c016efdb86008837c0c5f598b62398bdd0094cd8b62c0dc6ecdc1be",
-    "log4shell/builds/run-vuln.sh": "6df0b81f1eb312af8e9791c7518021bd0ebea37ed35ca66efb69237eccc0afef",
-    "shellshock/builds/bash-4.3.0": "68f22f8e1f9b6231dd6dc411f2e16e9be8aa74c7ee35a68aef4fa8bf81b7c98a",
-    "shellshock/builds/bash-4.3.30": "9270b1e7b8f963ebf1365244af6c537e069c1d2d1ed7b962082aa3053edae775"
+ "about": "Provenance of the PINNED v3 corpus artifacts (NOT committed — materialized by build/build-all.sh; a fresh clone builds them once; CI does not build them): pinned upstream sources, a digest- and version-pinned toolchain (the container base pinned by OCI manifest digest, the exact package NEVRAs, and a pinned JDK — see Containerfile), the compat patches, and the SHA-256 of every produced artifact. Rebuilding with build/build-all.sh from these exact inputs reproduces the PINNED bytes: rebuilt and verified byte-for-byte on 2026-08-23 for all 16 artifacts: the seven heartbleed probes changed because the probe source gained the RAW-MEMORY PUBLICATION BOUNDARY (it now plants a deterministic synthetic canary and emits a projection — len, sha256, canary, fraction — and never writes the echoed process memory to any observed stream); every untouched artifact (bash 4.3.0/4.3.30, the log4j jars, probe.jar, the launcher scripts) reproduced byte-for-byte from the same pinned recipe. The recipe's only live input is the FEDORA PACKAGE REPOSITORY itself (live metadata, not a frozen snapshot): the NEVRA pins make the toolchain deterministic while the repository continues to serve those exact packages, so a rebuild needs network for dnf exactly as it needs network for the source fetch. A repository-snapshot-pinned build or a published OCI image by digest would remove even that dependency; the PINNED artifact hashes remain the corpus's ground truth either way. The seven probes changed again on 2026-08-23 (rebuild #2) because the probe source made a failed fork a RETRYABLE load race: under memory-commit pressure (Committed_AS over CommitLimit) fork(2) can fail transiently; the probe now retries the whole flow silently like its other load races, so a court run can never fabricate an hb: indeterminate (fork) divergence. The log4shell pin set was extended on 2026-08-26 for the 0.1.85 detached case study: the probe (src/Log4ShellProbe.java) gained the `len=N ` message-suffix directive — the ordered-integer domain projection of the jndi.lookup trigger, so the minimizer can reduce the message to the empirical floor (the bare lookup token) — and the intermediate CVE-2021-44228 lifecycle release points (log4j 2.15.0, the message-lookup mitigation, and 2.16.0, the JNDI removal) were pinned from Maven Central alongside the existing 2.14.1 and 2.17.1 jars; the rebuilt probe.jar and the two new launchers (run-v150.sh, run-v160.sh) are pinned below. All 22 artifact pins were verified byte-for-byte on 2026-08-26.",
+ "artifacts": {
+  "heartbleed/builds/hb-1.0.1a": "69714ba0e9c614997a9a2fb92de58bf36ffa33a9b447fef9847e2c1803ec9e7e",
+  "heartbleed/builds/hb-1.0.1b": "68e663ba2f27216e9b9b39905dd92c2ef0334afd4db58829300a76ee92dd0a73",
+  "heartbleed/builds/hb-1.0.1c": "fde8a3371e818c8ffb9d26d17cdca00ef98fc3268702bb5fa4b46268c60c05a5",
+  "heartbleed/builds/hb-1.0.1d": "2238a01d7366adf91700d00fa05f6f90cbea793072346140e1ca76fb9d1920ae",
+  "heartbleed/builds/hb-1.0.1e": "45e07132cd1a497a422c47c6c6aecca8e3f041d56d8efd6b5b456b449b1f5346",
+  "heartbleed/builds/hb-1.0.1f": "718fc54fc4129413de42e4e6b567431f654fcb8590459ae9bd67d4ee217ba810",
+  "heartbleed/builds/hb-1.0.1g": "cd059abe7075c1a6e468d5c49574dffdace85ac225c1131c49baa37f0cafe6ee",
+  "log4shell/builds/lib/log4j-api-2.14.1.jar": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
+  "log4shell/builds/lib/log4j-api-2.17.1.jar": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
+  "log4shell/builds/lib/log4j-core-2.14.1.jar": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
+  "log4shell/builds/lib/log4j-core-2.17.1.jar": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
+  "log4shell/builds/probe.jar": "baf138e3411f55a08f7758cd626c45e7216d08323c2ebe86842f2a67cb2dd42f",
+  "log4shell/builds/run-fixed.sh": "8cb2e2952c016efdb86008837c0c5f598b62398bdd0094cd8b62c0dc6ecdc1be",
+  "log4shell/builds/run-vuln.sh": "6df0b81f1eb312af8e9791c7518021bd0ebea37ed35ca66efb69237eccc0afef",
+  "shellshock/builds/bash-4.3.0": "68f22f8e1f9b6231dd6dc411f2e16e9be8aa74c7ee35a68aef4fa8bf81b7c98a",
+  "shellshock/builds/bash-4.3.30": "9270b1e7b8f963ebf1365244af6c537e069c1d2d1ed7b962082aa3053edae775",
+  "log4shell/builds/run-v150.sh": "a751209e6a947b42e52047d7d6dce9ef2c86daf92f86ba8243afc891f389b503",
+  "log4shell/builds/run-v160.sh": "3ada12786a77c3a2de102bc8eb929cf55fb7b10f5f64bcdcb550f97b5014d82d",
+  "log4shell/builds/lib/log4j-api-2.15.0.jar": "c8c33e7e8e05496dae69cf0caac8c3092cffd937a164526e92922d2d566d0a55",
+  "log4shell/builds/lib/log4j-core-2.15.0.jar": "419a8512895971b7b4f4f33e620d361254e5c9552b904b0474b09ddd4a6a220b",
+  "log4shell/builds/lib/log4j-api-2.16.0.jar": "cbbcef7b57fef115a788395e6e11cdf92c01c1d606652c493d40d3c81766b9fc",
+  "log4shell/builds/lib/log4j-core-2.16.0.jar": "5d241620b10e3f1475320bc9552cf7bcfa27eeb9b1b6a891449e76db4b4a02a8"
+ },
+ "compat_patches": [
+  {
+   "impact": "build-only, no behavior",
+   "patch": "CFLAGS=-std=gnu89 (era-correct C semantics; gcc 14+ defaults to C23 where f() means f(void))",
+   "target": "bash 4.3.x"
   },
-  "compat_patches": [
-    {
-      "impact": "build-only, no behavior",
-      "patch": "CFLAGS=-std=gnu89 (era-correct C semantics; gcc 14+ defaults to C23 where f() means f(void))",
-      "target": "bash 4.3.x"
-    },
-    {
-      "impact": "terminal-UI code only, never linked into the probe",
-      "patch": "sed 's/-DTERMIO //' Configure; sed 's/# define TERMIO/# define TERMIOS/' crypto/ui/ui_openssl.c (termio.h removed from modern glibc)",
-      "target": "openssl 1.0.1.x"
-    },
-    {
-      "impact": "version-string cosmetics only",
-      "patch": "rm -f .build before make (deterministic build-version suffix)",
-      "target": "bash 4.3.x"
-    }
-  ],
-  "note": "The heartbleed probes (heartbleed/src/hb.c) are linked against each library set with -no-pie (the container archives are built without -fPIC). The probe extension since 0.1.68: the fixture marker carries an optional claimed payload length (\"malformed 0x4000\") so a minimizer can reduce the claim, the leak classifier is semantic (any heartbeat response to the malformed trigger is the leak, RFC 6520 \u00a74), and the leaked bytes are dumped to stdout as observable content (the memory.leak.sensitive axis). OpenSSL is built serial (-j1): the 1.0.1 build system merges crypto subdirs into one libcrypto.a with concurrent ar invocations, which -jN races into a truncated archive on many-core hosts.",
-  "schema_version": "frf-v3-build-manifest-v1",
-  "sources": [
-    {
-      "name": "bash-4.3.0 (pristine upstream)",
-      "sha256": "b2fe79ddf9e7abdb4695e3070afa866d2a94a58d1cc9d731585330c753815491",
-      "url": "https://snapshot.debian.org/archive/debian/20140304T040604Z/pool/main/b/bash/bash_4.3.orig.tar.gz"
-    },
-    {
-      "name": "bash-4.3.30",
-      "sha256": "317881019bbf2262fb814b7dd8e40632d13c3608d2f237800a8828fbb8a640dd",
-      "url": "https://ftp.gnu.org/gnu/bash/bash-4.3.30.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1a",
-      "sha256": "d3487e09d891c772cf946273a3bb0ca47479e7941be6d822274320e7cfcc361b",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1a.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1b",
-      "sha256": "1187bf2d5cdf0b286b951bf5c777aa97855cd7db24fdb9604cb557c8b1d7364b",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1b.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1c",
-      "sha256": "2a9eb3cd4e8b114eb9179c0d3884d61658e7d8e8bf4984798a5f5bd48e325ebe",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1c.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1d",
-      "sha256": "88a423f9b08a994054583691b968815875580e12df754e881d7cfe9f1bd1f49d",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1d.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1e",
-      "sha256": "f74f15e8c8ff11aa3d5bb5f276d202ec18d7246e95f961db76054199c69c1ae3",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1e.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1f",
-      "sha256": "6cc2a80b17d64de6b7bac985745fdaba971d54ffd7d38d3556f998d7c0c9cb5a",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1f.tar.gz"
-    },
-    {
-      "name": "openssl-1.0.1g",
-      "sha256": "53cb818c3b90e507a8348f4f5eaedb05d8bfe5358aabb508b7263cc670c3e028",
-      "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1g.tar.gz"
-    },
-    {
-      "name": "log4j-api-2.14.1",
-      "sha256": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
-      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.14.1/log4j-api-2.14.1.jar"
-    },
-    {
-      "name": "log4j-core-2.14.1",
-      "sha256": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
-      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.14.1/log4j-core-2.14.1.jar"
-    },
-    {
-      "name": "log4j-api-2.17.1",
-      "sha256": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
-      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.17.1/log4j-api-2.17.1.jar"
-    },
-    {
-      "name": "log4j-core-2.17.1",
-      "sha256": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
-      "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.17.1/log4j-core-2.17.1.jar"
-    }
-  ],
-  "toolchain": {
-    "base_image": "fedora@sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366 (fedora:41 as of 2026-08-22)",
-    "packages": [
-      "gcc-14.3.1-4.fc41.x86_64",
-      "make-4.4.1-8.fc41.x86_64",
-      "perl-5.40.3-517.fc41.x86_64",
-      "java-17-openjdk-devel-17.0.17.0.10-1.fc41.x86_64"
-    ],
-    "glibc": "2.40",
-    "image_digest": "sha256:4153627ff8eed08e7501e5488987247cc0ec8fa1985938b1fa02c3c26539dcb6",
-    "image_id": "f38da93cada3e47ca6552971236eb4316e52c4cd684cdcff97a5494d18afb9ac",
-    "java": "openjdk 17.0.17 (2025-10-21) \u2014 the PINNED in-image JDK the probe is compiled with; no host javac is involved",
-    "host_kernel": "7.1.8-1-cachyos",
-    "reproducibility": "verified 2026-08-22: a rebuild from these exact inputs (pinned base digest + pinned NEVRAs + pinned sources) reproduced all 11 pinned artifact hashes byte-for-byte; the probe.jar was rebuilt in-image with the pinned JDK (its behavior is unchanged: JNDI_LOOKUP_ATTEMPTED on 2.14.1, JNDI_LOOKUP_NOT_ATTEMPTED on 2.17.1)"
+  {
+   "impact": "terminal-UI code only, never linked into the probe",
+   "patch": "sed 's/-DTERMIO //' Configure; sed 's/# define TERMIO/# define TERMIOS/' crypto/ui/ui_openssl.c (termio.h removed from modern glibc)",
+   "target": "openssl 1.0.1.x"
+  },
+  {
+   "impact": "version-string cosmetics only",
+   "patch": "rm -f .build before make (deterministic build-version suffix)",
+   "target": "bash 4.3.x"
   }
+ ],
+ "note": "The heartbleed probes (heartbleed/src/hb.c) are linked against each library set with -no-pie (the container archives are built without -fPIC). The probe extension since 0.1.68: the fixture marker carries an optional claimed payload length (\"malformed 0x4000\") so a minimizer can reduce the claim, the leak classifier is semantic (any heartbeat response to the malformed trigger is the leak, RFC 6520 §4), and the leaked bytes are dumped to stdout as observable content (the memory.leak.sensitive axis). OpenSSL is built serial (-j1): the 1.0.1 build system merges crypto subdirs into one libcrypto.a with concurrent ar invocations, which -jN races into a truncated archive on many-core hosts.",
+ "schema_version": "frf-v3-build-manifest-v1",
+ "sources": [
+  {
+   "name": "bash-4.3.0 (pristine upstream)",
+   "sha256": "b2fe79ddf9e7abdb4695e3070afa866d2a94a58d1cc9d731585330c753815491",
+   "url": "https://snapshot.debian.org/archive/debian/20140304T040604Z/pool/main/b/bash/bash_4.3.orig.tar.gz"
+  },
+  {
+   "name": "bash-4.3.30",
+   "sha256": "317881019bbf2262fb814b7dd8e40632d13c3608d2f237800a8828fbb8a640dd",
+   "url": "https://ftp.gnu.org/gnu/bash/bash-4.3.30.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1a",
+   "sha256": "d3487e09d891c772cf946273a3bb0ca47479e7941be6d822274320e7cfcc361b",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1a.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1b",
+   "sha256": "1187bf2d5cdf0b286b951bf5c777aa97855cd7db24fdb9604cb557c8b1d7364b",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1b.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1c",
+   "sha256": "2a9eb3cd4e8b114eb9179c0d3884d61658e7d8e8bf4984798a5f5bd48e325ebe",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1c.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1d",
+   "sha256": "88a423f9b08a994054583691b968815875580e12df754e881d7cfe9f1bd1f49d",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1d.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1e",
+   "sha256": "f74f15e8c8ff11aa3d5bb5f276d202ec18d7246e95f961db76054199c69c1ae3",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1e.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1f",
+   "sha256": "6cc2a80b17d64de6b7bac985745fdaba971d54ffd7d38d3556f998d7c0c9cb5a",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1f.tar.gz"
+  },
+  {
+   "name": "openssl-1.0.1g",
+   "sha256": "53cb818c3b90e507a8348f4f5eaedb05d8bfe5358aabb508b7263cc670c3e028",
+   "url": "https://www.openssl.org/source/old/1.0.1/openssl-1.0.1g.tar.gz"
+  },
+  {
+   "name": "log4j-api-2.14.1",
+   "sha256": "8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.14.1/log4j-api-2.14.1.jar"
+  },
+  {
+   "name": "log4j-core-2.14.1",
+   "sha256": "ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.14.1/log4j-core-2.14.1.jar"
+  },
+  {
+   "name": "log4j-api-2.17.1",
+   "sha256": "b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.17.1/log4j-api-2.17.1.jar"
+  },
+  {
+   "name": "log4j-core-2.17.1",
+   "sha256": "c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.17.1/log4j-core-2.17.1.jar"
+  },
+  {
+   "name": "log4j-api-2.15.0",
+   "sha256": "c8c33e7e8e05496dae69cf0caac8c3092cffd937a164526e92922d2d566d0a55",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.15.0/log4j-api-2.15.0.jar"
+  },
+  {
+   "name": "log4j-core-2.15.0",
+   "sha256": "419a8512895971b7b4f4f33e620d361254e5c9552b904b0474b09ddd4a6a220b",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.15.0/log4j-core-2.15.0.jar"
+  },
+  {
+   "name": "log4j-api-2.16.0",
+   "sha256": "cbbcef7b57fef115a788395e6e11cdf92c01c1d606652c493d40d3c81766b9fc",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-api/2.16.0/log4j-api-2.16.0.jar"
+  },
+  {
+   "name": "log4j-core-2.16.0",
+   "sha256": "5d241620b10e3f1475320bc9552cf7bcfa27eeb9b1b6a891449e76db4b4a02a8",
+   "url": "https://repo1.maven.org/maven2/org/apache/logging/log4j/log4j-core/2.16.0/log4j-core-2.16.0.jar"
+  }
+ ],
+ "toolchain": {
+  "base_image": "fedora@sha256:68bb1ba893be0c05991b2df55bc6571862bab7526fd6053b1ebacd53a2a75366 (fedora:41 as of 2026-08-22)",
+  "packages": [
+   "gcc-14.3.1-4.fc41.x86_64",
+   "make-4.4.1-8.fc41.x86_64",
+   "perl-5.40.3-517.fc41.x86_64",
+   "java-17-openjdk-devel-17.0.17.0.10-1.fc41.x86_64"
+  ],
+  "glibc": "2.40",
+  "image_digest": "sha256:4153627ff8eed08e7501e5488987247cc0ec8fa1985938b1fa02c3c26539dcb6",
+  "image_id": "f38da93cada3e47ca6552971236eb4316e52c4cd684cdcff97a5494d18afb9ac",
+  "java": "openjdk 17.0.17 (2025-10-21) — the PINNED in-image JDK the probe is compiled with; no host javac is involved",
+  "host_kernel": "7.1.8-1-cachyos",
+  "reproducibility": "verified 2026-08-22: a rebuild from these exact inputs (pinned base digest + pinned NEVRAs + pinned sources) reproduced all 11 pinned artifact hashes byte-for-byte; the probe.jar was rebuilt in-image with the pinned JDK (its behavior is unchanged: JNDI_LOOKUP_ATTEMPTED on 2.14.1, JNDI_LOOKUP_NOT_ATTEMPTED on 2.17.1)"
+ }
 }

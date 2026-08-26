@@ -9,7 +9,8 @@
 #               release from the heartbeat feature's introduction to the fix)
 #               OpenSSL 1.0.1g (fixed)                    — the fix release
 #   log4shell   log4j 2.14.1 (vulnerable, CVE-2021-44228) — Maven Central jars
-#               log4j 2.17.1 (fixed)                      — pinned by SHA-256
+#               2.15.0 / 2.16.0 (the mitigation releases) — pinned by SHA-256
+#               log4j 2.17.1 (fixed)                          — pinned by SHA-256
 #
 # The native builds (bash, openssl) AND the Java probe run INSIDE a pinned
 # container image (fedora:41 pinned by digest + exact package NEVRAs + a
@@ -57,6 +58,10 @@ openssl_1_0_1g_url="https://www.openssl.org/source/old/1.0.1/openssl-1.0.1g.tar.
 openssl_1_0_1g_sha="53cb818c3b90e507a8348f4f5eaedb05d8bfe5358aabb508b7263cc670c3e028"
 log4j_api_2_14_1_sha="8caf58db006c609949a0068110395a33067a2bad707c3da35e959c0473f9a916"
 log4j_core_2_14_1_sha="ade7402a70667a727635d5c4c29495f4ff96f061f12539763f6f123973b465b0"
+log4j_api_2_15_0_sha="c8c33e7e8e05496dae69cf0caac8c3092cffd937a164526e92922d2d566d0a55"
+log4j_core_2_15_0_sha="419a8512895971b7b4f4f33e620d361254e5c9552b904b0474b09ddd4a6a220b"
+log4j_api_2_16_0_sha="cbbcef7b57fef115a788395e6e11cdf92c01c1d606652c493d40d3c81766b9fc"
+log4j_core_2_16_0_sha="5d241620b10e3f1475320bc9552cf7bcfa27eeb9b1b6a891449e76db4b4a02a8"
 log4j_api_2_17_1_sha="b0d8a4c8ab4fb8b1888d0095822703b0e6d4793c419550203da9e69196161de4"
 log4j_core_2_17_1_sha="c967f223487980b9364e94a7c7f9a8a01fd3ee7c19bdbf0b0f9f8cb8511f3d41"
 
@@ -79,12 +84,19 @@ for v in a b c d e f g; do
 done
 
 # The log4j jars are prebuilt Maven Central artifacts, pinned by SHA-256.
-for v in 2.14.1 2.17.1; do
+# The four release points of the CVE-2021-44228 lifecycle are pinned:
+# 2.14.1 (vulnerable), 2.15.0 (message lookups disabled by default),
+# 2.16.0 (JNDI removed), 2.17.1 (final).
+for v in 2.14.1 2.15.0 2.16.0 2.17.1; do
   for a in api core; do
     f="log4j-$a-$v.jar"
     case "$a-$v" in
       api-2.14.1) sha=$log4j_api_2_14_1_sha ;;
       core-2.14.1) sha=$log4j_core_2_14_1_sha ;;
+      api-2.15.0) sha=$log4j_api_2_15_0_sha ;;
+      core-2.15.0) sha=$log4j_core_2_15_0_sha ;;
+      api-2.16.0) sha=$log4j_api_2_16_0_sha ;;
+      core-2.16.0) sha=$log4j_core_2_16_0_sha ;;
       api-2.17.1) sha=$log4j_api_2_17_1_sha ;;
       core-2.17.1) sha=$log4j_core_2_17_1_sha ;;
     esac
@@ -122,6 +134,10 @@ install -m 0755 "$WORK_DIR/out/hb-1.0.1g" heartbleed/builds/hb-1.0.1g
 install -m 0644 "$WORK_DIR/out/probe.jar" log4shell/builds/probe.jar
 install -m 0644 "$WORK_DIR/src/log4j-api-2.14.1.jar" log4shell/builds/lib/
 install -m 0644 "$WORK_DIR/src/log4j-core-2.14.1.jar" log4shell/builds/lib/
+install -m 0644 "$WORK_DIR/src/log4j-api-2.15.0.jar" log4shell/builds/lib/
+install -m 0644 "$WORK_DIR/src/log4j-core-2.15.0.jar" log4shell/builds/lib/
+install -m 0644 "$WORK_DIR/src/log4j-api-2.16.0.jar" log4shell/builds/lib/
+install -m 0644 "$WORK_DIR/src/log4j-core-2.16.0.jar" log4shell/builds/lib/
 install -m 0644 "$WORK_DIR/src/log4j-api-2.17.1.jar" log4shell/builds/lib/
 install -m 0644 "$WORK_DIR/src/log4j-core-2.17.1.jar" log4shell/builds/lib/
 

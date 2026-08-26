@@ -1,0 +1,4 @@
+#!/bin/sh
+# The seeded signal: the vulnerable Log4j 2.14.1 stack performs the
+# JNDI lookup the fixed reference leaves literal (CVE-2021-44228).
+exec builds/run-vuln.sh "$1"
