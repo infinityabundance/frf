@@ -31,6 +31,7 @@ exclude = [
     "external-corpus/v3/heartbleed/builds/**",
     "external-corpus/v3/log4shell/builds/**",
     "external-corpus/v3/goto-fail/builds/**",
+    "external-corpus/v3/goto-fail/build/work/**",
 ]
 
 [[bin]]

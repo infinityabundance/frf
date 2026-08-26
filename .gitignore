@@ -52,6 +52,7 @@
 /external-corpus/v3/log4shell/builds/lib/
 /external-corpus/v3/log4shell/builds/probe.jar
 /external-corpus/v3/goto-fail/builds/
+/external-corpus/v3/goto-fail/build/work/
 
 # Transient local demo artifacts (a regenerated golden tree + its copy): if
 # a local tool re-runs the demo inside tests/, the protocol-registry drift
