@@ -430,7 +430,7 @@ mod tests {
         // back in bounds, read a p_type from the wrong place.
         let bytes = elf64(1, u64::MAX, 56, 1, Some((3, 0, 1, b"/lib/ld.so")));
         let err = interp_path(&bytes).unwrap_err();
-        assert!(err.0.contains("malformed ELF"), "{err}");
+        assert!(err.message().contains("malformed ELF"), "{err}");
     }
 
     #[test]
@@ -441,7 +441,7 @@ mod tests {
         // failure mode).
         let bytes = elf64(1, u64::MAX - 100, 56, 2, Some((3, 0, 1, b"/lib/ld.so")));
         let err = interp_path(&bytes).unwrap_err();
-        assert!(err.0.contains("malformed ELF"), "{err}");
+        assert!(err.message().contains("malformed ELF"), "{err}");
     }
 
     #[test]
@@ -451,7 +451,7 @@ mod tests {
         // below start and panicked at the slice).
         let bytes = elf64(1, 64, 56, 1, Some((3, u64::MAX, 1, b"/lib/ld.so")));
         let err = interp_path(&bytes).unwrap_err();
-        assert!(err.0.contains("malformed ELF"), "{err}");
+        assert!(err.message().contains("malformed ELF"), "{err}");
     }
 
     #[test]
@@ -460,7 +460,7 @@ mod tests {
         // entry overruns the file and must be refused, never read past EOF.
         let bytes = elf64(1, 64, 56, 2, Some((1, 0, 0, b""))); // PT_LOAD, not interp
         let err = interp_path(&bytes).unwrap_err();
-        assert!(err.0.contains("malformed ELF"), "{err}");
+        assert!(err.message().contains("malformed ELF"), "{err}");
     }
 
     #[test]
@@ -472,7 +472,7 @@ mod tests {
         let bytes = elf64(2, 64, 56, 1, Some((3, 120, interp.len() as u64, interp)));
         let err = interp_path(&bytes).unwrap_err();
         assert!(
-            err.0.contains("EI_DATA") && err.0.contains("ELFDATA2LSB"),
+            err.message().contains("EI_DATA") && err.message().contains("ELFDATA2LSB"),
             "the refusal must name the byte-order contract: {err}"
         );
     }
@@ -484,7 +484,7 @@ mod tests {
         let bytes = elf64(0, 64, 56, 1, Some((3, 120, 3, b"/lib/ld.so")));
         let err = interp_path(&bytes).unwrap_err();
         assert!(
-            err.0.contains("EI_DATA"),
+            err.message().contains("EI_DATA"),
             "the refusal must name EI_DATA: {err}"
         );
     }
@@ -495,7 +495,7 @@ mod tests {
         let bytes = elf64(1, 64, 56, 1, Some((3, 120, 1_000_000, b"/lib/ld.so")));
         let err = interp_path(&bytes).unwrap_err();
         assert!(
-            err.0.contains("PT_INTERP overruns"),
+            err.message().contains("PT_INTERP overruns"),
             "the refusal must name the overrun: {err}"
         );
     }
@@ -506,7 +506,7 @@ mod tests {
         // the table overruns and must be refused.
         let bytes = elf64(1, 1_000_000, 56, 1, None);
         let err = interp_path(&bytes).unwrap_err();
-        assert!(err.0.contains("malformed ELF"), "{err}");
+        assert!(err.message().contains("malformed ELF"), "{err}");
     }
 
     // -- the admitted-loader policy (P0: an artifact cannot select what the
@@ -539,7 +539,7 @@ mod tests {
         let refuse = |interp: &str, needle: &str| {
             let err = admitted_loader(interp).expect_err("must refuse");
             assert!(
-                err.0.contains(needle),
+                err.message().contains(needle),
                 "the refusal must name the policy ({needle}): {err}"
             );
         };
@@ -578,7 +578,7 @@ mod tests {
         )
         .expect_err("a hostile PT_INTERP must be refused");
         assert!(
-            err.0.contains("dynamic-loader family"),
+            err.message().contains("dynamic-loader family"),
             "the refusal names the admitted-loader policy: {err}"
         );
     }

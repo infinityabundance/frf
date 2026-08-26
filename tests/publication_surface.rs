@@ -188,11 +188,11 @@ fn surface_is_bound_into_the_observation_and_the_transform_honors_it() {
         Ok(_) => panic!("a tampered capture surface MUST refuse the capture"),
     };
     assert!(
-        err.0.contains("observation_identity")
-            || err.0.contains("does not rederive")
-            || err.0.contains("self-authenticating"),
+        err.message().contains("observation_identity")
+            || err.message().contains("does not rederive")
+            || err.message().contains("self-authenticating"),
         "unexpected refusal: {}",
-        err.0
+        err.message()
     );
 }
 

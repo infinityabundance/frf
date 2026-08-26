@@ -171,7 +171,7 @@ impl Store {
         let dir = self.comparator_dir(run, axis)?;
         let path = dir.join("invocation.json");
         if !path.is_file() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "run {run}: no comparator invocation evidence for axis {axis} (missing {})",
                 path.display()
             )));
@@ -187,8 +187,7 @@ impl Store {
             },
         )?;
         if rederived != inv.invocation_id {
-            return Err(FrfError::new(format!(
-                "run {run}: comparator invocation for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+            return Err(FrfError::refused(format!("run {run}: comparator invocation for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
                 &rederived[..16]
             )));
         }
@@ -220,7 +219,7 @@ impl Store {
         let dir = self.comparator_dir(run, axis)?;
         let path = dir.join("result.json");
         if !path.is_file() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "run {run}: no comparator result evidence for axis {axis} (missing {})",
                 path.display()
             )));
@@ -235,8 +234,7 @@ impl Store {
             },
         )?;
         if rederived != res.result_id {
-            return Err(FrfError::new(format!(
-                "run {run}: comparator result for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+            return Err(FrfError::refused(format!("run {run}: comparator result for axis {axis} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
                 &rederived[..16]
             )));
         }
@@ -321,8 +319,7 @@ impl Store {
             },
         )?;
         if rederived != inv.invocation_id {
-            return Err(FrfError::new(format!(
-                "mutation invocation {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
+            return Err(FrfError::refused(format!("mutation invocation {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
                 &rederived[..16]
             )));
         }
@@ -367,8 +364,7 @@ impl Store {
                 expected_affected_surfaces: &res.expected_affected_surfaces,
             })?;
         if rederived != res.result_id {
-            return Err(FrfError::new(format!(
-                "mutation result {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
+            return Err(FrfError::refused(format!("mutation result {id} is not content-addressed (its recorded fields hash to {}); refusing to consume a hand-edited record",
                 &rederived[..16]
             )));
         }
@@ -461,15 +457,13 @@ impl Store {
         let dir = self.normalizer_dir(run, id, side)?;
         let path = dir.join("invocation.json");
         if !path.is_file() {
-            return Err(FrfError::new(format!(
-                "run {run}: no normalizer invocation evidence for normalizer {id} on the {side} side (missing {})",
+            return Err(FrfError::missing(format!("run {run}: no normalizer invocation evidence for normalizer {id} on the {side} side (missing {})",
                 path.display()
             )));
         }
         let inv: crate::model::NormalizerInvocation = self.parse_evidence(&path)?;
         if inv.normalizer_id != id || inv.side != side {
-            return Err(FrfError::new(format!(
-                "run {run}: normalizer invocation under {id}/{side} names normalizer {} on side {} — the name is a claim",
+            return Err(FrfError::refused(format!("run {run}: normalizer invocation under {id}/{side} names normalizer {} on side {} — the name is a claim",
                 inv.normalizer_id, inv.side
             )));
         }
@@ -484,8 +478,7 @@ impl Store {
             },
         )?;
         if rederived != inv.invocation_id {
-            return Err(FrfError::new(format!(
-                "run {run}: normalizer invocation {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+            return Err(FrfError::refused(format!("run {run}: normalizer invocation {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
                 &rederived[..16]
             )));
         }
@@ -516,8 +509,7 @@ impl Store {
         let dir = self.normalizer_dir(run, id, side)?;
         let path = dir.join("result.json");
         if !path.is_file() {
-            return Err(FrfError::new(format!(
-                "run {run}: no normalizer result evidence for normalizer {id} on the {side} side (missing {})",
+            return Err(FrfError::missing(format!("run {run}: no normalizer result evidence for normalizer {id} on the {side} side (missing {})",
                 path.display()
             )));
         }
@@ -531,8 +523,7 @@ impl Store {
             },
         )?;
         if rederived != res.result_id {
-            return Err(FrfError::new(format!(
-                "run {run}: normalizer result {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+            return Err(FrfError::refused(format!("run {run}: normalizer result {id}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
                 &rederived[..16]
             )));
         }
@@ -597,8 +588,7 @@ impl Store {
         let inv_path = dir.join("invocation.json");
         let res_path = dir.join("result.json");
         if !inv_path.is_file() || !res_path.is_file() {
-            return Err(FrfError::new(format!(
-                "run {run}: no capture-adapter evidence for axis {axis} on the {side} side (missing {} or {})",
+            return Err(FrfError::missing(format!("run {run}: no capture-adapter evidence for axis {axis} on the {side} side (missing {} or {})",
                 inv_path.display(),
                 res_path.display()
             )));
@@ -606,8 +596,7 @@ impl Store {
         let inv: crate::model::CaptureAdapterInvocation = self.parse_evidence(&inv_path)?;
         let res: crate::model::CaptureAdapterResult = self.parse_evidence(&res_path)?;
         if inv.axis != axis || inv.side != side {
-            return Err(FrfError::new(format!(
-                "run {run}: capture-adapter invocation under {axis}/{side} names axis {} on side {} — the name is a claim",
+            return Err(FrfError::refused(format!("run {run}: capture-adapter invocation under {axis}/{side} names axis {} on side {} — the name is a claim",
                 inv.axis, inv.side
             )));
         }
@@ -622,8 +611,7 @@ impl Store {
             },
         )?;
         if rederived != inv.invocation_id {
-            return Err(FrfError::new(format!(
-                "run {run}: capture-adapter invocation for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
+            return Err(FrfError::refused(format!("run {run}: capture-adapter invocation for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited invocation",
                 &rederived[..16]
             )));
         }
@@ -635,8 +623,7 @@ impl Store {
             },
         )?;
         if rederived_result != res.result_id {
-            return Err(FrfError::new(format!(
-                "run {run}: capture-adapter result for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
+            return Err(FrfError::refused(format!("run {run}: capture-adapter result for {axis}/{side} is not content-addressed (its recorded fields hash to {}) — refusing to consume a hand-edited result",
                 &rederived_result[..16]
             )));
         }
@@ -774,22 +761,21 @@ impl Store {
     pub fn load_claim(&self, id: &str) -> Result<crate::model::ClaimRecord> {
         let path = self.claim_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no claim {id} (missing {})",
                 path.display()
             )));
         }
         let claim: crate::model::ClaimRecord = self.parse_evidence_admitted(&path, "claim")?;
         if claim.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "claim {id}: the id inside the document is {} — the name is a claim",
                 claim.id
             )));
         }
         let rederived = crate::semantics::claim_identity(&claim)?;
         if rederived != id {
-            return Err(FrfError::new(format!(
-                "claim {id} is not content-addressed: the canonical document minus the id hashes to {}; refusing to consume a hand-edited or forged claim",
+            return Err(FrfError::refused(format!("claim {id} is not content-addressed: the canonical document minus the id hashes to {}; refusing to consume a hand-edited or forged claim",
                 &rederived[..16]
             )));
         }
@@ -820,8 +806,7 @@ impl Store {
             let existing = std::fs::read_to_string(&path)
                 .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
             if existing != json {
-                return Err(FrfError::new(format!(
-                    "claim {} already exists with different bytes at {}; refusing to overwrite evidence",
+                return Err(FrfError::refused(format!("claim {} already exists with different bytes at {}; refusing to overwrite evidence",
                     claim.id,
                     path.display()
                 )));
@@ -1094,7 +1079,7 @@ impl Store {
     pub fn load_harness_event(&self, id: &str) -> Result<HarnessEvent> {
         let path = self.harness_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no harness event {id} (missing {})",
                 path.display()
             )));
@@ -1112,7 +1097,7 @@ impl Store {
             &event.runner,
         )?;
         if expected != event.id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "harness event {id}: the content address does not rederive from its own fields"
             )));
         }
@@ -1169,7 +1154,7 @@ impl Store {
     pub fn load_execution_attempt(&self, id: &str) -> Result<ExecutionAttemptRecord> {
         let path = self.attempt_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no execution attempt {id} (missing {})",
                 path.display()
             )));
@@ -1177,7 +1162,7 @@ impl Store {
         let attempt: ExecutionAttemptRecord = self.parse_evidence(&path)?;
         let expected = crate::semantics::execution_attempt_identity(&attempt)?;
         if expected != attempt.id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "execution attempt {id}: the content address does not rederive from its own fields"
             )));
         }
@@ -1232,14 +1217,14 @@ impl Store {
     pub fn load_witness_statement(&self, id: &str) -> Result<WitnessStatement> {
         let path = self.witness_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no witness statement {id} (missing {})",
                 path.display()
             )));
         }
         let stmt: WitnessStatement = self.parse_evidence(&path)?;
         if stmt.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "witness statement {id}: the id inside the record is {} — the name is a claim",
                 stmt.id
             )));
@@ -1259,8 +1244,7 @@ impl Store {
             },
         )?;
         if expected != id {
-            return Err(FrfError::new(format!(
-                "witness statement {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited statement"
+            return Err(FrfError::refused(format!("witness statement {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited statement"
             )));
         }
         let dir = self.witness_dir(id)?;
@@ -1343,8 +1327,7 @@ impl Store {
         if path.exists() {
             let existing = self.load_independence(&record.id)?;
             if existing != *record {
-                return Err(FrfError::new(format!(
-                    "independence record {} already exists with different content; refusing to overwrite evidence",
+                return Err(FrfError::refused(format!("independence record {} already exists with different content; refusing to overwrite evidence",
                     record.id
                 )));
             }
@@ -1361,14 +1344,14 @@ impl Store {
     pub fn load_independence(&self, id: &str) -> Result<IndependenceEvidence> {
         let path = self.independence_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no independence record {id} (missing {})",
                 path.display()
             )));
         }
         let record: IndependenceEvidence = self.parse_evidence(&path)?;
         if record.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "independence {id}: the id inside the record is {} — the name is a claim",
                 record.id
             )));
@@ -1386,8 +1369,7 @@ impl Store {
                 evidence_refs: &record.evidence_refs,
             })?;
         if expected != id {
-            return Err(FrfError::new(format!(
-                "independence record {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited record"
+            return Err(FrfError::refused(format!("independence record {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited record"
             )));
         }
         // The bound statement must verify (identity + preserved documents),
@@ -1432,14 +1414,14 @@ impl Store {
     pub fn load_challenge(&self, id: &str) -> Result<CourtChallenge> {
         let path = self.challenge_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no challenge {id} (missing {})",
                 path.display()
             )));
         }
         let record: CourtChallenge = self.parse_evidence(&path)?;
         if record.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "challenge {id}: the id inside the record is {} — the name is a claim",
                 record.id
             )));
@@ -1453,8 +1435,7 @@ impl Store {
             &record.run,
         )?;
         if expected != id {
-            return Err(FrfError::new(format!(
-                "challenge {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited challenge"
+            return Err(FrfError::refused(format!("challenge {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited challenge"
             )));
         }
         Ok(record)
@@ -1494,14 +1475,14 @@ impl Store {
     pub fn load_reduction(&self, id: &str) -> Result<ReductionRecord> {
         let path = self.reduction_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no reduction {id} (missing {})",
                 path.display()
             )));
         }
         let record: ReductionRecord = self.parse_evidence(&path)?;
         if record.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "reduction {id}: the id inside the record is {} — the name is a claim",
                 record.id
             )));
@@ -1536,8 +1517,7 @@ impl Store {
             }),
         )?;
         if expected != id {
-            return Err(FrfError::new(format!(
-                "reduction {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited reduction"
+            return Err(FrfError::refused(format!("reduction {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited reduction"
             )));
         }
         Ok(record)
@@ -1624,7 +1604,7 @@ impl Store {
     ) -> Result<TrajectoryRecord> {
         let path = self.trajectory_path(lineage, coordinate_system, series)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no trajectory for lineage {} on {} in series {} (missing {})",
                 &lineage[..16],
                 coordinate_system,
@@ -1645,15 +1625,14 @@ impl Store {
     pub fn load_series(&self, id: &str) -> Result<ExecutionSeries> {
         let path = self.series_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no series {id} (missing {})",
                 path.display()
             )));
         }
         let series: ExecutionSeries = self.parse_evidence_admitted(&path, "series")?;
         if series.id != id {
-            return Err(FrfError::new(format!(
-                "series {id}: the id inside the record is {} — the name is a claim; refusing to consume",
+            return Err(FrfError::refused(format!("series {id}: the id inside the record is {} — the name is a claim; refusing to consume",
                 series.id
             )));
         }
@@ -1665,8 +1644,7 @@ impl Store {
             &series.points,
         )?;
         if expected != id {
-            return Err(FrfError::new(format!(
-                "series {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited series"
+            return Err(FrfError::refused(format!("series {id} is not content-addressed: its recorded fields hash to {expected}; refusing to consume a hand-edited series"
             )));
         }
         Ok(series)
@@ -1770,7 +1748,7 @@ impl Store {
         let mut seen: std::collections::HashSet<String> = Default::default();
         while let Some(parent) = current.parent_series_id.clone() {
             if !seen.insert(parent.clone()) {
-                return Err(FrfError::new(format!(
+                return Err(FrfError::refused(format!(
                     "series chain cycle detected at {parent}; the series history is corrupt"
                 )));
             }
@@ -1790,7 +1768,7 @@ impl Store {
         let mut seen: std::collections::HashSet<String> = Default::default();
         while let Some(parent) = current.parent_series_id.clone() {
             if !seen.insert(parent.clone()) {
-                return Err(FrfError::new(format!(
+                return Err(FrfError::refused(format!(
                     "series chain cycle detected at {parent}; the series history is corrupt"
                 )));
             }
@@ -1854,8 +1832,7 @@ impl Store {
             .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
         let actual = crate::host::sha256_bytes(&bytes);
         if actual != sha256 {
-            return Err(FrfError::new(format!(
-                "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
+            return Err(FrfError::refused(format!("object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
                 path.display(),
                 &actual[..16],
                 &sha256[..16]
@@ -1901,8 +1878,7 @@ impl Store {
         if path.is_file() {
             let actual = crate::host::sha256_file(&path)?;
             if actual != sha256 {
-                return Err(FrfError::new(format!(
-                    "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to consume it",
+                return Err(FrfError::refused(format!("object {} is corrupt: its bytes hash to {} but its name is {}; refusing to consume it",
                     path.display(),
                     &actual[..16],
                     &sha256[..16]
@@ -1935,8 +1911,7 @@ impl Store {
             // hand-planted object is refused, never executed.
             let actual = crate::host::sha256_file(&path)?;
             if actual != sha256 {
-                return Err(FrfError::new(format!(
-                    "object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
+                return Err(FrfError::refused(format!("object {} is corrupt: its bytes hash to {} but its name is {}; refusing to execute — remove the object and re-run",
                     path.display(),
                     &actual[..16],
                     &sha256[..16]
@@ -2038,7 +2013,7 @@ impl Store {
                 ))
             })?;
         crate::schema::admit(family, version)
-            .map_err(|e| FrfError::new(format!("{}: {e}", path.display())))?;
+            .map_err(|e| FrfError::refused(format!("{}: {e}", path.display())))?;
         serde_json::from_value(value)
             .map_err(|e| FrfError::new(format!("cannot parse {}: {e}", path.display())))
     }
@@ -2074,10 +2049,12 @@ impl Store {
                 .write_all(bytes)
                 .and_then(|_| f.flush())
                 .map_err(|e| FrfError::new(format!("cannot write {}: {e}", path.display()))),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(FrfError::new(format!(
-                "{} already exists; refusing to overwrite evidence",
-                path.display()
-            ))),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(FrfError::already_exists(format!(
+                    "{} already exists; refusing to overwrite evidence",
+                    path.display()
+                )))
+            }
             Err(e) => Err(FrfError::new(format!(
                 "cannot create {}: {e}",
                 path.display()
@@ -2189,8 +2166,7 @@ impl Store {
                 },
             )?;
             if rederived != e.event_id {
-                return Err(FrfError::new(format!(
-                    "disposition event {} of {id} is not content-addressed: its recorded fields hash to {} but its event_id claims {}; refusing to consume a hand-edited event",
+                return Err(FrfError::refused(format!("disposition event {} of {id} is not content-addressed: its recorded fields hash to {} but its event_id claims {}; refusing to consume a hand-edited event",
                     &e.event_id[..16.min(e.event_id.len())],
                     &rederived[..16],
                     &e.event_id[..16.min(e.event_id.len())]
@@ -2327,7 +2303,7 @@ impl Store {
     pub fn load_authority(&self, id: &str) -> Result<AuthorityRecord> {
         let path = self.authority_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "authority '{id}' is not admitted (missing {})",
                 path.display()
             )));
@@ -2357,7 +2333,7 @@ impl Store {
         }
         let record: ResidualRecord = self.parse_evidence(&leaf)?;
         if record.id != id {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "residual leaf {} carries id {} — the name is a claim; refusing to consume",
                 leaf.display(),
                 record.id
@@ -2429,7 +2405,7 @@ impl Store {
                 return Ok(run);
             }
         }
-        Err(FrfError::new(format!(
+        Err(FrfError::missing(format!(
             "no such residual '{id}' (missing {})",
             index.display()
         )))
@@ -2504,7 +2480,7 @@ impl Store {
     pub fn load_capture(&self, run: &str) -> Result<Unverified<CaptureManifest>> {
         let path = self.run_dir(run)?.join("capture.json");
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no such run '{run}' (missing {})",
                 path.display()
             )));
@@ -2520,7 +2496,7 @@ impl Store {
     pub fn load_receipt(&self, id: &str) -> Result<Unverified<Receipt>> {
         let path = self.receipt_path(id)?;
         if !path.exists() {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::missing(format!(
                 "no such receipt '{id}' (missing {})",
                 path.display()
             )));
@@ -2975,7 +2951,7 @@ mod tests {
         let p = store.root.join("authorities").join("x.json");
         store.write_once(&p, "a").unwrap();
         let err = store.write_once(&p, "b").unwrap_err();
-        assert!(err.0.contains("refusing to overwrite"));
+        assert!(err.message().contains("refusing to overwrite"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "a");
     }
 
@@ -3012,7 +2988,11 @@ mod tests {
         }
         std::fs::write(&path, b"#!/bin/sh\necho corrupted\n").unwrap();
         let err = store.materialize_object(bytes, true).unwrap_err();
-        assert!(err.0.contains("corrupt"), "error: {}", err.0);
+        assert!(
+            err.message().contains("corrupt"),
+            "error: {}",
+            err.message()
+        );
     }
 
     #[test]
@@ -3107,9 +3087,9 @@ mod tests {
         std::fs::write(&p2, canonical).unwrap();
         let err = store.disposition_events("cli-exit-0001").unwrap_err();
         assert!(
-            err.0.contains("not content-addressed"),
+            err.message().contains("not content-addressed"),
             "tampered event must be refused: {}",
-            err.0
+            err.message()
         );
     }
 
@@ -3138,7 +3118,7 @@ mod tests {
         assert!(
             err.is_append_conflict(),
             "a stale parent must be a conflict, not a silent overwrite: {}",
-            err.0
+            err.message()
         );
         // B re-reads the chain and retries with the real parent: succeeds,
         // and the chain is dense (0001, 0002).

@@ -1352,7 +1352,7 @@ mod tests {
         let mut wrong = response(true, vec![], false, None);
         wrong.request_id = "0".repeat(64);
         let err = interpret(&wrong, &rid).unwrap_err();
-        assert!(err.0.contains("names request"), "{err:?}");
+        assert!(err.message().contains("names request"), "{err:?}");
     }
 
     #[test]

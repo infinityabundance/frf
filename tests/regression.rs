@@ -1739,9 +1739,9 @@ fn tampered_refusal_attempt_is_refused() {
         Ok(_) => panic!("a tampered refusal-root (side) must be refused"),
     };
     assert!(
-        err.0.contains("does not rederive"),
+        err.message().contains("does not rederive"),
         "unexpected error: {}",
-        err.0
+        err.message()
     );
 
     // Tamper 2: flip the kind (refused -> completed) from the ORIGINAL
@@ -1757,9 +1757,9 @@ fn tampered_refusal_attempt_is_refused() {
         Ok(_) => panic!("a tampered refusal-root (kind) must be refused"),
     };
     assert!(
-        err.0.contains("unexpected kind"),
+        err.message().contains("unexpected kind"),
         "unexpected error: {}",
-        err.0
+        err.message()
     );
 }
 

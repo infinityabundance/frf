@@ -220,9 +220,9 @@ fn semantic_substitution_is_unproducible() {
         Ok(_) => panic!("a capture whose semantics do not rederive MUST be refused"),
     };
     assert!(
-        err.0.contains("does not rederive") || err.0.contains("observation"),
+        err.message().contains("does not rederive") || err.message().contains("observation"),
         "unexpected error: {}",
-        err.0
+        err.message()
     );
 
     // Restore; the two relations are distinct identities even at the
@@ -284,9 +284,11 @@ fn universe_omission_is_unproducible() {
         Ok(_) => panic!("a claim whose committed universe is incomplete MUST be refused"),
     };
     assert!(
-        err.0.contains("missing") || err.0.contains("record") || err.0.contains("rederive"),
+        err.message().contains("missing")
+            || err.message().contains("record")
+            || err.message().contains("rederive"),
         "unexpected error: {}",
-        err.0
+        err.message()
     );
 
     // The claim COMPILER under the same receipt still refuses to re-derive
@@ -581,9 +583,9 @@ fn fail_open_execution_is_unproducible() {
         Ok(_) => panic!("a non-canonical receipt MUST be refused"),
     };
     assert!(
-        err.0.contains("canonical") || err.0.contains("strict"),
+        err.message().contains("canonical") || err.message().contains("strict"),
         "unexpected error: {}",
-        err.0
+        err.message()
     );
 }
 

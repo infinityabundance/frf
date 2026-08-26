@@ -100,7 +100,7 @@ fn pathological_documents_canonicalize_stably_and_round_trip() {
         let doc = json!({ "n": v });
         let err = encode(&doc).expect_err(&format!("numeric value {i} must be refused"));
         assert!(
-            err.0.contains("number") || err.0.contains("out of scope"),
+            err.message().contains("number") || err.message().contains("out of scope"),
             "numeric refusal must name the domain: {err}"
         );
     }
@@ -162,7 +162,7 @@ fn strict_parse_refuses_duplicate_properties_in_pathological_documents() {
     ] {
         let err = parse_strict(text.as_bytes()).expect_err(&format!("{name}: must refuse"));
         assert!(
-            err.0.contains("duplicate") || err.0.contains("strict"),
+            err.message().contains("duplicate") || err.message().contains("strict"),
             "{name}: {err}"
         );
     }

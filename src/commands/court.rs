@@ -3734,7 +3734,10 @@ pub fn challenge(
         let run = match run_result {
             Ok(run) => run,
             Err(e) => {
-                failures.push(format!("operator {label}: the mutant run failed: {}", e.0));
+                failures.push(format!(
+                    "operator {label}: the mutant run failed: {}",
+                    e.message()
+                ));
                 continue;
             }
         };

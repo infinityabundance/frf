@@ -314,7 +314,7 @@ fn signable_subject_document(store: &Store, subject: &WitnessSubject) -> Result<
         "receipt" => store.receipt_path(&subject.id)?,
         "claim" => store.claim_path(&subject.id)?,
         other => {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "subject kind {other:?} is not a signable document: the signing protocol admits receipt or claim"
             )))
         }
@@ -364,7 +364,7 @@ fn resolve_signable_subject(
             }
         }
         other => {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
             "unknown signable subject kind {other:?}: the signing protocol admits receipt or claim"
         )))
         }
@@ -401,24 +401,23 @@ pub fn sign(
 ) -> Result<String> {
     crate::store::validate_id("witness", id)?;
     if statement.trim().is_empty() {
-        return Err(FrfError::new(
+        return Err(FrfError::invalid_input(
             "the signed statement must not be empty; a signature signs exactly one statement",
         ));
     }
 
-    // -- the subject: kind + id + content address + EXACT canonical bytes ---
-    let (subject, canonical_bytes) = resolve_signable_subject(store, subject_kind, subject_id)?;
-
     // -- the external key (Ed25519 seed: 64 hex characters) ------------------
+    // Validated BEFORE the subject is resolved: a malformed key is bad
+    // caller input, and failing fast on it needs no evidence tree.
     let key_text = std::fs::read_to_string(key_path).map_err(|e| {
-        FrfError::new(format!(
+        FrfError::invalid_input(format!(
             "cannot read the signing key {}: {e}",
             key_path.display()
         ))
     })?;
     let key_text = key_text.trim();
     if key_text.len() != 64 || !key_text.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::invalid_input(format!(
             "the signing key {} must be the 32-byte Ed25519 seed as 64 hex characters",
             key_path.display()
         )));
@@ -427,9 +426,9 @@ pub fn sign(
         .step_by(2)
         .map(|i| u8::from_str_radix(&key_text[i..i + 2], 16))
         .collect::<std::result::Result<Vec<u8>, std::num::ParseIntError>>()
-        .map_err(|e| FrfError::new(format!("malformed Ed25519 seed: {e}")))?;
+        .map_err(|e| FrfError::invalid_input(format!("malformed Ed25519 seed: {e}")))?;
     let seed: [u8; 32] = seed.try_into().map_err(|_| {
-        FrfError::new("the Ed25519 seed must be exactly 32 bytes (64 hex characters)")
+        FrfError::invalid_input("the Ed25519 seed must be exactly 32 bytes (64 hex characters)")
     })?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
     let verifying_key = signing_key.verifying_key();
@@ -461,6 +460,12 @@ pub fn sign(
         runner_hash: runner.frf_executable_hash.clone(),
         artifact: None,
     };
+
+    // -- the subject: kind + id + content address + EXACT canonical bytes ---
+    // Resolved after the key is validated: the content address and the
+    // canonical bytes are REDERIVED here, never read from the caller — the
+    // signature binds the exact document.
+    let (subject, canonical_bytes) = resolve_signable_subject(store, subject_kind, subject_id)?;
 
     // -- the canonical signing request + response ----------------------------
     // The request carries the subject's EXACT canonical bytes (base64) so

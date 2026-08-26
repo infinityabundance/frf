@@ -167,9 +167,9 @@ fn challenge_records_are_content_addressed_and_refuse_tampering() {
     let store = frf::store::Store::new(work.path(ROOT));
     let err = store.load_challenge(id).unwrap_err();
     assert!(
-        err.0.contains("is not content-addressed") || err.0.contains("id mismatch"),
+        err.message().contains("is not content-addressed") || err.message().contains("id mismatch"),
         "the tampered record must be refused: {}",
-        err.0
+        err.message()
     );
 
     // The untouched record (the other operator) still verifies.

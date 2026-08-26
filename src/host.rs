@@ -1041,7 +1041,7 @@ impl From<RunError> for FrfError {
 
 impl From<FrfError> for RunError {
     fn from(e: FrfError) -> RunError {
-        RunError::new(e.0)
+        RunError::new(e.into_message())
     }
 }
 
@@ -1428,8 +1428,10 @@ fn run_oci(
             crate::model::EXECUTION_PROFILE_OCI
         ))
     })?;
-    let (runtime_bin, _runtime_version) = container_runtime().map_err(|e| RunError::new(e.0))?;
-    verify_container_image(&runtime_bin, &oci.reference).map_err(|e| RunError::new(e.0))?;
+    let (runtime_bin, _runtime_version) =
+        container_runtime().map_err(|e| RunError::new(e.into_message()))?;
+    verify_container_image(&runtime_bin, &oci.reference)
+        .map_err(|e| RunError::new(e.into_message()))?;
 
     // The working directory the container sees: the bind mount target equals
     // the host path, so recorded relative argv paths resolve identically.
@@ -1931,7 +1933,7 @@ fn run_impl(
                 Ok(()) => {}
                 Err(e) => {
                     if result.is_ok() {
-                        result = Err(RunError::new(e.0));
+                        result = Err(RunError::new(e.into_message()));
                     }
                 }
             }
@@ -2494,7 +2496,7 @@ mod tests {
         let wrong = "0".repeat(64);
         let err = ExecImage::seal(&bytes, &wrong, &materialized)
             .unwrap_err()
-            .0;
+            .into_message();
         assert!(err.contains("refusing to seal"), "error: {err}");
         let _ = std::fs::remove_file(&materialized);
     }
@@ -2856,7 +2858,7 @@ echo "zero=$0 one=$1"
         let err = cg
             .finalize()
             .expect_err("an unemptyable group must refuse")
-            .0;
+            .into_message();
         assert!(
             err.contains("could not be emptied"),
             "the refusal must name the empty failure: {err}"
@@ -2917,12 +2919,18 @@ echo "zero=$0 one=$1"
                 None,
             )
             .unwrap();
-            assert_eq!(out.exit, "0");
+            assert_eq!(
+                out.exit,
+                "0",
+                "expected exit 0; stderr={:?}",
+                String::from_utf8_lossy(&out.stderr.bytes())
+            );
             let line = "0123456789abcdefghijklmnopqrstuvwxyz0123456789";
             assert_eq!(
                 out.stdout.length as usize,
                 (line.len() + 1) * 20_000,
-                "full stream must be drained"
+                "full stream must be drained; stderr={:?}",
+                String::from_utf8_lossy(&out.stderr.bytes())
             );
             assert!(out.stderr.is_empty());
         });

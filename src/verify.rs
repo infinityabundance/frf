@@ -132,7 +132,7 @@ pub fn load_stream_publication_verified(
         )));
     }
     if record.policy != expected_policy {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "{} policy {:?} does not match the declared surface policy {:?}",
             disp_path.display(),
             record.policy,
@@ -312,8 +312,7 @@ pub fn load_publication_manifest_verified(
             }
             i += 1;
         };
-        return Err(FrfError::new(format!(
-            "the publication manifest is not the proof-derived transform record: {detail} — the manifest must EQUAL the rederived record of every verified capture's streams, declared surface policies, and actual publication state"
+        return Err(FrfError::refused(format!("the publication manifest is not the proof-derived transform record: {detail} — the manifest must EQUAL the rederived record of every verified capture's streams, declared surface policies, and actual publication state"
         )));
     }
     Ok(Some(manifest))
@@ -434,8 +433,7 @@ fn first_line(bytes: &[u8]) -> String {
 pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified> {
     let mut capture = store.load_capture(run)?.into_inner();
     if capture.run != run {
-        return Err(FrfError::new(format!(
-            "capture {run}: the run field inside capture.json is {capture:?} — the name is a claim; refusing to consume"
+        return Err(FrfError::refused(format!("capture {run}: the run field inside capture.json is {capture:?} — the name is a claim; refusing to consume"
         )));
     }
 
@@ -482,15 +480,13 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
     //    fields, and the run identity composes them.
     let (obs, exec) = capture_identities(&capture, &residuals)?;
     if capture.observation_identity != obs {
-        return Err(FrfError::new(format!(
-            "capture {run}: the recorded observation_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
+        return Err(FrfError::refused(format!("capture {run}: the recorded observation_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
             &obs[..16],
             &capture.observation_identity[..16]
         )));
     }
     if capture.execution_identity != exec {
-        return Err(FrfError::new(format!(
-            "capture {run}: the recorded execution_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
+        return Err(FrfError::refused(format!("capture {run}: the recorded execution_identity does not rederive from the recorded fields ({} != {}) — the capture is not self-authenticating",
             &exec[..16],
             &capture.execution_identity[..16]
         )));
@@ -620,7 +616,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
                 )));
             }
             if host::sha256_bytes(recorded.as_bytes()) != *hash {
-                return Err(FrfError::new(format!(
+                return Err(FrfError::refused(format!(
                     "capture {run}: first-line hash for {file} does not rederive"
                 )));
             }
@@ -668,8 +664,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
         }
         let rederived = crate::semantics::execution_context_identity(closure)?;
         if closure.cid != rederived {
-            return Err(FrfError::new(format!(
-                "capture {run}: the execution-context closure cid does not rederive ({} != {}) — the closure is not self-authenticating",
+            return Err(FrfError::refused(format!("capture {run}: the execution-context closure cid does not rederive ({} != {}) — the closure is not self-authenticating",
                 &rederived[..16],
                 &closure.cid[..16]
             )));
@@ -795,8 +790,7 @@ pub fn load_capture_verified(store: &Store, run: &str) -> Result<CaptureVerified
                 ))
             })?;
             if recorded.content_sha256 != res.observation_sha256 {
-                return Err(FrfError::new(format!(
-                    "capture {run}: the {side} side's adapted observation for axis {} does not match the adapter's recorded result",
+                return Err(FrfError::refused(format!("capture {run}: the {side} side's adapted observation for axis {} does not match the adapter's recorded result",
                     impl_.id
                 )));
             }
@@ -961,8 +955,7 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
     let record = store.load_residual(id)?.into_inner();
     let rederived = crate::semantics::residual_record_identity(&record)?;
     if rederived != id {
-        return Err(FrfError::new(format!(
-            "residual {id}: the id does not rederive from the record's own fields (got {rederived}) — the name is a claim, and this record is not what it claims"
+        return Err(FrfError::refused(format!("residual {id}: the id does not rederive from the record's own fields (got {rederived}) — the name is a claim, and this record is not what it claims"
         )));
     }
 
@@ -980,7 +973,7 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
 
     // 3. The residual belongs to the run, and the run references it back.
     if record.run != capture.run {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "residual {id}: its recorded run {} does not match the verified parent {}",
             record.run, capture.run
         )));
@@ -992,20 +985,19 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
         )));
     }
     if record.court != capture.capture.court {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "residual {id}: its court {} does not match the parent run's court {}",
             record.court, capture.capture.court
         )));
     }
     if record.authority != capture.capture.authority {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "residual {id}: its authority {} does not match the parent run's authority {}",
             record.authority, capture.capture.authority
         )));
     }
     if record.candidate_sha256 != capture.capture.candidate_artifact.sha256 {
-        return Err(FrfError::new(format!(
-            "residual {id}: its candidate {} does not match the candidate the parent run executed {}",
+        return Err(FrfError::refused(format!("residual {id}: its candidate {} does not match the candidate the parent run executed {}",
             &record.candidate_sha256[..16],
             &capture.capture.candidate_artifact.sha256[..16]
         )));
@@ -1029,7 +1021,7 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
     // residual classifier must BE this record's kind.
     let expected_kind = ResidualKind::parse(&semantic.residual_classifier)?;
     if expected_kind != record.kind {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "residual {id}: its kind {} does not match the axis's declared residual classifier {}",
             record.kind.as_str(),
             semantic.residual_classifier
@@ -1089,8 +1081,7 @@ pub fn load_residual_verified(store: &Store, id: &str) -> Result<ResidualVerifie
                 && raw_ref == &record.raw_reference
                 && raw_cand == &record.raw_candidate
         }) {
-            return Err(FrfError::new(format!(
-                "residual {id}: the recorded divergence (axis {}, surface {:?}) does not rederive from the verified sides — the observation does not derive from the comparator that served the axis",
+            return Err(FrfError::refused(format!("residual {id}: the recorded divergence (axis {}, surface {:?}) does not rederive from the verified sides — the observation does not derive from the comparator that served the axis",
                 record.axis.as_str(),
                 record.surface
             )));
@@ -1208,8 +1199,7 @@ pub fn load_execution_attempt_verified(
 ) -> Result<ExecutionAttemptVerified> {
     let record = store.load_execution_attempt(id)?;
     if record.kind != "refused" {
-        return Err(FrfError::new(format!(
-            "execution attempt {id}: unexpected kind {:?} (this schema admits only 'refused'; a completed attempt IS a run)",
+        return Err(FrfError::refused(format!("execution attempt {id}: unexpected kind {:?} (this schema admits only 'refused'; a completed attempt IS a run)",
             record.kind
         )));
     }
@@ -1300,8 +1290,7 @@ pub fn rebind_subject(
         }
     };
     if fresh != subject.cid {
-        return Err(FrfError::new(format!(
-            "witness statement {id}: its subject content address does not rederive from the actual {} {} (recorded {}, fresh {}) — a self-consistent but misbound statement is not evidence",
+        return Err(FrfError::refused(format!("witness statement {id}: its subject content address does not rederive from the actual {} {} (recorded {}, fresh {}) — a self-consistent but misbound statement is not evidence",
             subject.kind,
             subject.id,
             &subject.cid[..16],
@@ -1426,15 +1415,14 @@ pub fn verify_trajectory_document(
 ) -> Result<()> {
     let t = store.load_trajectory(subject, coordinate_system, series)?;
     if t.subject != subject || t.coordinate_system != coordinate_system || t.series != series {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "trajectory {}: the record does not match its document address",
             t.id
         )));
     }
     let rederived = crate::semantics::trajectory_identity(&t)?;
     if t.id != rederived {
-        return Err(FrfError::new(format!(
-            "trajectory {} (subject {}): the record does not rederive its content address — a hand-edited or relabeled trajectory is not evidence",
+        return Err(FrfError::refused(format!("trajectory {} (subject {}): the record does not rederive its content address — a hand-edited or relabeled trajectory is not evidence",
             &t.id[..16.min(t.id.len())],
             &subject[..16.min(subject.len())]
         )));
@@ -1444,8 +1432,7 @@ pub fn verify_trajectory_document(
     let stored_canon = crate::canon::canonical(&t)?;
     let derived_canon = crate::canon::canonical(&rederived_rec)?;
     if stored_canon != derived_canon {
-        return Err(FrfError::new(format!(
-            "trajectory {} does not re-derive from its series — the stored document is not the exact derivation of its pinned evidence",
+        return Err(FrfError::refused(format!("trajectory {} does not re-derive from its series — the stored document is not the exact derivation of its pinned evidence",
             &t.id[..16.min(t.id.len())]
         )));
     }
@@ -1551,8 +1538,7 @@ pub fn verify_runtime_closure(closure: &crate::model::NativeRuntimeClosure) -> R
     }
     let rederived = crate::semantics::runtime_closure_identity(closure)?;
     if rederived != closure.cid {
-        return Err(FrfError::new(format!(
-            "the native runtime closure is not content-addressed: its fields hash to {} but its cid claims {}; refusing to consume a hand-edited or forged closure",
+        return Err(FrfError::refused(format!("the native runtime closure is not content-addressed: its fields hash to {} but its cid claims {}; refusing to consume a hand-edited or forged closure",
             &rederived[..16],
             &closure.cid[..16]
         )));
@@ -1613,8 +1599,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         .rsplit_once('-')
         .ok_or_else(|| FrfError::new(format!("receipt id {id} must end in the digest")))?;
     if actual != digest {
-        return Err(FrfError::new(format!(
-            "receipt {id} is not content-addressed: its canonical body hashes to {} but its id claims {digest}; refusing to consume hand-edited or forged evidence",
+        return Err(FrfError::refused(format!("receipt {id} is not content-addressed: its canonical body hashes to {} but its id claims {digest}; refusing to consume hand-edited or forged evidence",
             &actual[..16]
         )));
     }
@@ -1626,7 +1611,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     let body: Receipt = serde_json::from_value(value)
         .map_err(|e| FrfError::new(format!("cannot deserialize {}: {e}", path.display())))?;
     if body.run != run {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the run field inside the body is {body:?} — the name is a claim",
             body = body.run
         )));
@@ -1643,12 +1628,12 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         || body.court.question != cap.court_spec.question
         || body.court.falsifier != cap.court_spec.falsifier
     {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the court block does not match the captured court"
         )));
     }
     if body.court.semantic_identity != cap.court_semantic_identity {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the court semantic identity does not match the capture"
         )));
     }
@@ -1660,7 +1645,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         || rec_env.normalizers != env.normalizers
         || rec_env.replay_scope != env.replay_scope
     {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the admissibility envelope does not match the capture"
         )));
     }
@@ -1668,7 +1653,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         || body.authority.interpreter != cap.authority_artifact.interpreter
         || body.authority.native_runtime != cap.authority_artifact.native_runtime
     {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the authority artifact does not match the capture"
         )));
     }
@@ -1676,7 +1661,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         || body.candidate.interpreter != cap.candidate_artifact.interpreter
         || body.candidate.native_runtime != cap.candidate_artifact.native_runtime
     {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the candidate artifact does not match the capture"
         )));
     }
@@ -1702,8 +1687,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
             || format!("file:{}", record.path) != body.authority.provenance
             || record.executable_sha256 != body.authority.identity_hash
         {
-            return Err(FrfError::new(format!(
-                "receipt {id}: the cited admission record {authority_id} does not match the receipt's authority block (the label is a claim until the record rederives)"
+            return Err(FrfError::refused(format!("receipt {id}: the cited admission record {authority_id} does not match the receipt's authority block (the label is a claim until the record rederives)"
             )));
         }
     }
@@ -1740,13 +1724,12 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     }
     let f = &body.fixtures[0];
     if f.id != cap.fixture || f.hash != cap.fixture_sha256 || f.arguments != cap.arguments {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the fixture block does not match the capture"
         )));
     }
     if body.environment != cap.environment {
-        return Err(FrfError::new(format!(
-            "receipt {id}: the environment block does not match the capture (the receipt must never ask its own host what environment an old court ran under)"
+        return Err(FrfError::refused(format!("receipt {id}: the environment block does not match the capture (the receipt must never ask its own host what environment an old court ran under)"
         )));
     }
     if body.provenance != cap.provenance || body.comparator_semantics != cap.comparator_semantics {
@@ -1761,8 +1744,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         )));
     }
     if body.execution_context != cap.execution_context {
-        return Err(FrfError::new(format!(
-            "receipt {id}: the declared execution-context closure does not match the capture (the runtime context is bound at observation time, never reconstructed)"
+        return Err(FrfError::refused(format!("receipt {id}: the declared execution-context closure does not match the capture (the runtime context is bound at observation time, never reconstructed)"
         )));
     }
     for obs in &body.observables {
@@ -1876,7 +1858,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
     let receipt_ids: Vec<&str> = body.residuals.iter().map(|r| r.id.as_str()).collect();
     let capture_ids: Vec<&str> = cap.residuals.iter().map(|s| s.as_str()).collect();
     if receipt_ids != capture_ids {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "receipt {id}: the residual set does not match the run's captured residuals"
         )));
     }
@@ -1900,7 +1882,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
         }
         let fp = crate::semantics::residual_fingerprint(&record)?;
         if res.residual_fingerprint != fp {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "receipt {id}: residual fingerprint of {} does not rederive",
                 res.id
             )));
@@ -1938,8 +1920,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                 };
                 let events = store.disposition_events(&res.id)?;
                 let Some(event) = events.iter().find(|e| &e.event_id == eid) else {
-                    return Err(FrfError::new(format!(
-                        "receipt {id}: residual {} binds disposition_event_id {eid} but no such event exists in its hash chain",
+                    return Err(FrfError::missing(format!("receipt {id}: residual {} binds disposition_event_id {eid} but no such event exists in its hash chain",
                         res.id
                     )));
                 };
@@ -1997,8 +1978,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
                     || !trajectory_ok
                     || !stabilized_ok
                 {
-                    return Err(FrfError::new(format!(
-                        "receipt {id}: residual {} disposition {:?} does not match the bound event {eid} — the receipt must not drift from the event it points at",
+                    return Err(FrfError::refused(format!("receipt {id}: residual {} disposition {:?} does not match the bound event {eid} — the receipt must not drift from the event it points at",
                         res.id,
                         res.disposition
                     )));
@@ -2024,7 +2004,7 @@ pub fn load_receipt_verified(store: &Store, id: &str) -> Result<ReceiptVerified>
             || token.next_court != recorded.next_court
             || token.blocks_claims != recorded.blocks_claims
         {
-            return Err(FrfError::new(format!(
+            return Err(FrfError::refused(format!(
                 "receipt {id}: the endoduction token of {} does not rederive",
                 res.id
             )));
@@ -2241,8 +2221,7 @@ fn verify_capability_entry(
     rederived_profile.sort();
     rederived_profile.dedup();
     if entry.mutation_profile != rederived_profile {
-        return Err(FrfError::new(format!(
-            "claim capability for axis {}: its recorded mutation profile {:?} does not rederive from the named challenge records ({:?}) — a hand-edited or forged profile is refused",
+        return Err(FrfError::refused(format!("claim capability for axis {}: its recorded mutation profile {:?} does not rederive from the named challenge records ({:?}) — a hand-edited or forged profile is refused",
             entry.axis, entry.mutation_profile, rederived_profile
         )));
     }
@@ -2275,8 +2254,7 @@ pub fn verify_knowledge_universe(store: &Store, universe: &KnowledgeSnapshot) ->
     // universe must also stand on its own).
     let rederived = crate::semantics::knowledge_snapshot_identity(universe)?;
     if rederived != universe.cid {
-        return Err(FrfError::new(format!(
-            "the committed knowledge universe's cid does not rederive from its fields ({} != {}) — the universe is not self-authenticating",
+        return Err(FrfError::refused(format!("the committed knowledge universe's cid does not rederive from its fields ({} != {}) — the universe is not self-authenticating",
             &rederived[..16],
             &universe.cid[..16]
         )));
@@ -2464,8 +2442,7 @@ pub fn verify_trajectory_premise_binding(
     //    court (the movement was observed over the anchored premise's own
     //    experiment).
     if p.anchor_run != anchored.run {
-        return Err(FrfError::new(format!(
-            "trajectory premise {}.{}.{}: its anchor run {} is not the anchored receipt {}'s run ({}) — the anchor is a derived relation, never an asserted one",
+        return Err(FrfError::refused(format!("trajectory premise {}.{}.{}: its anchor run {} is not the anchored receipt {}'s run ({}) — the anchor is a derived relation, never an asserted one",
             p.lineage, p.coordinate_system, p.series, p.anchor_run, p.receipt, anchored.run
         )));
     }
@@ -2604,8 +2581,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         && claim.transform.observation_relation == "parity"
         && claim.transform.success_predicate == "scope-admitted";
     if !claim_transform_ok {
-        return Err(FrfError::new(format!(
-            "claim {id}: its transform declaration is not the claim transform (nothing varies; parity over the premises; scope-admitted; source_set = the ClaimInputs content address) — a relabeled claim is not evidence"
+        return Err(FrfError::refused(format!("claim {id}: its transform declaration is not the claim transform (nothing varies; parity over the premises; scope-admitted; source_set = the ClaimInputs content address) — a relabeled claim is not evidence"
         )));
     }
 
@@ -2629,8 +2605,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     //     derivation.
     let inputs = claim_inputs(&claim, &premises)?;
     if claim.transform.source_set.as_deref() != Some(&inputs.cid) {
-        return Err(FrfError::new(format!(
-            "claim {id}: its transform's source_set {} is not the rederived ClaimInputs content address {} — the claim transform must name its COMPLETE canonical dependency set",
+        return Err(FrfError::refused(format!("claim {id}: its transform's source_set {} is not the rederived ClaimInputs content address {} — the claim transform must name its COMPLETE canonical dependency set",
             claim.transform.source_set.as_deref().unwrap_or("<absent>"),
             &inputs.cid[..16]
         )));
@@ -2656,12 +2631,12 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         }
     }
     if claim.authority != format!("{}-{}", first.authority.name, first.authority.version) {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its recorded authority does not match the premises"
         )));
     }
     if claim.candidate.identity_hash != first.candidate.identity_hash {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its recorded candidate artifact does not match the premises"
         )));
     }
@@ -2669,7 +2644,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
     // 4. K rederives and EQUALS the recorded scope; containment re-checks.
     let k = crate::scope::claim_region(&bodies);
     if k != claim.scope {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its recorded scope does not rederive from the verified premises"
         )));
     }
@@ -2728,8 +2703,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
             || p.localization != doc.derivation.localization.as_str()
             || p.bands != doc.derivation.bands
         {
-            return Err(FrfError::new(format!(
-                "claim {id}: trajectory premise {}.{}.{} does not match its re-derived document — a hand-edited premise is not evidence",
+            return Err(FrfError::refused(format!("claim {id}: trajectory premise {}.{}.{} does not match its re-derived document — a hand-edited premise is not evidence",
                 p.lineage, p.coordinate_system, p.series
             )));
         }
@@ -2939,13 +2913,13 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
 
     // 7. The derived projections rederive.
     if claim.observable_scope != crate::scope::region_observables(&k) {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its observable_scope does not rederive from its scope"
         )));
     }
     let excluded = crate::scope::region_excluded_evidence(&bodies, &k);
     if claim.excluded_evidence != excluded {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its excluded_evidence does not rederive from the premises"
         )));
     }
@@ -2970,8 +2944,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         ));
     }
     if claim.proposition != expected_proposition {
-        return Err(FrfError::new(format!(
-            "claim {id}: its proposition does not rederive from its scope — the claim does not say what its evidence says"
+        return Err(FrfError::refused(format!("claim {id}: its proposition does not rederive from its scope — the claim does not say what its evidence says"
         )));
     }
     let mut expected_relation: Vec<String> = Vec::new();
@@ -2985,7 +2958,7 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         }
     }
     if claim.relation != expected_relation.join(", ") {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its relation does not rederive from the premises' clean axes"
         )));
     }
@@ -2996,17 +2969,17 @@ pub fn load_claim_verified(store: &Store, id: &str) -> Result<ClaimVerified> {
         &first.environment.digest[..8]
     );
     if claim.environment != expected_env {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its environment label does not rederive from the first premise"
         )));
     }
     if claim.court != first.court.id {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its court does not match the first premise"
         )));
     }
     if claim.fixture_family != first.court.admissibility_envelope.fixture_family {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "claim {id}: its fixture family does not match the first premise"
         )));
     }
@@ -3819,7 +3792,7 @@ impl Receipt {
             );
         }
         if let Err(e) = crate::model::validate_capture_bounds(&self.capture_bounds) {
-            fail(&mut violations, e.0);
+            fail(&mut violations, e.into_message());
         }
 
         // The DECLARED execution-context closure (when carried) is
@@ -4019,7 +3992,7 @@ impl Receipt {
         if violations.is_empty() {
             Ok(())
         } else {
-            Err(FrfError::new(format!(
+            Err(FrfError::refused(format!(
                 "OpenReceipt semantic conformance: {}",
                 violations.join("; ")
             )))
@@ -4594,8 +4567,7 @@ fn check_mutation_request(
                 .map_err(|e| FrfError::new(format!("cannot read {}: {e}", path.display())))?;
             let actual = crate::host::sha256_bytes(&bytes);
             if actual != *cid {
-                return Err(FrfError::new(format!(
-                    "mutation request {} is corrupt: its bytes hash to {} but its invocation names {}; refusing to consume it",
+                return Err(FrfError::refused(format!("mutation request {} is corrupt: its bytes hash to {} but its invocation names {}; refusing to consume it",
                     path.display(),
                     &actual[..16],
                     &cid[..16]

@@ -211,11 +211,11 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value> {
 /// generated evidence document.
 pub fn require_canonical_bytes(bytes: &[u8], what: &str) -> Result<()> {
     let parsed = parse_strict(bytes)
-        .map_err(|e| FrfError::new(format!("{what} is not strict JSON: {e}")))?;
+        .map_err(|e| FrfError::refused(format!("{what} is not strict JSON: {e}")))?;
     let canonical = encode(&parsed)
-        .map_err(|e| FrfError::new(format!("{what} cannot be canonicalized: {e}")))?;
+        .map_err(|e| FrfError::refused(format!("{what} cannot be canonicalized: {e}")))?;
     if canonical.as_bytes() != bytes {
-        return Err(FrfError::new(format!(
+        return Err(FrfError::refused(format!(
             "{what} is not its own canonical serialization (RFC 8785); the protocol says canonical JSON, and a non-canonical document would split one semantic document into many evidence identities"
         )));
     }
@@ -342,7 +342,11 @@ mod tests {
     #[test]
     fn numbers_are_rejected_outside_the_value_domain() {
         let err = encode(&json!({"n": 1})).unwrap_err();
-        assert!(err.0.contains("out of scope"), "error: {}", err.0);
+        assert!(
+            err.message().contains("out of scope"),
+            "error: {}",
+            err.message()
+        );
         // But a string that LOOKS like a number is just a string.
         assert_eq!(encode(&json!({"n": "1"})).unwrap(), r#"{"n":"1"}"#);
     }
